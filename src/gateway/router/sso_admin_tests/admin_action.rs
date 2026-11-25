@@ -66,6 +66,8 @@ async fn audited(policy: AuditFailurePolicy, exposed: &[String]) -> Audited {
     state.meta_mcp = Arc::new(meta);
     state.transparency_log = Some(Arc::clone(&log));
     state.control_plane_store = Some(Arc::new(InMemoryControlPlaneStore::new()));
+    // The import preview refuses a gateway with no capability directory.
+    state.capability_dirs = vec![dir.path().to_string_lossy().into_owned()];
     Audited {
         gw,
         log,

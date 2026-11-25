@@ -87,6 +87,8 @@ mod capability_editor;
 mod classic_routes;
 #[path = "webui_management_tests/internal_routes.rs"]
 mod internal_routes;
+// The import routes are web UI routes, and the rows name its sentences.
+#[cfg(feature = "webui")]
 #[path = "webui_management_tests/openapi_import.rs"]
 mod openapi_import;
 #[path = "webui_management_tests/registry.rs"]

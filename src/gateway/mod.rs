@@ -255,6 +255,17 @@ pub mod test_helpers {
         crate::capability::name_taken(name)
     }
 
+    /// The `OpenAPI` import's three refusal sentences, so rows in `tests/`
+    /// assert the sentences themselves. For `tests/` only, not a stable API.
+    #[cfg(feature = "webui")]
+    pub const DOCUMENT_CHANGED: &str = super::ui::DOCUMENT_CHANGED;
+    /// See [`DOCUMENT_CHANGED`].
+    #[cfg(feature = "webui")]
+    pub const CAPABILITIES_OFF: &str = super::ui::CAPABILITIES_OFF;
+    /// See [`DOCUMENT_CHANGED`].
+    #[cfg(feature = "webui")]
+    pub const DIGEST_REQUIRED: &str = super::ui::DIGEST_REQUIRED;
+
     /// The OS config directory the gateway resolves, exactly what the crate's
     /// own lookup returns, so an integration test can prove it routes to a
     /// private home before scanning anything under it. For `tests/` only, with
