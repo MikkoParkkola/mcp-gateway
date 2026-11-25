@@ -19,10 +19,12 @@
 use std::sync::Arc;
 
 use axum::Json;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::{Value, json};
 
+use super::AppState;
 use super::guard::Guard;
 use crate::health_history::{BLOCK, DowntimeSource, HALF, HealthHistory, P95};
 
@@ -38,13 +40,14 @@ const POINTS: u64 = 16;
 /// The uptime strip's window.
 const WEEK: u64 = 7 * 86_400;
 
-/// The route: admit an admin, then answer from the installed history.
-pub(super) async fn gateway_health(guard: Guard) -> Response {
+/// The route: admit an admin, then answer from the history this gateway's
+/// meta-MCP handler holds (set by the server at start).
+pub(super) async fn gateway_health(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
     respond(
-        crate::health_history::file::installed(),
+        state.meta_mcp.health_history().cloned(),
         crate::clock::unix_secs(),
     )
 }

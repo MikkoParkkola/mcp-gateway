@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `GET /ui/api/gateway/health` through `create_router`, so the real auth
 //! middleware runs: refused without a credential and for a standard key, as
-//! the gateway status read is. This test part installs no health history, so
-//! an admin is admitted and gets the route's own 503.
+//! the gateway status read is. The history is a handle on the gateway's
+//! meta-MCP handler: a fixture that attaches none gets the route's own 503 for
+//! an admitted admin, and one that attaches a history gets its answer.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -84,4 +85,24 @@ async fn g6_a_non_admin_key_is_refused_and_no_credential_is_401() {
     let (admin, body) = get(&state, Some(ADMIN)).await;
     assert_eq!(admin, StatusCode::SERVICE_UNAVAILABLE, "{body}");
     assert_eq!(body, json!({"error": "the health history is not running"}));
+}
+
+/// A gateway with a history attached serves it to an admin through the real
+/// router, and still refuses a standard key.
+#[tokio::test]
+async fn g6b_an_admin_reads_the_attached_history_through_the_router() {
+    use crate::health_history::{HealthHistory, Restores};
+
+    let (state, _dir) = fixture().await;
+    // A start well before the clock, so the answer's first second is ours.
+    let (history, _) = HealthHistory::start(None, Restores::Counted(0), 1_790_000_000);
+    state.meta_mcp.set_health_history(Arc::new(history));
+
+    let (admin, body) = get(&state, Some(ADMIN)).await;
+    assert_eq!(admin, StatusCode::OK, "{body}");
+    assert_eq!(body["observed_since"], json!(1_790_000_000_u64), "{body}");
+    assert_eq!(body["halves"].as_array().map(Vec::len), Some(16), "{body}");
+
+    let (standard, body) = get(&state, Some(STANDARD)).await;
+    assert_eq!(standard, StatusCode::FORBIDDEN, "{body}");
 }
