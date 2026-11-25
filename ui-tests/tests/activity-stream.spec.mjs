@@ -654,3 +654,95 @@ test('A38 the counts arrive with no animation', async ({ page }) => {
   await expect(outcomeButtons(page).first()).toHaveText('All 12');
   expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
 });
+
+/** Counts reads a row answers by hand: `reply()` is the handler, `answer(i, body)` releases read i. */
+function heldCounts() {
+  const waiting = [];
+  return {
+    reply: () => new Promise((done) => { waiting.push(done); }),
+    answer: (i, body) => waiting[i](body),
+  };
+}
+
+test('A31a time passing and an Outcome click read no counts again', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS), counts: () => counted(FIVE) });
+  await open(page, urls, '/ui/activity/status');
+  await expect(outcomeButtons(page).first()).toHaveText('All 12');
+  expect(urls.counts).toHaveLength(1);
+  await page.clock.runFor(5 * 60_000);
+  expect(urls.counts, 'five minutes later').toHaveLength(1);
+  await page.getByRole('group', { name: 'Outcome' }).locator('button[data-value="blocked"]').click();
+  await expect.poll(() => filters(urls.at(-1)).outcome).toBe('blocked');
+  expect(urls.counts, 'after an Outcome click').toHaveLength(1);
+  await expect(outcomeButtons(page)).toHaveText(['All 12', 'ok 3', 'failed 2', 'blocked 5', 'cleaned 2']);
+});
+
+test('A31b a range change reads the counts again, with the old numbers gone meanwhile', async ({ page }) => {
+  const held = heldCounts();
+  const urls = await install(page, { answer: () => list(ROWS), counts: held.reply });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => urls.counts.length).toBe(1);
+  held.answer(0, counted(FIVE));
+  await expect(outcomeButtons(page).first()).toHaveText('All 12');
+  await rangeButton(page, 'Last 1 h').click();
+  await expect.poll(() => urls.counts.length).toBe(2);
+  expect(new URL(urls.counts[1]).searchParams.get('from')).toBe(FROM_1H);
+  await expect(outcomeButtons(page)).toHaveText(['All', 'ok', 'failed', 'blocked', 'cleaned']);
+  held.answer(1, counted({ ...FIVE, all: 7 }));
+  await expect(outcomeButtons(page).first()).toHaveText('All 7');
+});
+
+test('A31c a third filter change overtakes the second: its late answer is never drawn', async ({ page }) => {
+  const held = heldCounts();
+  const urls = await install(page, { answer: () => list(ROWS), counts: held.reply });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => urls.counts.length).toBe(1);
+  held.answer(0, counted(FIVE));
+  await rangeButton(page, 'Last 1 h').click();
+  await expect.poll(() => urls.counts.length).toBe(2);
+  await rangeButton(page, 'Last 7 days').click();
+  await expect.poll(() => urls.counts.length).toBe(3);
+  held.answer(2, counted({ ...FIVE, all: 3 }));
+  await expect(outcomeButtons(page).first()).toHaveText('All 3');
+  held.answer(1, counted({ ...FIVE, all: 99 }));
+  await page.clock.runFor(1000);
+  await expect(outcomeButtons(page).first()).toHaveText('All 3');
+});
+
+test('A31d back to the first filters while a read is out: they are read again', async ({ page }) => {
+  const held = heldCounts();
+  const urls = await install(page, { answer: () => list(ROWS), counts: held.reply });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => urls.counts.length).toBe(1);
+  held.answer(0, counted(FIVE));
+  await expect(outcomeButtons(page).first()).toHaveText('All 12');
+  await rangeButton(page, 'Last 1 h').click();
+  await expect.poll(() => urls.counts.length).toBe(2);
+  await rangeButton(page, 'Last 24 h').click();
+  await expect.poll(() => urls.counts.length).toBe(3);
+  expect(new URL(urls.counts[2]).searchParams.get('from')).toBe(FROM_24H);
+  held.answer(2, counted({ ...FIVE, all: 13 }));
+  await expect(outcomeButtons(page).first()).toHaveText('All 13');
+});
+
+test('A31e a live refresh of page 1 reads no counts', async ({ page }) => {
+  const urls = await install(page, { answer: () => list(ROWS), counts: () => counted(FIVE) });
+  await open(page, urls, '/ui/activity/status');
+  await expect(outcomeButtons(page).first()).toHaveText('All 12');
+  const lists = urls.length;
+  await page.evaluate(() => dispatchEvent(new CustomEvent('gateway-activity')));
+  await expect.poll(() => urls.slice(lists).filter((u) => !filters(u).cursor).length, 'the premise: a live page-1 read').toBeGreaterThan(0);
+  await page.clock.runFor(1000);
+  expect(urls.counts).toHaveLength(1);
+});
+
+test('A31f leaving the tab aborts the counts read that is out', async ({ page }) => {
+  const held = heldCounts();
+  const urls = await install(page, { answer: () => list(ROWS), counts: held.reply });
+  const failed = [];
+  page.on('requestfailed', (req) => { if (new URL(req.url()).pathname === '/ui/api/activity/counts') failed.push(req.url()); });
+  await open(page, urls, '/ui/activity/status');
+  await expect.poll(() => urls.counts.length).toBe(1);
+  await page.locator('nav.tabs a').filter({ hasNotText: 'Status' }).first().click();
+  await expect.poll(() => failed).toEqual([urls.counts[0]]);
+});
