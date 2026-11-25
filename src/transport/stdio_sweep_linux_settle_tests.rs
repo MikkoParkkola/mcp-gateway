@@ -315,14 +315,17 @@ fn a_child_running_when_listed_unsettles_though_stopped_at_its_walk() {
 
 /// A listed child that vanishes before its own walk (its stat was read when it
 /// was listed; its task directory is gone when the walk reaches it) was never
-/// judged by the task rule, so the reading is unsettled.
+/// judged by the task rule, so the reading is unsettled. It reads Stopped at
+/// its listing stat, so the listing check passes and only the vanished walk
+/// can unsettle this reading (a Running child here would pass for the wrong
+/// reason: the sabotage job's M7 found exactly that).
 #[test]
 fn a_child_gone_before_its_own_walk_unsettles_the_reading() {
     let tree = Tree::new(true);
     tree.proc(fake(1), 1, 'T', 1, &[fake(2)]);
     tree.write(
         &format!("{}/stat", fake(2)),
-        &stat_line(fake(2), fake(1), 'R', 1),
+        &stat_line(fake(2), fake(1), 'T', 1),
     );
     let listing = read_from_s(&tree);
     assert!(
