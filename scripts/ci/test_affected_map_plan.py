@@ -97,7 +97,7 @@ def merged(docs: list[dict]) -> tuple[dict, dict]:
 
 
 def part_doc(units: dict, reasons: dict | None = None, extra=()) -> dict:
-    return {"part": "lib-x", "binary": None, "extra_files": list(extra), "units": units,
+    return {"part": "lib-x", "binary": "bin/px/lib-tests-px", "extra_files": list(extra), "units": units,
             "unmapped_reasons": reasons or {k: [] for k in units}}
 
 
@@ -136,9 +136,12 @@ class Plans(unittest.TestCase):
         self.assertEqual(am.unit_key("h::d::c0::x::t0", split), "h::d::c0")
 
     def test_p3c_the_merged_map_plans_the_same_list_by_seconds(self) -> None:
-        doc, _ = merged([part_doc({"lib:a::a": unit(["a::a::t"], 1.0), "lib:m::m": unit(["m::m::t", "m::m::u"], 30.0),
-                                   "lib:z::z": unit(["z::z::t", "z::z::u"], 20.0),
-                                   "lib:b::b": unit(["b::b::t"], 2.0)})])
+        # Every group stays under 10% of the lib total, so the old merge maps them as they are and only the plan
+        # can choose; seconds order (m > z > the fillers) differs from label order.
+        units = {f"lib:f{i:02d}::g": unit([f"f{i:02d}::g::t", f"f{i:02d}::g::u"], 8.0) for i in range(10)}
+        units.update({"lib:a::a": unit(["a::a::t"], 1.0), "lib:m::m": unit(["m::m::t", "m::m::u"], 9.5),
+                      "lib:z::z": unit(["z::z::t", "z::z::u"], 9.0), "lib:b::b": unit(["b::b::t"], 2.0)})
+        doc, _ = merged([part_doc(units)])
         self.assertEqual(am.plan(doc, 2), ["m::m", "z::z"])
 
     def test_p2b1_a_label_ranks_in_only_on_its_sum_over_two_parts(self) -> None:
@@ -174,9 +177,10 @@ class Fold(unittest.TestCase):
 
     @staticmethod
     def side(i: int, unmapped: bool, reasons: list[str]) -> dict:
-        u = unit([f"k::m::t{i}"], float(i + 1), files=[f"src/f{i}.rs"], dirs=[f"d{i}"], probes=[f"p{i}"],
-                 unmapped=unmapped)
-        return part_doc({"lib:k::m": u}, {"lib:k::m": reasons})
+        # Each part has its own values plus one shared value per field, and its own extra input (gpt code r1 IMP).
+        u = unit([f"k::m::t{i}"], float(i + 1), files=[f"src/f{i}.rs", "src/shared.rs"], dirs=[f"d{i}", "shared"],
+                 probes=[f"p{i}", "shared"], unmapped=unmapped)
+        return part_doc({"lib:k::m": u}, {"lib:k::m": reasons}, extra=[f"fixtures/x{i}.json"])
 
     def test_p6a_two_parts_that_disagree_on_every_field(self) -> None:
         for flags in ((False, True), (True, False)):
@@ -184,9 +188,10 @@ class Fold(unittest.TestCase):
                                   self.side(1, flags[1], ["coverage", "trace"] if flags[1] else [])])
             u = doc["units"]["lib:k::m"]
             self.assertEqual(sorted(u["tests"]), ["k::m::t0", "k::m::t1"])
-            self.assertEqual(sorted(u["files"]), ["src/f0.rs", "src/f1.rs"])
-            self.assertEqual(sorted(u["dirs"]), ["d0", "d1"])
-            self.assertEqual(sorted(u["probes"]), ["p0", "p1"])
+            self.assertEqual(sorted(u["files"]), ["fixtures/x0.json", "fixtures/x1.json", "src/f0.rs", "src/f1.rs",
+                                                  "src/shared.rs"])
+            self.assertEqual(sorted(u["dirs"]), ["d0", "d1", "shared"])
+            self.assertEqual(sorted(u["probes"]), ["p0", "p1", "shared"])
             self.assertEqual(u["seconds"], 3.0)
             self.assertIs(u["unmapped"], True)
         doc, counts = merged([self.side(0, True, ["coverage", "trace"]), self.side(1, True, ["coverage"])])
@@ -201,7 +206,8 @@ class Fold(unittest.TestCase):
         self.assertEqual(sorted(u["tests"]), [f"k::m::t{i}" for i in range(4)])
         self.assertEqual(u["seconds"], 10.0)
         self.assertIs(u["unmapped"], True)
-        self.assertEqual(sorted(u["files"]), [f"src/f{i}.rs" for i in range(4)])
+        self.assertEqual(sorted(u["files"]), sorted([f"src/f{i}.rs" for i in range(4)] + ["src/shared.rs"]
+                                                    + [f"fixtures/x{i}.json" for i in range(4)]))
 
 
 class Merge(unittest.TestCase):
@@ -244,6 +250,22 @@ class Part(unittest.TestCase):
         self.assertEqual(len(calls), len(got))
         self.assertEqual(sorted(t for c in calls for t in c), sorted(self.NAMES))
 
+    def test_p8d_the_command_line_list_reaches_the_lib_part(self) -> None:
+        seen: list[list[str]] = []
+
+        def fake_lib_part(k, out, split):
+            seen.append(split)
+            return {"part": f"lib-{k}", "binary": None, "units": {}, "unmapped_reasons": {}, "extra_files": []}
+        saved = am._lib_part
+        am._lib_part = fake_lib_part
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self.assertEqual(am.main(["affected_map.py", "part", "lib-1", tmp, '["commands::doctor"]']), 0)
+                self.assertEqual(am.main(["affected_map.py", "part", "lib-1", tmp]), 0)
+        finally:
+            am._lib_part = saved
+        self.assertEqual(seen, [["commands::doctor"], []])
+
 
 class Workflow(unittest.TestCase):
     """P8a and P8b: the guard plans the list on every event, each lib part gets it, the merge only parses JSON."""
@@ -266,7 +288,9 @@ class Workflow(unittest.TestCase):
         self.assertEqual(self.jobs["merge"]["timeout-minutes"], 5)
 
     def test_p8b_the_guard_plans_on_every_event_and_each_part_gets_the_list(self) -> None:
-        step = next(s for s in self.jobs["guard"]["steps"] if "affected_map.py plan" in str(s.get("run", "")))
+        steps = [s for s in self.jobs["guard"]["steps"] if "affected_map.py plan" in str(s.get("run", ""))]
+        self.assertEqual(len(steps), 1, "the guard job has one plan step")
+        step = steps[0]
         self.assertNotIn("if", step, "a dispatch plans the same way as a push")
         self.assertIn("steps.split.outputs.split", self.jobs["guard"]["outputs"]["split"])
         self.assertEqual(step.get("id"), "split")
@@ -340,6 +364,10 @@ def _fold_mutants() -> list[tuple[str, str, dict]]:
             "merge", "    parts = [json.loads(", '    run_unit("x", [], 0, "x", [])\n    parts = [json.loads(')}),
         ("the part ignores the list", "Part", {"lib_units": _edited(
             "lib_units", "unit_key(name, split)", "unit_key(name, [])")}),
+        ("main drops the list", "Part", {"main": _edited(
+            "main", "json.loads(argv[4]) if len(argv) == 5 and argv[4] else []", "[]")}),
+        ("a fold that keeps duplicates", "Fold", {"merge": _edited(
+            "merge", "have[key] = sorted(set(have[key]) | set(add[key]))", "have[key] = have[key] + add[key]")}),
         ("each unit traced twice", "Part", {"lib_units": _edited(
             "lib_units", "        units[\"lib:\" + key], reasons[\"lib:\" + key] = run(key, members)",
             "        run(key, members)\n        units[\"lib:\" + key], reasons[\"lib:\" + key] = run(key, members)")}),
