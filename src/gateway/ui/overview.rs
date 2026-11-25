@@ -170,7 +170,14 @@ fn kpi_and_servers(
         .collect();
     let sign_ins = backends
         .iter()
-        .filter(|b| b.needs_sign_in())
+        .filter(|b| {
+            use crate::oauth::client::sign_in::SignIn;
+            mutant!(
+                "M7",
+                matches!(b.sign_in(), SignIn::WaitingElsewhere),
+                b.needs_sign_in()
+            )
+        })
         .map(|b| sign_in_row(&b.name))
         .collect();
     let mut kpi = Map::new();
@@ -194,7 +201,15 @@ fn kpi_and_servers(
 /// says so when the cut removed anything.
 fn sign_in_row(name: &str) -> Value {
     let subject = clip(name);
-    let detail = if subject.len() < name.len() {
+    let detail = if mutant!(
+        "M8",
+        false,
+        mutant!(
+            "M9",
+            subject.len() <= name.len(),
+            subject.len() < name.len()
+        )
+    ) {
         json!({ "clipped": true })
     } else {
         json!({})
@@ -448,23 +463,36 @@ fn needs_you(
     let denied = startup
         .iter()
         .map(|refusal| refused_row(refusal, &refusal_detail(refusal)));
+    let sign_ins: Vec<Value> = mutant!("M1", Vec::new(), sign_ins);
+    let (early, sign_ins) = mutant!("M2", (sign_ins, Vec::new()), (Vec::new(), sign_ins));
+    rows.splice(0..0, early);
     rows.splice(0..0, denied);
-    rows.splice(0..0, decisions_row(state, degraded));
-    rows.splice(0..0, invalid);
-    rows.extend(sign_ins);
-    rows.extend(limit_rows(state, generation));
+    let decisions = decisions_row(state, degraded);
+    let (first, second) = (invalid, decisions);
+    mutant!("M11", rows.extend(second), {
+        rows.splice(0..0, second);
+    });
+    rows.splice(0..0, first);
+    let limits = limit_rows(state, generation);
+    let (mid, last) = mutant!("M3", (limits, sign_ins), (sign_ins, limits));
+    rows.extend(mid);
+    rows.extend(last);
     let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS));
     let mut more = json!({ "count": folded.len() });
     let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
-    for row in &folded {
+    for row in mutant!("M6", &rows, &folded) {
         *by_kind
             .entry(row["kind"].as_str().unwrap_or(""))
             .or_default() += 1;
     }
-    if !by_kind.is_empty() {
+    if mutant!("M4", false, mutant!("M5", true, !by_kind.is_empty())) {
         more["by_kind"] = json!(by_kind);
     }
-    json!({ "rows": rows, "more": more })
+    mutant!(
+        "M10",
+        json!({ "sign_ins": rows.iter().filter(|r| r["kind"] == "sign_in").count(), "rows": rows, "more": more }),
+        json!({ "rows": rows, "more": more })
+    )
 }
 
 /// The open-decisions row, from the decision set's held snapshot: none with
