@@ -56,8 +56,12 @@ def _rehash_patterns():
 
 
 HASHED, TABLE, FRAME_STYLE = _rehash_patterns()
-HASH_IN_REF = re.compile(r"(/ui/assets/[^\s\"'()<>]+?)\.[0-9a-f]{12}(\.[a-z0-9]+)(?![\w.-])")
-REF = re.compile(r"/ui/assets/([\w.-]+)")
+# The extensions rehash hashes, read from its own name pattern; a hash is stripped only before one of them.
+EXTS = re.search(r"\(\?P<ext>([^)]*)\)", HASHED.pattern)[1]
+HASH_IN_REF = re.compile(r"(/ui/assets/[^\s\"'`()<>]+?)\.[0-9a-f]{12}(\.(?:" + EXTS + r"))(?![\w.-])")
+# A reference as rehash defines one: a name (any characters; rehash allows any stem) ending in one of its
+# extensions. Prose such as "served under /ui/assets/, by name" is not a reference.
+REF = re.compile(r"/ui/assets/([^\s\"'`()<>,;]+?\.(?:" + EXTS + r"))(?![\w.-])")
 
 
 class Refused(Exception):
@@ -107,11 +111,12 @@ def norm(key: str, kind: str, text: str) -> str:
     rehash puts all three back."""
     if kind != "norm":
         return text
+    if key == SHELL_RS:
+        # rehash restores only the table; every other byte of shell.rs stays as written.
+        return TABLE.sub(lambda _: PLACEHOLDER, text, count=1)
     text = HASH_IN_REF.sub(r"\1\2", text)
     if key == INDEX:
         text = FRAME_STYLE.sub(lambda m: m[1] + m[3], text, count=1)
-    if key == SHELL_RS:
-        text = TABLE.sub(lambda _: PLACEHOLDER, text, count=1)
     return text
 
 
@@ -201,22 +206,29 @@ def plan(b: dict, o: dict, t: dict) -> dict:
 # ---- checks after rehash (sections 5 and 6) ------------------------------------------------------------------
 
 def changed_lines(old: str, new: str) -> list:
-    return [line for line in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0)
-            if not line.startswith(("---", "+++", "@@"))]
+    """The -/+ lines of one diff. Only the two file headers and the @@ hunk lines are dropped: a real line may
+    itself start with `--` or `++`."""
+    diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0))[2:]
+    return [line for line in diff if not line.startswith("@@")]
 
 
 def read_back(wt: Path, key: str, kind: str):
     """The key's file in the throwaway tree after rehash (under its new hashed name), or None."""
+    # Bytes decoded, never read_text: newline translation would turn CRLF into LF and fail a faithful merge.
     if key in TEXTS:
         path = wt / key
-        return path.read_text(encoding="utf-8") if path.exists() else None
+        return path.read_bytes().decode("utf-8") if path.exists() else None
     folder, _, name = key.rpartition("/")
     stem, _, ext = name.rpartition(".")
-    for path in (wt / SHELL / folder).glob(f"{stem}*.{ext}"):
+    for path in (wt / SHELL / folder).glob(f"{glob_escape(stem)}*.{ext}"):
         m = HASHED.match(path.name)
         if m and m["stem"] == stem and m["ext"] == ext:
-            return path.read_bytes() if kind == "binary" else path.read_text(encoding="utf-8")
+            return path.read_bytes() if kind == "binary" else path.read_bytes().decode("utf-8")
     return None
+
+
+def glob_escape(text: str) -> str:
+    return re.sub(r"([*?\[])", r"[\1]", text)
 
 
 def prove(b: dict, o: dict, t: dict, results: dict, wt: Path) -> None:
@@ -276,22 +288,46 @@ def preconditions(root: str) -> None:
         raise Refused("R1", "HEAD is detached; check out the UI branch")
 
 
+def paths_z(*args, cwd) -> list:
+    """A path list from git's NUL-separated output (no quoting of unusual names)."""
+    return [p for p in git(*args, "-z", cwd=cwd).stdout.split("\0") if p]
+
+
 def source_conflicts(root: str, line: str) -> None:
-    proc = git("merge-tree", "--write-tree", "--name-only", "--no-messages", "HEAD", line, cwd=root, check=False)
+    proc = git("merge-tree", "--write-tree", "--name-only", "--no-messages", "-z", "HEAD", line, cwd=root,
+               check=False)
     if proc.returncode not in (0, 1):
         raise RuntimeError("git merge-tree failed: " + proc.stderr.strip())
-    paths = proc.stdout.splitlines()[1:]  # line 1 is the result tree
+    paths = proc.stdout.split("\0")[1:]  # the first field is the result tree
     outside = sorted({p for p in paths if p and not is_generated(p)})
     if outside:
         raise Refused("R2", "conflicts outside the generated files", outside)
 
 
+def symlinks(wt: Path) -> list:
+    """Symlinks among the generated paths or the folders above them: writing through one could reach outside the
+    throwaway tree."""
+    found = [p for p in (wt / "src", wt / "src/gateway", wt / UI) if p.is_symlink()]
+    for folder, dirs, files in os.walk(wt / UI, followlinks=False):
+        found += [Path(folder) / n for n in dirs + files if (Path(folder) / n).is_symlink()]
+    return sorted(p.relative_to(wt).as_posix() for p in found)
+
+
 def build(line: str, subject: str, b: dict, o: dict, t: dict, results: dict, wt: Path) -> str:
     """The merge commit, made in the throwaway worktree `wt`; returns its id."""
-    git("merge", "--no-commit", "--no-ff", "-q", line, cwd=wt, check=False)
+    merged = git("merge", "--no-commit", "--no-ff", "-q", line, cwd=wt, check=False)
+    # A conflicted merge exits 1 but leaves MERGE_HEAD; a merge that never started (e.g. a signature check) does
+    # not, and committing then would make a one-parent commit without the line's changes.
+    head = git("rev-parse", "-q", "--verify", "MERGE_HEAD", cwd=wt, check=False).stdout.strip()
+    if head != line:
+        sys.stderr.write(merged.stdout + merged.stderr)
+        raise Refused("R7", "git merge did not start (its output is above)")
+    linked = symlinks(wt)
+    if linked:
+        raise Refused("R9", "a generated path or a folder above it is a symlink", linked)
     # Every hashed asset is rewritten from `results`; anything untracked under the UI folder now is a merge
     # leftover (a rename/rename side copy such as `name~HEAD`), since the tree started clean.
-    leftovers = git("ls-files", "--others", "--exclude-standard", "--", UI, cwd=wt).stdout.splitlines()
+    leftovers = paths_z("ls-files", "--others", "--exclude-standard", "--", UI, cwd=wt)
     for path in [wt / p for p in leftovers] + [p for p in (wt / SHELL).rglob("*") if HASHED.match(p.name)]:
         if path.is_file():
             path.unlink()
@@ -308,17 +344,17 @@ def build(line: str, subject: str, b: dict, o: dict, t: dict, results: dict, wt:
     if proc.returncode != 0:
         sys.stderr.write(proc.stdout + proc.stderr)
         raise Refused("R6", "rehash_ui_assets.py failed (its output is above)")
-    touched = git("diff", "--name-only", cwd=wt).stdout.splitlines()
-    touched += git("ls-files", "--others", "--exclude-standard", cwd=wt).stdout.splitlines()
-    outside = sorted({p for p in touched if p and not is_generated(p)})
+    touched = paths_z("diff", "--name-only", cwd=wt) + paths_z("ls-files", "--others", "--exclude-standard", cwd=wt)
+    outside = sorted({p for p in touched if not is_generated(p)})
     if outside:
         raise Refused("R7", "rehash wrote outside G", outside)
     git("add", "-A", UI, cwd=wt)
-    unmerged = git("diff", "--name-only", "--diff-filter=U", cwd=wt).stdout.split()
+    unmerged = paths_z("diff", "--name-only", "--diff-filter=U", cwd=wt)
     if unmerged:
         raise Refused("R7", "unresolved paths after staging", unmerged)
     check_tree(wt, results)
     prove(b, o, t, results, wt)
+    checked = out("write-tree", cwd=wt)
     # Git's own merge subject would name the throwaway branch and a 40-character id; the repo's commit-msg hook
     # caps a subject at 72 characters.
     message = f"{subject}\n\nUI generated files re-derived by scripts/dev/merge_ui_line.py\n"
@@ -331,6 +367,9 @@ def build(line: str, subject: str, b: dict, o: dict, t: dict, results: dict, wt:
             raise Refused("R7", "commit failed (git's output is above)")
     finally:
         os.unlink(f.name)
+    # A commit hook may restage files; only the tree checked above may reach the branch.
+    if out("rev-parse", "HEAD^{tree}", cwd=wt) != checked:
+        raise Refused("R7", "a commit hook changed the checked tree")
     return out("rev-parse", "HEAD", cwd=wt)
 
 
@@ -352,18 +391,21 @@ def run(root: str, line_ref: str) -> int:
     common = common if common.is_absolute() else Path(root) / common
     name = f"merge-ui-line-{os.getpid()}"
     wt = common / name
-    git("worktree", "add", "-q", "-b", name, str(wt), "HEAD", cwd=root)
+    if wt.exists() or git("rev-parse", "-q", "--verify", f"refs/heads/{name}", cwd=root, check=False).returncode == 0:
+        raise RuntimeError(f"{wt} or branch {name} already exists; not touching it")
     try:
+        git("worktree", "add", "-q", "-b", name, str(wt), "HEAD", cwd=root)
         commit = build(line, subject, b, o, t, results, wt)
         git("merge", "--ff-only", "-q", commit, cwd=root)
     finally:
-        # The throwaway tree is this script's own and freshly made: reset and clean it, then remove it without
-        # force (a refusal here is printed, never forced).
-        git("reset", "--hard", "-q", cwd=wt, check=False)
-        git("clean", "-fdq", cwd=wt, check=False)
-        removed = git("worktree", "remove", str(wt), cwd=root, check=False)
-        if removed.returncode != 0:
-            print(f"merge_ui_line: could not remove {wt}: {removed.stderr.strip()}", file=sys.stderr)
+        # Only what this run created (checked absent above): reset and clean the throwaway tree, then remove it
+        # without force (a refusal here is printed, never forced), and delete its branch.
+        if wt.exists():
+            git("reset", "--hard", "-q", cwd=wt, check=False)
+            git("clean", "-fdq", cwd=wt, check=False)
+            removed = git("worktree", "remove", str(wt), cwd=root, check=False)
+            if removed.returncode != 0:
+                print(f"merge_ui_line: could not remove {wt}: {removed.stderr.strip()}", file=sys.stderr)
         git("branch", "-q", "-D", name, cwd=root, check=False)
     print(f"merge_ui_line: merged {line_ref} as {commit[:10]}")
     return 0

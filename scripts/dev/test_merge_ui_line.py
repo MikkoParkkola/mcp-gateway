@@ -45,6 +45,7 @@ NAMED = rehash_module.HASHED
 
 FILES = {
     f"{SHELL}/shell.js": """\
+        // Prose, not a reference: every asset is served under /ui/assets/, by its hashed name.
         export function s1() {
           return "s1";
         }
@@ -210,14 +211,14 @@ class Fixture:
 
     def edit(self, rel: str, old: str, new: str, last: bool = False) -> None:
         path = self.find(rel)
-        body = path.read_text()
+        body = path.read_bytes().decode()  # bytes, so CRLF line ends survive the edit
         assert old in body, f"{old!r} not in {rel}"
         if last:
             i = body.rindex(old)
             body = body[:i] + new + body[i + len(old):]
         else:
             body = body.replace(old, new, 1)
-        path.write_text(body)
+        path.write_bytes(body.encode())
 
     def drop(self, rel: str) -> None:
         self.find(rel).unlink()
@@ -280,6 +281,9 @@ class Fixture:
         test.assertEqual(len(self.git("worktree", "list").splitlines()), 1)
         test.assertNotIn("merge-ui-line", self.git("branch", "--list"))
         test.assertFalse((self.root / ".git/MERGE_HEAD").exists())
+        removes = [line for line in self.calls().splitlines() if line.startswith("worktree remove")]
+        test.assertTrue(removes, "the throwaway tree is removed")
+        test.assertFalse([line for line in removes if "--force" in line or " -f " in line], "never forced")
 
     def calls(self) -> str:
         return self.log.read_text() if self.log.exists() else ""
@@ -300,11 +304,9 @@ def norm(text: str) -> str:
 
 
 def changed_lines(old: str, new: str) -> list[str]:
-    out = []
-    for line in difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0):
-        if not line.startswith(("---", "+++", "@@")):
-            out.append(line)
-    return out
+    """The -/+ lines: only the two file headers and @@ lines dropped (a real line may start with -- or ++)."""
+    diff = list(difflib.unified_diff(old.splitlines(), new.splitlines(), lineterm="", n=0))[2:]
+    return [line for line in diff if not line.startswith("@@")]
 
 
 def printed_lists(stdout: str, key: str) -> tuple[list[str], list[str]]:
@@ -543,6 +545,32 @@ class Rows(unittest.TestCase):
         tip, line = self.fx.setup(gone, lambda fx: (gone(fx), edit_b(fx)))
         self.succeed(tip, line)
         self.assertFalse(list((self.fx.root / SHELL / "nested").glob("c.*")))
+        self.assertIn('"BOP"', self.fx.text(f"{SHELL}/b.js"))
+
+    def rebase_fixture(self, change) -> None:
+        """A new base commit on main with `change` applied (rehashed); later rows branch from it."""
+        self.fx.base = self.fx.side("main", self.fx.base, change)
+
+    def test_t15b_crlf_raw_text_keeps_its_line_ends(self):
+        self.rebase_fixture(lambda fx: fx.find(f"{SHELL}/data.json").write_bytes(
+            fx.find(f"{SHELL}/data.json").read_bytes().replace(b"\n", b"\r\n")))
+        tip, line = self.fx.setup(lambda fx: fx.edit(f"{SHELL}/data.json", '"one"', '"ONE"'),
+                                  lambda fx: fx.edit(f"{SHELL}/data.json", '"two"', '"TWO"'))
+        self.succeed(tip, line)
+        data = self.fx.find(f"{SHELL}/data.json").read_bytes()
+        self.assertIn(b'"ONE"', data)
+        self.assertIn(b'"TWO"', data)
+        self.assertEqual(data.count(b"\r\n"), data.count(b"\n"))
+
+    def test_t20_a_non_ascii_asset_name(self):
+        self.rebase_fixture(lambda fx: fx.write(f"{SHELL}/été.js", "export const e1 = 1;\nexport const em = 0;\n"
+                                                                            "export const e2 = 2;\n"))
+        tip, line = self.fx.setup(lambda fx: fx.edit(f"{SHELL}/été.js", "e1 = 1", "e1 = 11"),
+                                  lambda fx: fx.edit(f"{SHELL}/été.js", "e2 = 2", "e2 = 22"))
+        self.succeed(tip, line)
+        body = self.fx.text(f"{SHELL}/été.js")
+        self.assertIn("e1 = 11", body)
+        self.assertIn("e2 = 22", body)
 
     # ---- refusal rows ----
 
@@ -628,9 +656,10 @@ class Rows(unittest.TestCase):
         shim = self.shim("""\
             if not state['done'] and '<p>shell</p>' in text:
                 state['done'] = True
-                text = text.replace('<p>shell</p>', '<p>shell</p>\\n<script src="/ui/assets/missing.js"></script>', 1)
+                text = text.replace('<p>shell</p>', '<p>shell</p>\\n<script src="/ui/assets/@missing.js"></script>', 1)
             """)
-        self.refuse("R7", "missing.js", reason="missing asset", script=shim)
+        # "@" is outside \\w: the reference check must read whole reference tokens, not just word characters.
+        self.refuse("R7", "@missing.js", reason="missing asset", script=shim)
 
     def test_t8_the_same_new_asset_on_both_sides(self):
         def add(fx):
@@ -655,6 +684,40 @@ class Rows(unittest.TestCase):
 
         self.fx.setup(same, same)
         self.refuse("R7", "b.js", reason="the line already has this edit")
+
+    def test_t8f_the_same_line_starting_with_plus_plus(self):
+        # A real line that starts with "++" must not be mistaken for a diff header by the list rule.
+        def same(fx):
+            fx.edit(f"{SHELL}/b.js", 'export function bop() {', '++counter;\nexport function bop() {')
+
+        self.fx.setup(same, same)
+        self.refuse("R7", "b.js", reason="the line already has this edit")
+
+    def test_t17_a_symlinked_generated_file(self):
+        outside = self.fx.tmp / "outside.txt"
+        outside.write_text("outside\n")
+
+        def branch(fx):
+            golden = fx.root / f"{UI}/csp.golden"
+            golden.unlink()
+            golden.symlink_to(outside)
+            fx.skip_rehash_once = True  # the fixture's own rehash would write through the link
+
+        self.fx.setup(branch, edit_b)
+        self.refuse("R9", "csp.golden")
+        self.assertEqual(outside.read_text(), "outside\n")
+
+    def test_t18_a_merge_that_never_starts(self):
+        self.fx.setup(edit_a, edit_b)
+        self.fx.git("config", "merge.verifySignatures", "true")
+        self.refuse("R7", reason="git merge did not start")
+
+    def test_t19_a_commit_hook_that_restages(self):
+        self.fx.setup(edit_a, edit_b)
+        hook = self.fx.root / ".git/test-hooks/pre-commit"
+        hook.write_text("#!/bin/sh\necho hooked >> NOTES.txt\ngit add NOTES.txt\n")
+        hook.chmod(0o755)
+        self.refuse("R7", reason="a commit hook changed the checked tree")
 
     def test_t8e_a_font_changed_differently(self):
         self.fx.setup(lambda fx: fx.find(f"{SHELL}/font.woff2").write_bytes(b"wOF24444"),
