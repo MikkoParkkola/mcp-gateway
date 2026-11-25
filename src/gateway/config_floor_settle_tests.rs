@@ -585,7 +585,7 @@ async fn an_admitted_write_holds_the_checkpoint() {
         assert!(parked, "{row}: the write parked on the reload lock");
         let writing = tokio::spawn(writing);
         p3_case(&row, &booted, AdmitKind::Write, Probe::Busy, || {
-            drop(outside)
+            drop(outside);
         })
         .await;
         let landed = writing.await.expect("the write task joined");
