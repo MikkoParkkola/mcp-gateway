@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/gateway.69167896a48b.js b/src/gateway/ui/shell/gateway.69167896a48b.js
+index da5a67ed7e..b60d795a27 100644
+--- a/src/gateway/ui/shell/gateway.69167896a48b.js
++++ b/src/gateway/ui/shell/gateway.69167896a48b.js
+@@ -160,7 +160,6 @@ async function reloadTab(body, ctx) {
+     button.textContent = 'Reload now';
+     card.removeAttribute('aria-busy');
+     for (const text of spoken(lines)) ctx.announce(text);
+-    if (!signedOut) button.focus();
+   });
+   body.append(card);
+ }
