@@ -3,7 +3,7 @@
 //! `GET /ui/api/overview`'s needs-you list: the invalid-config row, the
 //! startup-denied and refused rows, the budget rows behind them, and the full
 //! body's size with every list at its cap. Moved unchanged out of
-//! overview_sources_tests.rs, which keeps the counter rows and shares its
+//! `overview_sources_tests.rs`, which keeps the counter rows and shares its
 //! store helpers with this file.
 
 use std::sync::Arc;
