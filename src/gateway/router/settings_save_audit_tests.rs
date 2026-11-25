@@ -319,15 +319,16 @@ async fn w2_a_save_the_reload_refuses_is_rolled_back() {
     assert_record(&fx, "W2.b", "rolled_back", &Id::OfTheIntent);
 }
 
-/// W2 c: the write itself fails; the original stays.
+/// W2 c: the write itself fails before its rename; the bytes never reached
+/// the file, so the save is refused, not rolled back.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn w2_a_failed_write_is_rolled_back() {
+async fn w2_a_failed_write_writes_nothing_and_is_refused() {
     let fx = gateway(START, Reloads::Accept).await;
     let _armed = fault::set(&fx.path, Fault::FailWrite);
     save(&fx, "prod").await;
     assert!(fault::fired(&fx.path) > 0, "W2.c: the write fault fired");
     assert_eq!(file(&fx.path), START.as_bytes(), "W2.c: the original stays");
-    assert_record(&fx, "W2.c", "rolled_back", &Id::OfTheIntent);
+    assert_record(&fx, "W2.c", "refused", &Id::OfTheIntent);
 }
 
 /// W2 d: the config link is re-pointed after the write; the write is undone

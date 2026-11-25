@@ -696,11 +696,9 @@ impl ReloadContext {
         trace: &WriteTrace,
     ) -> ReplaceError {
         let Err(e) = journal::finish_exact(target, staged[0], staged[1]) else {
-            // The file was never replaced: the original stands, as after a
-            // proven rollback.
-            if trace.written.load(Ordering::SeqCst) {
-                trace.restored.store(true, Ordering::SeqCst);
-            }
+            // The rename never ran, so the new bytes never reached the
+            // target: the trace stops saying they may be on disk.
+            trace.written.store(false, Ordering::SeqCst);
             return error;
         };
         let (journal, error) = (staged[0].to_path_buf(), e.to_string());
