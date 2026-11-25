@@ -3,11 +3,11 @@
 //! `GET /ui/api/overview`'s open-decisions row: the decision set's count and
 //! revision, the same pair the count route serves; an unreadable source named
 //! in `degraded`; no set adds nothing; the row never folds. The needs-you
-//! helpers it shares live in overview_needs_you_tests.rs.
+//! helpers it shares live in `overview_needs_you_tests.rs`.
 
 use std::sync::Arc;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use super::AppState;
@@ -18,9 +18,16 @@ use super::overview_sources_tests::{record, with_store};
 use super::overview_tests::{ADMIN_KEY, fixture, get_at, overview};
 use crate::clock::test_clock;
 use crate::counters::Tally;
-use crate::decisions::{AdoptFind, Health, Shared, Source, UnreadableFile, UnreadableReason};
+use crate::decisions::{
+    AdoptFind, DecisionSet, Health, Shared, Source, UnreadableFile, UnreadableReason,
+};
 use crate::discovery::DiscoverySource;
 use crate::discovery::shadow::ShadowRiskSeverity;
+
+/// The instant every staged listing is seen at: 2026-06-15T12:00:00Z.
+fn seen() -> DateTime<Utc> {
+    DateTime::from_timestamp(1_781_524_800, 0).expect("a valid instant")
+}
 
 /// An unmanaged client find called `name`.
 fn adopt(name: &str) -> AdoptFind {
@@ -45,7 +52,7 @@ pub(super) fn ready_set(state: &AppState, finds: &[&str]) -> Arc<Shared> {
             s.set_health(source, Health::Absent);
         }
         let finds = finds.iter().map(|n| adopt(n)).collect();
-        s.set_discovery(finds, vec![], 1, Utc::now());
+        s.set_discovery(finds, vec![], 1, seen());
     });
     state.meta_mcp.set_decisions(Arc::clone(&set));
     set
@@ -65,7 +72,7 @@ async fn d1_open_decisions_are_one_row_with_count_and_revision() {
         reason: UnreadableReason::DidNotParse,
     };
     let two = || vec![adopt("d1-a"), adopt("d1-b")];
-    set.update(|s| s.set_discovery(two(), vec![broken()], 2, Utc::now()));
+    set.update(|s| s.set_discovery(two(), vec![broken()], 2, seen()));
     let view = set.view().expect("every source readable");
     let kinds: Vec<(&str, &str)> = view
         .decisions
@@ -96,7 +103,7 @@ async fn d1_open_decisions_are_one_row_with_count_and_revision() {
 
     let mut three = two();
     three.push(adopt("d1-c"));
-    set.update(|s| s.set_discovery(three, vec![broken()], 3, Utc::now()));
+    set.update(|s| s.set_discovery(three, vec![broken()], 3, seen()));
     let body = overview(&state).await;
     let detail = &rows(&body)[0]["detail"];
     assert_eq!(detail["count"], 4, "{body}");
@@ -116,7 +123,7 @@ async fn d1_open_decisions_are_one_row_with_count_and_revision() {
 async fn d2_an_unreadable_decision_source_is_degraded_never_zero() {
     let (state, _dir) = fixture(0, false).await;
     let set = ready_set(&state, &["d2-a"]);
-    set.update(|s| s.discovery_down());
+    set.update(DecisionSet::discovery_down);
     assert_eq!(set.snapshot(), None, "unreadable");
     let body = overview(&state).await;
     assert!(!needs_you_kinds(&body).contains(&"decisions"), "{body}");
@@ -127,7 +134,7 @@ async fn d2_an_unreadable_decision_source_is_degraded_never_zero() {
     let store = with_store(&state, 0);
     record(&store, "key:d2", "name-000", 1_000, Tally::default());
     let _clock = test_clock::before_epoch();
-    ready_set(&state, &["d2-a"]).update(|s| s.discovery_down());
+    ready_set(&state, &["d2-a"]).update(DecisionSet::discovery_down);
     let body = overview(&state).await;
     let mut names: Vec<&str> = body["degraded"]
         .as_array()

@@ -445,7 +445,12 @@ async fn d4_an_overview_request_runs_no_scan() {
         for other in [Source::Access, Source::ControlPlane, Source::Capability] {
             s.set_health(other, Health::Absent);
         }
-        s.set_discovery(vec![open], vec![], 1, chrono::Utc::now());
+        s.set_discovery(
+            vec![open],
+            vec![],
+            1,
+            chrono::DateTime::from_timestamp(1_781_524_800, 0).expect("a valid instant"),
+        );
     });
     state.meta_mcp.set_decisions(set);
     let (status, _) = admin_get(&state, "/ui/api/discovery").await;

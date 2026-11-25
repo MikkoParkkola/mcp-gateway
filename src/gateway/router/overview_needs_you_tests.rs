@@ -3,8 +3,8 @@
 //! `GET /ui/api/overview`'s needs-you list: the invalid-config row, the
 //! startup-denied and refused rows, the sign-in rows, the budget rows behind
 //! them, what folds, and the full body's size with every list at its cap.
-//! The decisions row is in overview_decisions_tests.rs; the counter rows are
-//! in overview_sources_tests.rs, which shares its store helpers here.
+//! The decisions row is in `overview_decisions_tests.rs`; the counter rows
+//! are in `overview_sources_tests.rs`, which shares its store helpers here.
 
 use std::sync::Arc;
 use std::time::Duration;
