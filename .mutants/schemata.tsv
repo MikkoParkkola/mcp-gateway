@@ -1,0 +1,29 @@
+head_sha	289e76606e831974fef2aa6d5442982b147c9db0
+#mutant K15
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::each_raw_exit_shape_is_one_hit	src/cli/raw_exit_scan_tests.rs:374
+#mutant K16
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::permitted_shapes_are_not_hits	src/cli/raw_exit_scan_tests.rs:407
+#mutant K17
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::allowed_places_are_exact	src/cli/raw_exit_scan_tests.rs:420
+#mutant K18
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::no_raw_failing_exit_in_command_code	src/cli/raw_exit_scan_tests.rs:536
+#mutant K19
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::a_stale_allow_entry_fails	src/cli/raw_exit_scan_tests.rs:477
+#mutant K20
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::each_raw_exit_shape_is_one_hit	src/cli/raw_exit_scan_tests.rs:374
+#mutant K21
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::permitted_shapes_are_not_hits	src/cli/raw_exit_scan_tests.rs:407
+#mutant K22
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::an_unparseable_file_fails_the_scan	src/cli/raw_exit_scan_tests.rs:464
+#mutant K30
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::allowed_places_are_exact	src/cli/raw_exit_scan_tests.rs:445
+#mutant K37
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::each_raw_exit_shape_is_one_hit	src/cli/raw_exit_scan_tests.rs:374
+#mutant K38
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::each_raw_exit_shape_is_one_hit	src/cli/raw_exit_scan_tests.rs:374
+#mutant K39
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::each_raw_exit_shape_is_one_hit	src/cli/raw_exit_scan_tests.rs:374
+#mutant K40
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::the_scanned_set_is_exact	src/cli/raw_exit_scan_tests.rs:518
+#mutant K41
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::the_scanned_set_is_exact	src/cli/raw_exit_scan_tests.rs:520
