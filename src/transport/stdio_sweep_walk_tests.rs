@@ -208,6 +208,11 @@ fn a_walk_prunes_only_what_it_names_gone() {
     let mut sweep = Sweep::new(id(100), config());
     sweep.snapshot(&mut walk);
     walk.hide_seed = Some(101);
+    // Reparented away, so only its own seed reading could list it (the
+    // parent's walk no longer does).
+    if let Some(member) = walk.procs.iter_mut().find(|p| p.id.pid == 101) {
+        member.ppid = 1;
+    }
     walk.procs.retain(|p| p.id.pid != 103);
     walk.procs.push(Proc {
         id: Identity {
