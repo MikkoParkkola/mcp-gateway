@@ -18,6 +18,21 @@ use super::replace::{AuditPosture, GatewayAuth};
 /// Why the older write paths refuse on an audited gateway.
 const AUDITED_ONLY: &str = "an audited gateway writes its config only through the audited writer";
 
+/// A write while a restart is being prepared: nothing was written. The
+/// reload's own text would promise a replay, which a write never gets.
+const RESTART_BUSY_WRITE: &str = "a restart is being prepared; retry";
+
+/// The restart gate's refusal of a write, as the write's error.
+fn gate_refused(refusal: crate::gateway::restart_config_floor::Refusal) -> ConfigWriteError {
+    use crate::gateway::restart_config_floor::Refusal;
+    let text = match refusal {
+        Refusal::Busy | Refusal::ReplayOwed => RESTART_BUSY_WRITE,
+        Refusal::Restarting => super::reload_context::RELOAD_RESTARTING,
+        Refusal::Stopping => super::reload_context::RELOAD_STOPPING,
+    };
+    ConfigWriteError::Failed(text.to_owned())
+}
+
 impl ReloadContext {
     /// The older write paths append no intent, and their config lock
     /// recovers a crashed write unaudited, so a gateway whose posture
@@ -83,6 +98,10 @@ impl ReloadContext {
         // One deadline for both locks: the in-process reload lock, then the
         // cross-process config lock, both held through the reload.
         self.refuse_when_audited()?;
+        // The restart gate first, before any lock, held through the reload.
+        let _admitted = (self.registry.config_gate())
+            .admit(crate::gateway::restart_config_floor::AdmitKind::Write)
+            .map_err(gate_refused)?;
         let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
         // Written and reloaded through the target the lock resolved: one file,
@@ -176,6 +195,10 @@ impl ReloadContext {
         F: FnOnce(&mut Config) -> std::result::Result<T, E>,
     {
         self.refuse_when_audited()?;
+        // The restart gate first, before any lock, held through the reload.
+        let _admitted = (self.registry.config_gate())
+            .admit(crate::gateway::restart_config_floor::AdmitKind::Write)
+            .map_err(gate_refused)?;
         let deadline = Instant::now() + wait;
         let _reload_guard = self.lock_reload_within(wait).await?;
         // The config lock is held from the load through the reload, so another
