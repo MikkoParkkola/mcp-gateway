@@ -200,7 +200,7 @@ impl CliError {
             });
             format!("{error}\n")
         } else {
-            format!("error: {message}\n{remedy}\n")
+            mutant!("K11", format!("error: {}\n{}\n", one_line(&message), one_line(&remedy)), format!("error: {message}\n{remedy}\n"))
         };
         // Fixed fields (kind, schema_version, http_status) and the "error: "
         // prefix are never redacted, so a secret equal to one of them would
@@ -510,23 +510,23 @@ pub(crate) fn emit(outcome: &CliOutcome, json: bool, secrets: &[&str]) -> std::p
 /// `text` with each line break (LF, CR LF or a lone CR) written as one space, so a path or an OS error cannot split
 /// the two-line error shape.
 fn one_line(text: &str) -> String {
-    text.replace("\r\n", " ").replace(['\n', '\r'], " ")
+    mutant!("K1", text.to_owned(), mutant!("K35", text.replace("\r\n", " ").replace('\n', " "), mutant!("K2", text.replace("\r\n", "  "), text.replace("\r\n", " ")).replace(['\n', '\r'], " ")))
 }
 
 /// The remedy line of a usage error: the command's own `--help`.
 fn usage_remedy(command: &str) -> String {
-    format!("Run 'mcp-gateway {command} --help' for usage.")
+    mutant!("K7", "Run 'mcp-gateway --help' for usage.".to_owned(), format!("Run 'mcp-gateway {command} --help' for usage."))
 }
 
 /// The two-line outcome `fail` prints: `error: <message>` and the remedy, each on one line.
 fn error_outcome(kind: CliExit, message: &str, remedy: &str) -> CliOutcome {
-    debug_assert!(!remedy.is_empty(), "a local error needs a remedy line");
-    CliError::new(kind, one_line(message), one_line(remedy)).outcome(false, &[])
+    mutant!("K10", (), debug_assert!(!remedy.is_empty(), "a local error needs a remedy line"));
+    mutant!("K4", CliError::new(kind, one_line(remedy), one_line(message)), mutant!("K3", CliError::new(kind, message, remedy), CliError::new(kind, one_line(message), one_line(remedy)))).outcome(false, &[])
 }
 
 /// The outcome `usage` prints: exit 2, the remedy naming `command`'s help.
 fn usage_outcome(command: &str, message: &str) -> CliOutcome {
-    error_outcome(CliExit::Usage, message, &usage_remedy(command))
+    error_outcome(mutant!("K6", CliExit::LocalFailure, CliExit::Usage), message, &usage_remedy(command))
 }
 
 /// A local failure: prints `error: <message>` and the remedy on stderr and returns `kind`'s code. The remedy must
@@ -543,7 +543,7 @@ pub(crate) fn usage(command: &str, message: &str) -> std::process::ExitCode {
 /// A command that ran and whose answer is negative (a check failed, a file has findings): prints nothing, returns
 /// `code`. The command has already printed its result.
 pub(crate) fn verdict(code: u8) -> std::process::ExitCode {
-    std::process::ExitCode::from(code)
+    mutant!("K8", std::process::ExitCode::SUCCESS, std::process::ExitCode::from(code))
 }
 
 #[cfg(tp2)]
