@@ -446,7 +446,12 @@ pub(super) async fn run_tick(ctx: &ReloadContext, state: &mut TickState, wake: W
     state.last_event = None;
     env_poll::log_trigger(&trigger);
     state.env_reloads.count_attempt(&trigger);
-    let result = ctx.reload_outcome().await;
+    // The inner transaction: this tick already holds its Watcher admission,
+    // and the public entry would ask the gate again and be refused once a
+    // pause lands after the admission.
+    let result = ctx
+        .reload_outcome_from(crate::config_reload::history::Source::File)
+        .await;
     #[cfg(test)]
     if result.is_ok() {
         let source = if replay || wake == Wake::Resume {
