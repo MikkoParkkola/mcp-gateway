@@ -105,6 +105,11 @@ pub(super) async fn overview(
     source.add_totals(&mut kpi);
     body.insert("kpi".into(), kpi.into());
     body.insert("servers".into(), servers);
+    if mutant!("M16", true, false) {
+        if let Some(cache) = state.meta_mcp.discovery_cache() {
+            let _ = cache.listing().await;
+        }
+    }
     body.insert(
         "needs_you".into(),
         needs_you((&state, &generation), (&denied, sign_ins), &mut degraded),
@@ -453,10 +458,14 @@ fn needs_you(
     rows.splice(0..0, invalid);
     rows.extend(sign_ins);
     rows.extend(limit_rows(state, generation));
+    let cap = mutant!("M19", NEEDS_YOU_ROWS + 1, NEEDS_YOU_ROWS);
     let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS));
     let mut more = json!({ "count": folded.len() });
     let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
-    for row in &folded {
+    for row in folded
+        .iter()
+        .filter(|r| mutant!("M20", r["kind"] == "sign_in", true))
+    {
         *by_kind
             .entry(row["kind"].as_str().unwrap_or(""))
             .or_default() += 1;
@@ -471,12 +480,32 @@ fn needs_you(
 /// no set or nothing open. An unreadable source gives no row, never a zero,
 /// and its name goes into `degraded`.
 fn decisions_row(state: &AppState, degraded: &mut Vec<&'static str>) -> Option<Value> {
-    let Some((count, revision)) = state.meta_mcp.decisions()?.snapshot() else {
-        degraded.push("needs_you.decisions");
+    let Some(set) = state.meta_mcp.decisions() else {
+        if mutant!("M15", true, false) {
+            degraded.push("needs_you.decisions");
+        }
         return None;
     };
-    let detail = json!({ "count": count, "revision": revision });
-    (count > 0).then(|| json!({ "kind": "decisions", "subject": "decisions", "detail": detail }))
+    let snapshot = mutant!(
+        "M17",
+        {
+            static FIRST: std::sync::OnceLock<Option<(usize, u64)>> = std::sync::OnceLock::new();
+            *FIRST.get_or_init(|| set.snapshot())
+        },
+        set.snapshot()
+    );
+    let Some((count, revision)) = snapshot else {
+        if mutant!("M14", false, true) {
+            degraded.push(mutant!("M23", "needs_you.decision", "needs_you.decisions"));
+        }
+        return mutant!(
+            "M13",
+            Some(json!({ "kind": "decisions", "subject": "decisions", "detail": { "count": 0 } })),
+            None
+        );
+    };
+    let detail = json!({ "count": count, "revision": mutant!("M18", count as u64, revision) });
+    (mutant!("M12", true, count > 0)).then(|| json!({ "kind": "decisions", "subject": mutant!("M21", "decision", "decisions"), "detail": detail }))
 }
 
 /// The newest active invalid-config reload refusal as its own row (never
