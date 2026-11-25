@@ -265,6 +265,9 @@ pub(super) static ROWS: &[Row] = &[
         &[(Page::Gateway, Tab::Status)],
         true,
     ),
+    // The gateway's own health history, admin only as the read above is. No
+    // tab yet: the Status page maps it when it starts calling the route.
+    row(routes::UI_GATEWAY_HEALTH, Get, Admin(Forbidden), &[], false),
     // Lists every configured key: an admin read, as the config view is.
     row(
         routes::UI_KEYS,
