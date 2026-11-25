@@ -35,7 +35,6 @@ pub(super) fn usable_log(
     cwd: &Path,
     probe: &dyn Fn(&Path, Access) -> std::io::Result<()>,
 ) -> Result<(), Unusable> {
-    return Ok(()); // Red-plan stub: the next commit removes this line.
     // An unset `enabled` follows auth, which this save turns on.
     let log = &next.security.transparency_log;
     if !log.is_enabled(true) || log.path.trim().is_empty() {
