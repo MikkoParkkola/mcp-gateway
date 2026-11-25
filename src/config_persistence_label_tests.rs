@@ -505,6 +505,12 @@ fn l10_an_unreadable_target_without_labels_saves() {
         let row = format!("L10/store={armed_store}");
         let (dir, target) = fixture();
         std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        // The row proves nothing where permissions do not bind (root, or a
+        // process holding CAP_DAC_OVERRIDE): say so instead of passing.
+        assert!(
+            std::fs::read(&target).is_err_and(|e| e.kind() == std::io::ErrorKind::PermissionDenied),
+            "{row}: needs an unprivileged runner: the mode-0000 target was readable here"
+        );
         let armed = armed_store.then(|| arm(dir.path(), &FakeLabels::default()));
         write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace)
             .unwrap_or_else(|e| panic!("{row}: saved: {e}"));
