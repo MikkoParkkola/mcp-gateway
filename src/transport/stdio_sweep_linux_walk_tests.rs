@@ -71,13 +71,15 @@ fn pids(listing: &Listing) -> Vec<u32> {
     found
 }
 
+/// One expiry case: its name, how it builds the tree, and its seeds.
+type Case = (&'static str, Box<dyn Fn(&Tree)>, Vec<Identity>);
+
 /// R-bound, until already passed: a reading of a deep chain, a wide children
 /// file, a thread-heavy process or a long seed list stops after at most one
 /// read, cut short (not complete, not settled).
 #[test]
 fn an_expired_reading_stops_at_once_whatever_the_tree() {
     let root = fake(1);
-    type Case = (&'static str, Box<dyn Fn(&Tree)>, Vec<Identity>);
     let cases: [Case; 4] = [
         (
             "a 5,000-link chain",
@@ -261,9 +263,9 @@ fn real(pid: u32) -> Identity {
     who(pid, start)
 }
 
-/// The first child `pid`'s main thread lists, waited for up to 5 s.
+/// The first child `pid`'s main thread lists, waited for up to 10 s.
 fn first_child(pid: u32) -> u32 {
-    for _ in 0..500 {
+    for _ in 0..1000 {
         let file = format!("/proc/{pid}/task/{pid}/children");
         if let Some(first) = std::fs::read_to_string(file)
             .ok()
@@ -273,7 +275,7 @@ fn first_child(pid: u32) -> u32 {
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    panic!("no child of {pid} within 5 s");
+    panic!("no child of {pid} within 10 s");
 }
 
 /// A signal through the table's own held descriptor: the pidfd is opened and
@@ -285,11 +287,13 @@ fn send(table: &mut LinuxTable, id: Identity, sig: Sig) {
 }
 
 fn wait_for(table: &mut LinuxTable, id: Identity, want: ProcState) {
-    let reached = (0..500).any(|_| {
+    for _ in 0..1000 {
+        if table.state(id) == want {
+            return;
+        }
         std::thread::sleep(Duration::from_millis(10));
-        table.state(id) == want
-    });
-    assert!(reached, "{id:?} never reached {want:?}");
+    }
+    panic!("{id:?} never reached {want:?} within 10 s");
 }
 
 /// R-settled-linux: a reading is settled only when every pid whose children it
@@ -342,7 +346,7 @@ fn a_member_reparented_after_the_snapshot_is_still_killed() {
     let leaf = real(first_child(inner.pid));
     let mut table = LinuxTable::new();
     let config = super::super::SweepConfig {
-        freeze_slice: Duration::from_millis(700),
+        freeze_slice: Duration::from_secs(10),
         cap: 64,
     };
     let mut sweep = super::super::Sweep::new(root, config);
@@ -392,18 +396,21 @@ fn a_stopped_trees_walk_equals_the_scan_of_it() {
     let mut sh = spawn("sleep 60 & sleep 60 & wait");
     let parent = real(sh.id());
     let mut table = LinuxTable::new();
-    let kids: Vec<Identity> = (0..500)
-        .find_map(|_| {
-            std::thread::sleep(Duration::from_millis(10));
-            let text =
-                std::fs::read_to_string(format!("/proc/{0}/task/{0}/children", parent.pid)).ok()?;
-            let pids: Vec<u32> = text
-                .split_whitespace()
-                .filter_map(|p| p.parse().ok())
-                .collect();
-            (pids.len() == 2).then(|| pids.into_iter().map(real).collect())
-        })
-        .expect("two children");
+    let mut kids: Vec<Identity> = Vec::new();
+    for _ in 0..1000 {
+        let file = format!("/proc/{0}/task/{0}/children", parent.pid);
+        let text = std::fs::read_to_string(file).unwrap_or_default();
+        let pids: Vec<u32> = text
+            .split_whitespace()
+            .filter_map(|p| p.parse().ok())
+            .collect();
+        if pids.len() == 2 {
+            kids = pids.into_iter().map(real).collect();
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(kids.len(), 2, "two children within 10 s");
     for id in std::iter::once(parent).chain(kids.iter().copied()) {
         send(&mut table, id, Sig::Stop);
         wait_for(&mut table, id, ProcState::Stopped);

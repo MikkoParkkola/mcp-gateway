@@ -19,6 +19,7 @@ fn id(pid: u32) -> Identity {
 
 fn config() -> SweepConfig {
     SweepConfig {
+        // limit-under-test (injected-clock): the Walk table supplies every instant, a fixed read cost per read
         freeze_slice: Duration::from_millis(700),
         cap: 64,
     }
