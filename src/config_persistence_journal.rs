@@ -31,7 +31,16 @@ use crate::identity_grants::journal::resolved;
 
 const VERSION: u32 = 1;
 
-pub(super) const SETTLEMENT_PENDING: &str = "A config write is awaiting audit settlement. Run mcp-gateway audit settle --abandon <journal> --yes.";
+/// The refusal when a v2 journal still owes its audit record. Its remedy is the
+/// one this build ships: `serve` settles the journal at startup
+/// (`commands::load_for_serve` calls `startup_settle::prepare_start`, whose
+/// `open_locked` repairs it under the config lock, and `finish_start` then has
+/// `drain_locked` deliver its records to the serving audit log), or refuses
+/// with the startup gate's own reason. A command it names is written in
+/// backticks and must parse with the CLI's own parser
+/// (`config_persistence_journal_remedy_tests.rs`). The journal sits beside the
+/// config it belongs to, so only a start on that same file settles it.
+pub(super) const SETTLEMENT_PENDING: &str = "A config write is waiting for its audit record. Start or restart the gateway with `mcp-gateway serve` on this same config file, with the audit log that write was bound to configured and reachable: its startup settles the write or says why it cannot. Once it has started, run this again.";
 
 #[path = "config_persistence_journal_v2.rs"]
 pub(crate) mod v2;

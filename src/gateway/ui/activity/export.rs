@@ -14,8 +14,10 @@ use super::access::Access;
 use super::answer::{DELIVERY_WINDOW, Joined, SCOPE_LABEL};
 use super::csv::{Cell, CsvWriter, Truncated};
 use super::joiner::Joiner;
-use super::reader::{Cursor, Limits, Line, Look, Seen, Which, read_page_joined};
-use super::rows::{Check, Filter, Kind, NOT_A_CALL, kind_of, row};
+use super::reader::{
+    Cursor, Limits, Line, Look, Seen, Which, read_page_joined, restarted_mid_read,
+};
+use super::rows::{Check, Filter, Kind, kind_of, row};
 use crate::trust::provenance_public::{ACTIVITY_EXPORT_DOMAIN, ProvenancePublicSigner};
 
 /// The caps, whichever comes first.
@@ -98,25 +100,9 @@ pub(super) fn collect(
     let joiner = std::cell::RefCell::new(Joiner::new(check));
     let answers = std::cell::RefCell::new(Vec::<Joined>::new());
     let mut keep = |line: &Line, seen: Seen| {
-        let mut j = joiner.borrow_mut();
-        if j.observe(line, seen.above) {
-            return false;
-        }
-        let Some(kind) = kind_of(line) else {
+        let Some((kind, this)) = joiner.borrow_mut().admit(line, seen, access) else {
             return false;
         };
-        // Only a call has an answer to join; a refusal has none.
-        let this = if kind == Kind::Call {
-            j.join(line, seen)
-        } else {
-            NOT_A_CALL
-        };
-        if !access.admits(line, kind) {
-            return false;
-        }
-        if kind == Kind::Call {
-            j.count(&this);
-        }
         let hit = filter.matches(line, kind, &this);
         if hit {
             answers.borrow_mut().push(this);
@@ -166,14 +152,7 @@ pub(super) fn collect(
             c.answer_integrity_unattributed = j.unattributed();
             c.delivery_beyond_window = j.delivery_beyond_window;
         }
-        // A pass after the first that restarted (retention removed the
-        // segment the export was in) would append newer rows to older ones.
-        if cursor.is_some() && page.cursor_reset {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "the log rotated past this export while it ran",
-            ));
-        }
+        restarted_mid_read(cursor.as_ref(), &page)?;
         scanned += page.bytes_examined;
         c.unreadable += page.unreadable.len();
         for (line, answer) in page.lines.iter().zip(&pass_answers) {

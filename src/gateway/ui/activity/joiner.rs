@@ -15,12 +15,13 @@ use std::collections::{HashMap, VecDeque};
 
 use serde_json::{Map, Value, json};
 
+use super::access::Access;
 use super::answer::{
     DELIVERY_WINDOW, Delivery, Effect, Findings, Joined, MAX_EVICTED, MAX_JOINED, MAX_PENDING,
     Searched, Why,
 };
 use super::reader::{Line, Which};
-use super::rows::{Check, kind_of};
+use super::rows::{Check, Kind, NOT_A_CALL, kind_of};
 use crate::security::transparency_log::signature::SignatureState;
 
 pub(super) use super::reader::Seen;
@@ -414,5 +415,35 @@ impl Joiner<'_, '_> {
             Joined::NoRecord(Searched::Unfinished) => self.join_incomplete += 1,
             Joined::Found(_) | Joined::NoRecord(_) => {}
         }
+    }
+
+    /// One scanned line through every read's steps, in their order: fold it
+    /// into the join, keep only a listed kind, join a call, apply the caller's
+    /// access, count an admitted call. `Some` is a row `access` may read, with
+    /// its kind and its join; the list, the export and the counting scan all
+    /// take their lines from here, so none of them reads a line another drops.
+    pub(super) fn admit(
+        &mut self,
+        line: &Line,
+        seen: Seen,
+        access: &Access,
+    ) -> Option<(Kind, Joined)> {
+        if self.observe(line, seen.above) {
+            return None;
+        }
+        let kind = kind_of(line)?;
+        // Only a call has an answer to join; a refusal has none.
+        let this = if kind == Kind::Call {
+            self.join(line, seen)
+        } else {
+            NOT_A_CALL
+        };
+        if !access.admits(line, kind) {
+            return None;
+        }
+        if kind == Kind::Call {
+            self.count(&this);
+        }
+        Some((kind, this))
     }
 }
