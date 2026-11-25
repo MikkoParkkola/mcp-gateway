@@ -258,7 +258,7 @@ fn mounted(path: &str) -> bool {
 }
 
 /// Bodies from `src/gateway/ui/control_plane_mutation_tests.rs` (grant-1, pol-1).
-/// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends.rs:48, :67).
+/// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends/requests.rs:13, :45).
 const ADD_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/probe"}"#;
 const UPDATE_BACKEND: &str = r#"{"description":"probe"}"#;
 /// An unconfirmed preview: the admin gets a 202 and a token, and nothing starts.
@@ -434,7 +434,7 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 401, 403, 404],
     ),
-    // src/gateway/ui/backends.rs:184 (add_backend; no config path in the fixture)
+    // src/gateway/ui/backends.rs:132 (add_backend; no config path in the fixture)
     row(
         "/ui/api/backends",
         Method::POST,
