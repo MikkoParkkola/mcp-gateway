@@ -136,6 +136,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
     ),
     (
+        "src/config_persistence_atomic_unix.rs",
+        "the atomic writer's unix half: looks at the save target without reading it (O_PATH, or events-only on macOS) to pin it; a backup reads its source's bytes once, through the descriptor it models, into a closed scratch",
+    ),
+    (
         "src/config_persistence_atomic_windows.rs",
         "the atomic writer's Windows half: opens the save target with READ_CONTROL only, to read its access list; never reads its bytes",
     ),
