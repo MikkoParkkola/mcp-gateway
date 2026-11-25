@@ -105,6 +105,11 @@ pub(super) async fn overview(
     source.add_totals(&mut kpi);
     body.insert("kpi".into(), kpi.into());
     body.insert("servers".into(), servers);
+    if mutant!("M16", true, false) {
+        if let Some(cache) = state.meta_mcp.discovery_cache() {
+            let _ = cache.listing().await;
+        }
+    }
     body.insert(
         "needs_you".into(),
         needs_you((&state, &generation), (&denied, sign_ins), &mut degraded),
@@ -128,7 +133,9 @@ pub(super) async fn overview(
     );
     source.add_tool_tried(&mut checklist);
     body.insert("checklist".into(), checklist.into());
-    degraded.extend_from_slice(source.degraded());
+    if mutant!("M31", !degraded.contains(&"needs_you.decisions"), true) {
+        degraded.extend_from_slice(source.degraded());
+    }
     if !degraded.is_empty() {
         body.insert("degraded".into(), json!(degraded));
     }
@@ -170,7 +177,26 @@ fn kpi_and_servers(
         .collect();
     let sign_ins = backends
         .iter()
-        .filter(|b| b.needs_sign_in())
+        .filter(|b| {
+            use crate::oauth::client::sign_in::SignIn;
+            mutant!(
+                "M7",
+                matches!(b.sign_in(), SignIn::WaitingElsewhere),
+                mutant!(
+                    "M25",
+                    !b.needs_sign_in(),
+                    mutant!(
+                        "M26b",
+                        b.startup_denial().is_none() && b.needs_sign_in(),
+                        mutant!(
+                            "M32",
+                            matches!(b.sign_in(), SignIn::WaitingElsewhere) || b.has_oauth(),
+                            b.needs_sign_in()
+                        )
+                    )
+                )
+            )
+        })
         .map(|b| sign_in_row(&b.name))
         .collect();
     let mut kpi = Map::new();
@@ -193,8 +219,20 @@ fn kpi_and_servers(
 /// A server a person must sign in to. The name is clipped, and `clipped`
 /// says so when the cut removed anything.
 fn sign_in_row(name: &str) -> Value {
-    let subject = clip(name);
-    let detail = if subject.len() < name.len() {
+    let subject = mutant!("M24", name.to_owned(), clip(name));
+    let detail = if mutant!(
+        "M8",
+        false,
+        mutant!(
+            "M9",
+            subject.len() <= name.len(),
+            mutant!(
+                "M28",
+                name.chars().count() > TEXT_BYTES,
+                subject.len() < name.len()
+            )
+        )
+    ) {
         json!({ "clipped": true })
     } else {
         json!({})
@@ -448,35 +486,82 @@ fn needs_you(
     let denied = startup
         .iter()
         .map(|refusal| refused_row(refusal, &refusal_detail(refusal)));
+    let sign_ins: Vec<Value> = mutant!("M1", Vec::new(), sign_ins);
+    let sign_ins: Vec<Value> = mutant!("M29", sign_ins.into_iter().rev().collect(), sign_ins);
+    let (early, sign_ins) = mutant!("M2", (sign_ins, Vec::new()), (Vec::new(), sign_ins));
+    rows.splice(0..0, early);
     rows.splice(0..0, denied);
-    rows.splice(0..0, decisions_row(state, degraded));
-    rows.splice(0..0, invalid);
-    rows.extend(sign_ins);
-    rows.extend(limit_rows(state, generation));
-    let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS));
+    let decisions = decisions_row(state, degraded);
+    let (first, second) = mutant!("M26", (decisions, invalid), (invalid, decisions));
+    mutant!("M11", rows.extend(second), {
+        rows.splice(0..0, second);
+    });
+    rows.splice(0..0, first);
+    let limits = limit_rows(state, generation);
+    let (mid, last) = mutant!("M3", (limits, sign_ins), (sign_ins, limits));
+    rows.extend(mid);
+    rows.extend(last);
+    let cap = mutant!("M19", NEEDS_YOU_ROWS + 1, NEEDS_YOU_ROWS);
+    let folded = rows.split_off(rows.len().min(cap));
     let mut more = json!({ "count": folded.len() });
     let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
-    for row in &folded {
+    for row in mutant!("M6", &rows, &folded)
+        .iter()
+        .filter(|r| mutant!("M20", r["kind"] == "sign_in", true))
+    {
         *by_kind
-            .entry(row["kind"].as_str().unwrap_or(""))
+            .entry(mutant!("M27", row["subject"].as_str(), row["kind"].as_str()).unwrap_or(""))
             .or_default() += 1;
     }
-    if !by_kind.is_empty() {
+    if mutant!("M4", false, mutant!("M5", true, !by_kind.is_empty())) {
         more["by_kind"] = json!(by_kind);
     }
-    json!({ "rows": rows, "more": more })
+    mutant!(
+        "M10",
+        json!({ "sign_ins": rows.iter().filter(|r| r["kind"] == "sign_in").count(), "rows": rows, "more": more }),
+        json!({ "rows": rows, "more": more })
+    )
 }
 
 /// The open-decisions row, from the decision set's held snapshot: none with
 /// no set or nothing open. An unreadable source gives no row, never a zero,
 /// and its name goes into `degraded`.
 fn decisions_row(state: &AppState, degraded: &mut Vec<&'static str>) -> Option<Value> {
-    let Some((count, revision)) = state.meta_mcp.decisions()?.snapshot() else {
-        degraded.push("needs_you.decisions");
+    let Some(set) = state.meta_mcp.decisions() else {
+        if mutant!("M15", true, false) {
+            degraded.push("needs_you.decisions");
+        }
         return None;
     };
-    let detail = json!({ "count": count, "revision": revision });
-    (count > 0).then(|| json!({ "kind": "decisions", "subject": "decisions", "detail": detail }))
+    let snapshot = mutant!(
+        "M17",
+        {
+            static FIRST: std::sync::OnceLock<Option<(usize, u64)>> = std::sync::OnceLock::new();
+            *FIRST.get_or_init(|| set.snapshot())
+        },
+        mutant!(
+            "M30",
+            set.snapshot().map(|(_, r)| {
+                let adopt = |v: crate::decisions::View| {
+                    v.decisions.iter().filter(|d| d["kind"] == "adopt").count()
+                };
+                (set.view().map_or(0, adopt), r)
+            }),
+            set.snapshot()
+        )
+    );
+    let Some((count, revision)) = snapshot else {
+        if mutant!("M14", false, true) {
+            degraded.push(mutant!("M23", "needs_you.decision", "needs_you.decisions"));
+        }
+        return mutant!(
+            "M13",
+            Some(json!({ "kind": "decisions", "subject": "decisions", "detail": { "count": 0 } })),
+            None
+        );
+    };
+    let detail = json!({ "count": count, "revision": mutant!("M18", count as u64, revision) });
+    (mutant!("M12", true, count > 0)).then(|| json!({ "kind": "decisions", "subject": mutant!("M21", "decision", "decisions"), "detail": detail }))
 }
 
 /// The newest active invalid-config reload refusal as its own row (never
