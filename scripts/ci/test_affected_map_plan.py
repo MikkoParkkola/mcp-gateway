@@ -325,6 +325,9 @@ def _edited(name: str, old: str, new: str):
 def _plan_mutants() -> list[tuple[str, str, dict]]:
     return [
         ("rank by label", "Plan", {"plan": _edited("plan", "key=lambda k: (-seconds[k], k)", "key=lambda k: k")}),
+        ("a missing map splits something", "Plan", {"plan": _edited(
+            "plan", "    if not isinstance(units, dict):\n        return []", "    if not isinstance(units, dict):\n"
+            "        return [\"x::x\"]")}),
         ("rank by test count", "Plan", {"plan": _edited(
             "plan", "seconds[prefix] = seconds.get(prefix, 0.0) + float(u.get(\"seconds\", 0.0))",
             "seconds[prefix] = seconds.get(prefix, 0.0) + len(u.get(\"tests\", []))")}),

@@ -54,5 +54,39 @@ class Depth(unittest.TestCase):
         self.assertEqual(chosen_names(self.UNITS, ["src/b.rs"], listing), ["k::m::a::brand_new", "k::m::b::t2"])
 
 
+def _mutants() -> list[tuple[str, str, dict]]:
+    """Breaks that would make the selector depend on a unit label's shape (test plan sidecar 1)."""
+    real = sel.select_units
+
+    def by_depth_two_prefix(units, h, build):
+        picked = real(units, h, build)
+        heads = {"::".join(label.split("::")[:2]) for label in picked}
+        return picked | {label for label in units if "::".join(label.split("::")[:2]) in heads}
+
+    def by_string_prefix(units, h, build):
+        # The depth-2 head compared as raw text, with no segment boundary: commands::doctor takes doctor_extra too.
+        picked = real(units, h, build)
+        heads = {"::".join(label.split("::")[:2]) for label in picked}
+        return picked | {label for label in units if any(label.startswith(p) for p in heads)}
+
+    def unknown_tests_dropped(leg, units, chosen, listing):
+        mode, names = real_record(leg, units, chosen, listing)
+        known = {t for u in units.values() for t in u["tests"]}
+        kept = [n for n in names if n in known]
+        return ("reduced" if kept else "none"), kept
+    real_record = sel.leg_record
+    return [
+        ("labels matched by their depth-2 prefix", "Depth", {"select_units": by_depth_two_prefix}),
+        ("labels matched by string prefix", "Depth", {"select_units": by_string_prefix}),
+        ("the unknown-test fail-safe dropped", "Depth", {"leg_record": unknown_tests_dropped}),
+    ]
+
+
+class Mutants(unittest.TestCase):
+    def test_each_mutant_turns_a_guard_red(self) -> None:
+        from mutant_rows import check_mutants
+        check_mutants(self, sel, _mutants(), globals())
+
+
 if __name__ == "__main__":
     unittest.main()
