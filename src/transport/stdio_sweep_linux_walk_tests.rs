@@ -240,3 +240,195 @@ fn a_dropped_seed_is_stated_only_and_never_walked() {
         "the missing dropped seed is not gone"
     );
 }
+
+// Real processes from here on: Linux only, run on Spark.
+
+fn spawn(script: &str) -> std::process::Child {
+    std::process::Command::new("sh")
+        .args(["-c", script])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .expect("sh starts")
+}
+
+fn real(pid: u32) -> Identity {
+    let start = LinuxTable::identity_of(pid)
+        .expect("a live process has a stat")
+        .start;
+    who(pid, start)
+}
+
+/// The first child `pid`'s main thread lists, waited for up to 5 s.
+fn first_child(pid: u32) -> u32 {
+    for _ in 0..500 {
+        let file = format!("/proc/{pid}/task/{pid}/children");
+        if let Some(first) = std::fs::read_to_string(file)
+            .ok()
+            .and_then(|text| text.split_whitespace().next().map(str::to_owned))
+        {
+            return first.parse().expect("a pid");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("no child of {pid} within 5 s");
+}
+
+fn send(pid: u32, sig: Signal) {
+    let pid = Pid::from_raw(i32::try_from(pid).expect("a pid fits")).expect("non-zero");
+    kill_process(pid, sig).expect("the signal is sent");
+}
+
+fn wait_for(table: &mut LinuxTable, id: Identity, want: ProcState) {
+    let reached = (0..500).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        table.state(id) == want
+    });
+    assert!(reached, "{id:?} never reached {want:?}");
+}
+
+/// R-settled-linux: a reading is settled only when every pid whose children it
+/// read was stopped: both running, then only the parent stopped, are not.
+#[test]
+fn a_reading_is_settled_only_when_every_walked_parent_is_stopped() {
+    let mut sh = spawn("sleep 60 & wait");
+    let parent = real(sh.id());
+    let child = real(first_child(parent.pid));
+    let mut table = LinuxTable::new();
+    let read = |table: &mut LinuxTable| table.read(&[parent], &[], Duration::MAX);
+    assert!(
+        !read(&mut table).settled,
+        "running parent and child read as settled"
+    );
+    send(parent.pid, Signal::STOP);
+    wait_for(&mut table, parent, ProcState::Stopped);
+    assert!(!read(&mut table).settled, "a running child read as settled");
+    send(child.pid, Signal::STOP);
+    wait_for(&mut table, child, ProcState::Stopped);
+    let listing = read(&mut table);
+    assert!(listing.settled, "a fully stopped tree read as not settled");
+    assert!(
+        listing.rows.iter().any(|(id, _)| *id == child),
+        "the child is missing"
+    );
+    send(child.pid, Signal::KILL);
+    send(parent.pid, Signal::KILL);
+    let _ = sh.wait();
+}
+
+/// R-gone, real: a seed killed and reaped is in `gone`.
+#[test]
+fn a_reaped_seed_is_gone() {
+    let mut sleeper = spawn("exec sleep 60");
+    let id = real(sleeper.id());
+    sleeper.kill().expect("kill");
+    sleeper.wait().expect("reap");
+    let listing = LinuxTable::new().read(&[id], &[], Duration::MAX);
+    assert_eq!(listing.gone, vec![id]);
+}
+
+/// R-seed, real: a member seen in the snapshot whose parent then dies is
+/// reparented away from the tree, and is still killed by the sweep.
+#[test]
+fn a_member_reparented_after_the_snapshot_is_still_killed() {
+    let mut outer = spawn("sh -c 'sleep 60 & wait' & wait");
+    let root = real(outer.id());
+    let inner = real(first_child(root.pid));
+    let leaf = real(first_child(inner.pid));
+    let mut table = LinuxTable::new();
+    let config = super::super::SweepConfig {
+        freeze_slice: Duration::from_millis(700),
+        cap: 64,
+    };
+    let mut sweep = super::super::Sweep::new(root, config);
+    sweep.snapshot(&mut table);
+    send(inner.pid, Signal::KILL);
+    let report = sweep.run(&mut table, &super::super::PidfdBudget::new(64));
+    assert!(
+        report.killed.contains(&leaf),
+        "the reparented member was not killed"
+    );
+    wait_for(&mut table, leaf, ProcState::Gone);
+    let _ = outer.wait();
+}
+
+/// R-thread, real: a child forked by a thread other than the main one is found.
+#[test]
+fn a_child_forked_by_a_second_thread_is_found() {
+    let script = "import subprocess, threading, time\n\
+                  threading.Thread(target=lambda: [subprocess.Popen(['sleep', '60']), time.sleep(60)], daemon=True).start()\n\
+                  time.sleep(60)";
+    let mut py = std::process::Command::new("python3")
+        .args(["-c", script])
+        .stdin(std::process::Stdio::null())
+        .spawn()
+        .expect("python starts");
+    let parent = real(py.id());
+    let mut table = LinuxTable::new();
+    let found = (0..500).find_map(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        let listing = table.read(&[parent], &[], Duration::MAX);
+        listing
+            .rows
+            .iter()
+            .find(|(id, ppid)| *ppid == parent.pid && id.pid != parent.pid)
+            .map(|(id, _)| *id)
+    });
+    let child = found.expect("the thread's child was never listed");
+    send(child.pid, Signal::KILL);
+    py.kill().expect("kill");
+    let _ = py.wait();
+}
+
+/// R-walk-eq-scan: with the tree stopped, the walk's rows equal the full
+/// scan's rows restricted to the tree.
+#[test]
+fn a_stopped_trees_walk_equals_the_scan_of_it() {
+    let mut sh = spawn("sleep 60 & sleep 60 & wait");
+    let parent = real(sh.id());
+    let mut table = LinuxTable::new();
+    let kids: Vec<Identity> = (0..500)
+        .find_map(|_| {
+            std::thread::sleep(Duration::from_millis(10));
+            let text =
+                std::fs::read_to_string(format!("/proc/{0}/task/{0}/children", parent.pid)).ok()?;
+            let pids: Vec<u32> = text
+                .split_whitespace()
+                .filter_map(|p| p.parse().ok())
+                .collect();
+            (pids.len() == 2).then(|| pids.into_iter().map(real).collect())
+        })
+        .expect("two children");
+    for id in std::iter::once(parent).chain(kids.iter().copied()) {
+        send(id.pid, Signal::STOP);
+        wait_for(&mut table, id, ProcState::Stopped);
+    }
+    let tree = |listing: Listing| {
+        let mut ids: Vec<Identity> = listing
+            .rows
+            .into_iter()
+            .filter(|(id, ppid)| *id == parent || *ppid == parent.pid)
+            .map(|(id, _)| id)
+            .collect();
+        ids.sort();
+        ids
+    };
+    let walked = tree(table.read(&[parent], &[], Duration::MAX));
+    let mut scan = LinuxTable::new();
+    scan.force_full_scan = true;
+    let scanned = tree(scan.read(&[parent], &[], Duration::MAX));
+    assert_eq!(
+        walked, scanned,
+        "the walk and the scan disagree on a stopped tree"
+    );
+    assert_eq!(
+        walked.len(),
+        3,
+        "the tree is the parent and its two children"
+    );
+    for id in std::iter::once(parent).chain(kids) {
+        send(id.pid, Signal::KILL);
+    }
+    let _ = sh.wait();
+}

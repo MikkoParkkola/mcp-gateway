@@ -132,6 +132,9 @@ pub(in crate::transport::stdio) struct LinuxTable {
     pub(super) reads: usize,
     #[cfg(test)]
     pub(super) expire_after_reads: Option<usize>,
+    /// Test only: read by the full scan even where children files exist.
+    #[cfg(test)]
+    pub(super) force_full_scan: bool,
 }
 
 impl LinuxTable {
@@ -144,6 +147,8 @@ impl LinuxTable {
             reads: 0,
             #[cfg(test)]
             expire_after_reads: None,
+            #[cfg(test)]
+            force_full_scan: false,
         }
     }
 
@@ -193,6 +198,9 @@ impl LinuxTable {
 
 impl ProcessTable for LinuxTable {
     fn read(&mut self, _walk: &[Identity], _stat_only: &[Identity], _until: Duration) -> Listing {
+        // Red-first stub: every reading is the full scan, forced or not.
+        #[cfg(test)]
+        let _ = self.force_full_scan;
         let Ok(dir) = std::fs::read_dir(&self.proc_root) else {
             return Listing {
                 rows: Vec::new(),
