@@ -59,9 +59,11 @@ HASHED, TABLE, FRAME_STYLE = _rehash_patterns()
 # The extensions rehash hashes, read from its own name pattern; a hash is stripped only before one of them.
 EXTS = re.search(r"\(\?P<ext>([^)]*)\)", HASHED.pattern)[1]
 HASH_IN_REF = re.compile(r"(/ui/assets/[^\s\"'`()<>]+?)\.[0-9a-f]{12}(\.(?:" + EXTS + r"))(?![\w.-])")
-# A reference as rehash defines one: a name (any characters but whitespace, quotes and brackets; rehash allows any
-# stem) ending in one of its extensions. Prose such as "served under /ui/assets/, by name" never ends in one.
-REF = re.compile(r"/ui/assets/([^\s\"'`()<>]+?\.(?:" + EXTS + r"))(?![\w.-])")
+# A reference is the WHOLE token after /ui/assets/ (any characters but whitespace, quotes and brackets; rehash
+# allows any stem), counted only when it ends in one of rehash's extensions. Taking the whole token first means
+# "a.js,b.js" is one name, not "a.js"; prose such as "served under /ui/assets/, by name" never ends in one.
+REF_TOKEN = re.compile(r"/ui/assets/([^\s\"'`()<>]+)")
+REF_NAME = re.compile(r".+\.(?:" + EXTS + r")")
 
 
 class Refused(Exception):
@@ -269,7 +271,8 @@ def check_tree(wt: Path, results: dict) -> None:
     served = {p.name for p in shell_files if HASHED.match(p.name)}
     rewritten = [wt / INDEX, wt / FRAME] + [p for p in shell_files if p.suffix[1:] in REWRITTEN_EXTS]
     missing = sorted({name for path in rewritten if path.exists()
-                      for name in REF.findall(path.read_text(encoding="utf-8")) if name not in served})
+                      for name in REF_TOKEN.findall(path.read_text(encoding="utf-8"))
+                      if REF_NAME.fullmatch(name) and name not in served})
     if missing:
         raise Refused("R7", "missing asset referenced", missing)
 

@@ -670,6 +670,19 @@ class Rows(unittest.TestCase):
             """)
         self.refuse("R7", "a,b.js", reason="missing asset", script=shim)
 
+    def test_t7g_a_reference_that_starts_with_an_existing_name(self):
+        # "a.js,b.js" and "a.js;b.js" are whole names: the a.js prefix exists, the names do not.
+        self.fx.setup(edit_a, edit_b)
+        shim = self.shim("""\
+            if not state['done'] and '<p>shell</p>' in text:
+                state['done'] = True
+                text = text.replace('<p>shell</p>', '<p>shell</p>\\n<script src="/ui/assets/a.js,b.js"></script>'
+                                    '\\n<script src="/ui/assets/a.js;b.js"></script>', 1)
+            """)
+        proc = self.refuse("R7", reason="missing asset", script=shim)
+        self.assertIn(",b.js", proc.stderr)
+        self.assertIn(";b.js", proc.stderr)
+
     def test_t8_the_same_new_asset_on_both_sides(self):
         def add(fx):
             fx.write(f"{SHELL}/new.js", "export const n = 1;\n")
