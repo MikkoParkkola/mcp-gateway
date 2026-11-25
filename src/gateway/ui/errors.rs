@@ -44,7 +44,7 @@ pub(crate) const DIGEST_REQUIRED: &str = "Importing from an address needs the di
 preview. Preview the address, then send that digest with the import.";
 
 /// The reason a UI write is told to retry while a restart is being prepared.
-pub(super) const RESTART_BUSY: &str = "a restart is being prepared; retry";
+pub(super) const RESTART_BUSY: &str = crate::config_reload::RESTART_BUSY;
 
 /// The one answer to a config-gate refusal of a UI write, for every write
 /// route: all are 409s, since nothing was tried; busy alone is retryable and
