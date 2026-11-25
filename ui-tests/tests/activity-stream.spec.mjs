@@ -576,3 +576,61 @@ test('A21 no kind tab is named Firewall: the Outcome filter is the route to bloc
     await expect(content.getByRole(role, { name: /^firewall/i }), `a ${role} named Firewall`).toHaveCount(0);
   }
 });
+
+// Outcome counts: one count per Outcome value, read from the counts route for
+// the list's own filters and window.
+const counted = (counts, stopped = 'end') => ({ json: { access: 'all', counts, complete: stopped === 'end', stopped } });
+const FIVE = { all: 12, ok: 3, failed: 2, blocked: 5, cleaned: 2 };
+const outcomeButtons = (page) => page.getByRole('group', { name: 'Outcome' }).getByRole('button');
+const rangeButton = (page, name) => page.getByRole('group', { name: 'Range' }).getByRole('button', { name, exact: true });
+
+test('A30 each Outcome value shows the server\'s count for the list\'s filters and window', async ({ page }) => {
+  let release;
+  const held = new Promise((done) => { release = done; });
+  let body = counted(FIVE);
+  const urls = await install(page, { answer: () => list(ROWS), counts: () => held.then(() => body) });
+  await open(page, urls, '/ui/activity/status?server=docs&key=ana&q=kb.&rule=R-1');
+  await expect.poll(() => urls.counts.length).toBe(1);
+  // The announcer's text once the list has spoken; the counts must not change it.
+  await page.clock.runFor(2000);
+  const said = await page.locator('#announcer').textContent();
+  release();
+  await expect(outcomeButtons(page)).toHaveText(['All 12', 'ok 3', 'failed 2', 'blocked 5', 'cleaned 2']);
+  await page.clock.runFor(2000);
+  expect(await page.locator('#announcer').textContent()).toBe(said);
+  const asked = new URL(urls.counts[0]).searchParams;
+  expect([...asked.keys()].sort()).toEqual(['caller', 'from', 'q', 'rule', 'server', 'to']);
+  expect(Object.fromEntries(asked)).toEqual({ server: 'docs', caller: 'ana', q: 'kb.', rule: 'R-1', from: FROM_24H, to: TO });
+  const first = filters(urls.find((u) => !filters(u).cursor));
+  expect([asked.get('from'), asked.get('to')]).toEqual([first.from, first.to]);
+  // A count is grouped as the page groups numbers.
+  body = counted({ ...FIVE, all: 12345 });
+  await rangeButton(page, 'Last 1 h').click();
+  await expect(outcomeButtons(page).first()).toHaveText('All 12,345');
+});
+
+const CLEANED = [
+  call('k-1', '2026-11-15T08:06:06Z', 'ana', 'kb.search', 'ok'),
+  call('k-2', '2026-11-15T08:07:07Z', 'ci', 'web.fetch', 'ok'),
+];
+
+test('A34 cleaned lists exactly the calls the list answers for outcome=cleaned', async ({ page }) => {
+  const urls = await install(page, {
+    answer: (url) => list(filters(url).outcome === 'cleaned' ? CLEANED : ROWS),
+  });
+  await open(page, urls, '/ui/activity/status');
+  const cleaned = page.getByRole('group', { name: 'Outcome' }).locator('button[data-value="cleaned"]');
+  await cleaned.click();
+  await expect.poll(() => filters(urls.at(-1)).outcome).toBe('cleaned');
+  await expect.poll(async () => (await shownRows(page)).map((r) => r.href)).toEqual(
+    CLEANED.map((r) => `/ui/activity/${r.id}/status`),
+  );
+  await expect.poll(() => new URL(page.url()).searchParams.get('outcome')).toBe('cleaned');
+  // A fresh load of that address keeps cleaned chosen and asks for it.
+  const before = urls.length;
+  await page.goto('/ui/activity/status?outcome=cleaned');
+  await shellReady(page);
+  await expect.poll(() => urls.length).toBeGreaterThan(before);
+  expect(filters(urls[before]).outcome).toBe('cleaned');
+  await expect(cleaned).toHaveAttribute('aria-pressed', 'true');
+});
