@@ -277,6 +277,9 @@ struct Save<'a> {
     /// A save's target as step 1 saw it; `None` for a backup, whose
     /// destination is replaced whatever is there.
     seen: Option<Seen>,
+    /// Linux: the labels and ACL rule this save keeps (WRITER.6).
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    keep: linux::Keep<'a>,
 }
 
 /// What the new copy was settled to; step 9 checks it is still that.
@@ -323,6 +326,11 @@ pub(super) fn write(
         mode,
         model: model.as_ref(),
         seen: Some(seen),
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        keep: linux::Keep {
+            from: linux::At::Path(target),
+            strip: model.is_some() || mode == FileMode::Private,
+        },
     };
     let filled = fill(&save, &mut file, bytes, observe, check);
     finish(&save, file, filled, bytes)
@@ -355,6 +363,11 @@ pub(super) fn copy(src: &Path, dst: &Path) -> io::Result<()> {
         mode: FileMode::Inherit,
         model: Some(&model),
         seen: None,
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        keep: linux::Keep {
+            from: linux::At::File(&source),
+            strip: false,
+        },
     };
     let filled = fill(&save, &mut file, &bytes, |_| {}, || Ok(()));
     finish(&save, file, filled, &bytes)
@@ -368,6 +381,8 @@ fn fill(
     observe: impl FnOnce(&File),
     check: impl FnOnce() -> io::Result<()>,
 ) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let wanted = linux::labels_first(save, file)?;
     #[cfg(test)]
     seams::first_write(save.target, file);
     #[cfg(test)]
@@ -383,7 +398,13 @@ fn fill(
     let settled = settle(save, file)?;
     #[cfg(test)]
     seams::before_verify(save.target, save.scratch);
-    verify(save, file, &settled)
+    verify(save, file, &settled)?;
+    // Linux: the labels and the stripped ACL are still as settled.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if !linux::still_kept(save.target, &wanted, file, save.keep.from, save.keep.strip) {
+        return Err(changed(save.target));
+    }
+    Ok(())
 }
 
 /// Rename a filled scratch into place, then close it; on any failure remove
@@ -678,6 +699,20 @@ pub(crate) mod seams {
 
     pub(crate) fn created(target: &Path) {
         with(target, |s| s.creates += 1);
+    }
+
+    /// The folder's label store, when a row armed one.
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) fn labels(target: &Path) -> Option<FakeLabels> {
+        with(target, |s| s.seams.labels.clone()).flatten()
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    pub(crate) fn after_labels_read(target: &Path, scratch: &Path) {
+        if let Some(mut hook) = with(target, |s| s.seams.after_labels_read.take()).flatten() {
+            hook(target, scratch);
+            with(target, |s| s.seams.after_labels_read = Some(hook));
+        }
     }
 
     pub(crate) fn event(target: &Path, step: &'static str) {

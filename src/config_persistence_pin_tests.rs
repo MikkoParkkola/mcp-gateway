@@ -230,7 +230,13 @@ fn p_order_pin_writes_into_a_closed_scratch() {
             (0, euid),
             "{row}: mode and owner at the first byte"
         );
-        assert_eq!(armed.events(), steps, "{row}: order");
+        // Linux settles the inherited ACL and the labels first (WRITER.6).
+        let first: &[&str] = if cfg!(any(target_os = "linux", target_os = "android")) {
+            &["strip", "labels-read", "labels-set"]
+        } else {
+            &[]
+        };
+        assert_eq!(armed.events(), [first, steps].concat(), "{row}: order");
     }
 }
 
