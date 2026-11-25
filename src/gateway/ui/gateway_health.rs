@@ -43,7 +43,7 @@ const WEEK: u64 = 7 * 86_400;
 /// The route: admit an admin, then answer from the history this gateway's
 /// meta-MCP handler holds (set by the server at start).
 pub(super) async fn gateway_health(State(state): State<Arc<AppState>>, guard: Guard) -> Response {
-    if let Err(refused) = guard.admit() {
+    if let Err(refused) = mutant!("m14", Ok(()), guard.admit()) {
         return refused.into_response();
     }
     respond(
