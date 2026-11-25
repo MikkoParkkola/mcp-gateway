@@ -647,10 +647,14 @@ def main() -> int:
     # no push, so even the action's save-always default never fires).
     line_save = "${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}"
     for label, job, edit in (("a release-line save", "macos-shards", lambda w: w.update({"save-if": line_save})),
-                             ("no save-if", "macos-int-lane", lambda w: w.pop("save-if", None))):
+                             ("no save-if", "macos-int-lane", lambda w: w.pop("save-if", None)),
+                             # linux-lib-union runs on main pushes only: its line-or-main uv save is live, a
+                             # line-only one is dead (the real ci.yml passing shows the live form is accepted).
+                             ("a release-line uv save", "linux-lib-union",
+                              lambda w: w.update({"save-cache": line_save}))):
         mutated = copy.deepcopy(jobs)
         for step in mutated[job]["steps"]:
-            if str(step.get("uses", "")).startswith("Swatinem/rust-cache@"):
+            if str(step.get("uses", "")).startswith(("Swatinem/rust-cache@", "astral-sh/setup-uv@")):
                 edit(step["with"])
         if not any(e.startswith(f"{job}:") for e in dead_save_errors(mutated)):
             errors.append(f"dead-save self-test: {label} on {job} was not caught")
