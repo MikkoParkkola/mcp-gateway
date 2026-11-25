@@ -273,6 +273,13 @@ pub(super) async fn settings_save(
             edit.fields.push((id, param, value));
         }
         let fields: Vec<_> = edit.fields.iter().map(|(id, ..)| id.spec().id).collect();
+        // WRITE.4: turning auth on needs a log the next start can write.
+        // Asked before the store opens, so a refused save opens nothing.
+        if !state.live_config.running().auth.enabled
+            && let Err(unusable) = next_start_log(&state, &ctx, &edit)
+        {
+            return audit_log_required(&unusable);
+        }
         let secrets = if edit
             .fields
             .iter()
@@ -335,6 +342,47 @@ fn attach_outcome(response: &mut Response, outcome: SaveOutcome, intent_id: Opti
     response
         .extensions_mut()
         .insert(super::admin_audit::AuditDetail(detail));
+}
+
+/// The 409 of a save that would turn auth on with no log the next start can
+/// write; nothing was written.
+pub(super) const AUDIT_LOG_REQUIRED: (&str, &str) = (
+    "AUDIT_LOG_REQUIRED",
+    "auth cannot be turned on until the next start has an audit log it can write",
+);
+
+/// When `edit` turns auth on: the log the published config (what a restart
+/// boots) names, judged by permissions alone.
+fn next_start_log(
+    state: &AppState,
+    ctx: &crate::config_reload::ReloadContext,
+    edit: &SaveEdit,
+) -> Result<(), super::settings_log_check::Unusable> {
+    let turns_on = edit.fields.iter().any(|(id, _, value)| {
+        id.spec().id == "auth.enabled" && matches!(value, SaveValue::Set(Scalar::Bool(true)))
+    });
+    if !turns_on {
+        return Ok(());
+    }
+    let held = state.transparency_log.as_ref().map(|log| log.path());
+    let cwd = std::env::current_dir().unwrap_or_default();
+    super::settings_log_check::usable_log(
+        &ctx.live_config.get(),
+        held.as_deref(),
+        crate::home_dir::home_dir().as_deref(),
+        &cwd,
+        &super::settings_log_check::access,
+    )
+}
+
+fn audit_log_required(unusable: &super::settings_log_check::Unusable) -> Response {
+    use super::settings_log_check::Unusable;
+    let fix = match unusable {
+        Unusable::Off => "enable security.transparency_log with a path".to_owned(),
+        Unusable::NotWritable(path) => format!("{} cannot be written", path.display()),
+    };
+    let message = format!("{}: {fix}", AUDIT_LOG_REQUIRED.1);
+    structured_error(StatusCode::CONFLICT, AUDIT_LOG_REQUIRED.0, message).into_response()
 }
 
 /// A saved answer's notice: its code and sentence. Both can stand on one
@@ -674,6 +722,10 @@ mod answer_tests;
 #[cfg(test)]
 #[path = "settings_cli_tests.rs"]
 mod cli_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "settings_log_check_tests.rs"]
+mod log_check_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "settings_floor_tests.rs"]
