@@ -319,7 +319,7 @@ fn c12_bounds_are_checked_before_a_slot_or_a_byte() {
 fn assert_stopped_after_one_pass(fx: &Fx, leg: &str) {
     let back = || fx.counts_permits() == COUNT_READS && fx.read_slots() == MAX_CONCURRENT_READS;
     let what = format!("{leg}: both permits back");
-    wait_until(&what, Duration::from_secs(2), back);
+    wait_until(&what, back);
     assert!(!fx.timed_out(), "{leg}: the hook never saw the drop");
     let passes = fx.passes();
     assert_eq!(passes.len(), 1, "{leg}: {passes:?}");
