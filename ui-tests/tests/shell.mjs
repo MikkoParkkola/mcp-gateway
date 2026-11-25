@@ -260,11 +260,6 @@ export function frame(event, data, id = null) {
   return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
 }
 
-/** A signed-in admin: the status read the shell makes first. */
-export async function signedInAdmin(page) {
-  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
-}
-
 /**
  * From before the shell loads, keep a count of the live window listeners for
  * each event type in `types`, read as window.__listeners(type).
