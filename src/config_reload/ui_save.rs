@@ -249,6 +249,8 @@ pub(crate) async fn ui_save(
                         // A settings save passes `Refuse`; the writer never holds it.
                         super::ReplaceReload::HeldForRestart { .. } => {
                             tracing::error!("a settings save came back held for a restart");
+                            // Written, nothing applied: never audited as a success.
+                            traced = Some((SaveOutcome::Indeterminate, outcome.intent_id.clone()));
                             return Err(UiRefused::ReloadRefused {
                                 class: super::RefusalClass::Internal,
                             });

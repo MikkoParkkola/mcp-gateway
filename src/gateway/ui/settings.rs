@@ -211,7 +211,7 @@ pub(crate) fn caller_is_cli_key(
 
 #[allow(
     clippy::too_many_lines,
-    reason = "every refusal must come before the store opens, and the outcome is attached on every exit: one scope keeps both"
+    reason = "the CLI-key and audit-log refusals must come before the store opens, and the outcome is attached on every exit, writer refusals included: one scope keeps both"
 )]
 pub(super) async fn settings_save(
     State(state): State<Arc<AppState>>,
