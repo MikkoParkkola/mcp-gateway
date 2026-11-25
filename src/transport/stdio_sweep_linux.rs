@@ -124,6 +124,14 @@ fn denied(err: rustix::io::Errno) -> SignalError {
 pub(in crate::transport::stdio) struct LinuxTable {
     fds: HashMap<Identity, OwnedFd>,
     origin: Instant,
+    /// Where the process table is read from: `/proc`, or a test's fake tree.
+    proc_root: std::path::PathBuf,
+    /// Test only: stat and children-file reads so far, and the read count at
+    /// which this table's clock jumps past every `until`.
+    #[cfg(test)]
+    pub(super) reads: usize,
+    #[cfg(test)]
+    pub(super) expire_after_reads: Option<usize>,
 }
 
 impl LinuxTable {
@@ -131,6 +139,20 @@ impl LinuxTable {
         Self {
             fds: HashMap::new(),
             origin: Instant::now(),
+            proc_root: std::path::PathBuf::from("/proc"),
+            #[cfg(test)]
+            reads: 0,
+            #[cfg(test)]
+            expire_after_reads: None,
+        }
+    }
+
+    /// Test only: a table over a fake process tree at `root`.
+    #[cfg(test)]
+    pub(super) fn with_root(root: &std::path::Path) -> Self {
+        Self {
+            proc_root: root.to_path_buf(),
+            ..Self::new()
         }
     }
 
@@ -171,7 +193,7 @@ impl LinuxTable {
 
 impl ProcessTable for LinuxTable {
     fn read(&mut self, _seeds: &[Identity], _until: Duration) -> Listing {
-        let Ok(dir) = std::fs::read_dir("/proc") else {
+        let Ok(dir) = std::fs::read_dir(&self.proc_root) else {
             return Listing {
                 rows: Vec::new(),
                 complete: false,
@@ -248,6 +270,13 @@ impl ProcessTable for LinuxTable {
     }
 
     fn now(&mut self) -> Duration {
+        #[cfg(test)]
+        if self
+            .expire_after_reads
+            .is_some_and(|after| self.reads >= after)
+        {
+            return Duration::MAX;
+        }
         self.origin.elapsed()
     }
 
@@ -286,3 +315,7 @@ impl ProcessTable for LinuxTable {
 #[cfg(test)]
 #[path = "stdio_sweep_linux_tests.rs"]
 mod tests;
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "stdio_sweep_linux_walk_tests.rs"]
+mod walk_tests;

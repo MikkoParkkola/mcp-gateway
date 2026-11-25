@@ -1,0 +1,215 @@
+// SPDX-FileCopyrightText: 2026 Mikko Parkkola
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+//! Rows for the Linux walk over a fake process tree: a directory laid out like
+//! `/proc` (each pid's `stat`, each task's `children`), so the reading's bounds,
+//! its pruning and its fallback are deterministic. The fake pids sit above any
+//! real `pid_max`, so nothing here can name a real process.
+
+use std::path::Path;
+use std::time::Duration;
+
+use super::*;
+
+/// A fake pid: far above the kernel's largest `pid_max`.
+fn fake(n: u32) -> u32 {
+    9_000_000 + n
+}
+
+fn who(pid: u32, start: u64) -> Identity {
+    Identity { pid, start }
+}
+
+/// A `/proc`-shaped directory. `walkable` writes the probe file the table
+/// checks for at creation (`self/task/<tid>/children`); without it, the table
+/// has no children files and must fall back to the full scan.
+struct Tree {
+    dir: tempfile::TempDir,
+}
+
+impl Tree {
+    fn new(walkable: bool) -> Self {
+        let tree = Self {
+            dir: tempfile::tempdir().expect("temp dir"),
+        };
+        if walkable {
+            let tid = rustix::thread::gettid().as_raw_nonzero().get();
+            tree.write(&format!("self/task/{tid}/children"), "");
+        }
+        tree
+    }
+
+    fn write(&self, rel: &str, text: &str) {
+        let path = self.dir.path().join(rel);
+        std::fs::create_dir_all(path.parent().expect("a parent")).expect("dirs");
+        std::fs::write(path, text).expect("write");
+    }
+
+    /// One process: its `stat` (state, parent, start time in field 22) and its
+    /// main thread's `children`.
+    fn proc(&self, pid: u32, ppid: u32, state: char, start: u64, children: &[u32]) {
+        let fillers = "0 ".repeat(17);
+        self.write(
+            &format!("{pid}/stat"),
+            &format!("{pid} (fake) {state} {ppid} {fillers}{start}\n"),
+        );
+        self.thread(pid, pid, children);
+    }
+
+    fn thread(&self, pid: u32, tid: u32, children: &[u32]) {
+        let list: Vec<String> = children.iter().map(u32::to_string).collect();
+        self.write(&format!("{pid}/task/{tid}/children"), &list.join(" "));
+    }
+
+    fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+fn pids(listing: &Listing) -> Vec<u32> {
+    let mut found: Vec<u32> = listing.rows.iter().map(|(id, _)| id.pid).collect();
+    found.sort_unstable();
+    found
+}
+
+/// R-bound, until already passed: a reading of a deep chain, a wide children
+/// file, a thread-heavy process or a long seed list stops after at most one
+/// read, cut short (not complete, not settled).
+#[test]
+fn an_expired_reading_stops_at_once_whatever_the_tree() {
+    let root = fake(1);
+    let cases: [(&str, Box<dyn Fn(&Tree)>, Vec<Identity>); 4] = [
+        (
+            "a 5,000-link chain",
+            Box::new(move |tree| {
+                for n in 1..=5_000 {
+                    let next = if n < 5_000 {
+                        vec![fake(n + 1)]
+                    } else {
+                        Vec::new()
+                    };
+                    tree.proc(fake(n), fake(n - 1), 'S', 1, &next);
+                }
+            }),
+            vec![who(root, 1)],
+        ),
+        (
+            "one children file listing 5,000 pids",
+            Box::new(move |tree| {
+                let kids: Vec<u32> = (2..=5_001).map(fake).collect();
+                tree.proc(root, 1, 'S', 1, &kids);
+            }),
+            vec![who(root, 1)],
+        ),
+        (
+            "a process with 5,000 threads",
+            Box::new(move |tree| {
+                tree.proc(root, 1, 'S', 1, &[]);
+                for tid in 2..=5_001 {
+                    tree.thread(root, fake(tid), &[]);
+                }
+            }),
+            vec![who(root, 1)],
+        ),
+        (
+            "5,000 seeds",
+            Box::new(move |tree| tree.proc(root, 1, 'S', 1, &[])),
+            (1..=5_000).map(|n| who(fake(n), 1)).collect(),
+        ),
+    ];
+    for (name, build, seeds) in cases {
+        let tree = Tree::new(true);
+        build(&tree);
+        let mut table = LinuxTable::with_root(tree.path());
+        let listing = table.read(&seeds, Duration::ZERO);
+        assert!(
+            !listing.complete,
+            "{name}: an expired reading claimed complete"
+        );
+        assert!(
+            !listing.settled,
+            "{name}: an expired reading claimed settled"
+        );
+        assert!(
+            table.reads <= 1,
+            "{name}: {} reads after until",
+            table.reads
+        );
+    }
+}
+
+/// R-bound, until passed mid-walk: the clock jumps past until after exactly
+/// `k` reads, and the reading stops there, neither earlier nor later.
+#[test]
+fn a_reading_stops_at_the_read_where_until_passes() {
+    let tree = Tree::new(true);
+    for n in 1..=50 {
+        let next = if n < 50 {
+            vec![fake(n + 1)]
+        } else {
+            Vec::new()
+        };
+        tree.proc(fake(n), fake(n - 1), 'S', 1, &next);
+    }
+    let mut table = LinuxTable::with_root(tree.path());
+    table.expire_after_reads = Some(10);
+    let listing = table.read(&[who(fake(1), 1)], Duration::MAX);
+    assert_eq!(table.reads, 10, "the reading did not stop at the 10th read");
+    assert!(!listing.complete, "a reading cut short claimed complete");
+    assert!(
+        !listing.rows.is_empty(),
+        "the reads before until found nothing"
+    );
+}
+
+/// R-gone, fake root: a seed whose pid now has another start time, and a seed
+/// whose pid has no entry, are both in `gone`; a seed that matches is not.
+#[test]
+fn a_seed_is_gone_on_its_own_evidence() {
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'S', 1, &[]);
+    tree.proc(fake(2), 1, 'S', 6, &[]);
+    let mut table = LinuxTable::with_root(tree.path());
+    let seeds = [who(fake(1), 1), who(fake(2), 5), who(fake(3), 1)];
+    let listing = table.read(&seeds, Duration::MAX);
+    assert_eq!(
+        listing.gone,
+        vec![who(fake(2), 5), who(fake(3), 1)],
+        "gone must name exactly the reused and the missing seed"
+    );
+}
+
+/// R-thread, fake root: a child forked by a second thread is found through
+/// that thread's own children file, and a thread whose file has vanished counts
+/// as gone without switching to the full scan (a process outside the tree is
+/// never listed).
+#[test]
+fn every_threads_children_are_walked_and_a_vanished_thread_is_no_switch() {
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'S', 1, &[fake(2)]);
+    tree.thread(fake(1), fake(10), &[fake(3)]);
+    std::fs::create_dir_all(tree.path().join(format!("{}/task/{}", fake(1), fake(11))))
+        .expect("a thread dir with no children file");
+    tree.proc(fake(2), fake(1), 'S', 1, &[]);
+    tree.proc(fake(3), fake(1), 'S', 1, &[]);
+    tree.proc(fake(900), 1, 'S', 1, &[]);
+    let mut table = LinuxTable::with_root(tree.path());
+    let listing = table.read(&[who(fake(1), 1)], Duration::MAX);
+    assert_eq!(pids(&listing), vec![fake(1), fake(2), fake(3)]);
+    assert!(
+        listing.complete,
+        "a vanished thread made the reading incomplete"
+    );
+}
+
+/// R-fallback: with no children file at creation, the table uses the full scan
+/// of its proc root for life: a process outside the tree is listed too.
+#[test]
+fn without_children_files_the_table_scans_its_whole_root() {
+    let tree = Tree::new(false);
+    tree.proc(fake(1), 1, 'S', 1, &[]);
+    tree.proc(fake(900), 1, 'S', 1, &[]);
+    let mut table = LinuxTable::with_root(tree.path());
+    let listing = table.read(&[who(fake(1), 1)], Duration::MAX);
+    assert_eq!(pids(&listing), vec![fake(1), fake(900)]);
+    assert!(listing.complete);
+}
