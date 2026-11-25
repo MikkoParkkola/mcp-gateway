@@ -69,6 +69,7 @@ pub(super) fn by_pid_gate(sig: Sig, state: ProcState) -> Result<(), SignalError>
 }
 
 /// One reading of the process table.
+#[allow(dead_code)] // red-first stub: `gone` and `settled` are read once the walk lands
 pub(super) struct Listing {
     /// Every process the table could read, with its parent pid.
     pub(super) rows: Vec<(Identity, u32)>,
