@@ -170,10 +170,15 @@ pub(super) fn scan_window(
     }
 }
 
-/// The Outcome group's counts query: the list's filters and its window. Any
-/// other parameter lands in `other`, so it can be refused by its name.
+/// The Outcome group's counts query: the list's filters and its window. The
+/// list's own `outcome`, `cursor` and `limit` are named so a malformed one
+/// fails as the list's does, before access is decided; any other parameter
+/// lands in `other`. All of those are refused by name.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct CountsQuery {
+    pub(super) outcome: Option<String>,
+    pub(super) cursor: Option<String>,
+    pub(super) limit: Option<String>,
     pub(super) effect: Option<String>,
     pub(super) server: Option<String>,
     pub(super) caller: Option<String>,
@@ -190,7 +195,16 @@ pub(super) struct CountsQuery {
 /// or a window that does not end after it starts.
 fn checked(query: &CountsQuery) -> Result<(Filter, RangeInclusive<DateTime<FixedOffset>>), Early> {
     let refuse = |error: String| Box::new(bad_request(json!({ "error": error })));
-    if let Some(name) = query.other.keys().next() {
+    let listed = [
+        ("outcome", &query.outcome),
+        ("cursor", &query.cursor),
+        ("limit", &query.limit),
+    ];
+    let named = listed
+        .iter()
+        .find(|(_, sent)| sent.is_some())
+        .map(|(name, _)| *name);
+    if let Some(name) = named.or_else(|| query.other.keys().next().map(String::as_str)) {
         return Err(refuse(format!("`{name}` is not a counts parameter")));
     }
     let as_listed = ListQuery {

@@ -203,8 +203,14 @@ fn some(text: &str) -> Option<String> {
 
 /// The window's query with a parameter the counts route does not take.
 fn sent(name: &str, value: &str) -> CountsQuery {
-    with(|q| {
-        q.other.insert(name.to_owned(), value.to_owned());
+    let value = Some(value.to_owned());
+    with(|q| match name {
+        "outcome" => q.outcome = value,
+        "cursor" => q.cursor = value,
+        "limit" => q.limit = value,
+        _ => {
+            q.other.insert(name.to_owned(), value.unwrap_or_default());
+        }
     })
 }
 
