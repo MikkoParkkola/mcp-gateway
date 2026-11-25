@@ -5,6 +5,7 @@
 
 use std::fs::File;
 use std::io;
+#[cfg(test)]
 use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
 
@@ -90,10 +91,11 @@ pub(super) fn labels_first(save: &super::Save<'_>, file: &File) -> io::Result<Wa
     let wanted = read_labels(save.target, save.keep.from)?;
     #[cfg(test)]
     super::seams::after_labels_read(save.target, save.scratch);
-    // Read by name, so the name must still be the modelled file.
+    // Read by name, so the name must still be the modelled file, unchanged:
+    // another file swapped in for the read and put back moves the
+    // original's change time, which the model holds.
     let still_modelled = save.seen.is_none()
-        || std::fs::symlink_metadata(save.target)
-            .is_ok_and(|at| (at.dev(), at.ino()) == (model.dev, model.ino));
+        || std::fs::symlink_metadata(save.target).is_ok_and(|at| super::Model::of(&at) == *model);
     if !still_modelled {
         return Err(super::changed(save.target));
     }

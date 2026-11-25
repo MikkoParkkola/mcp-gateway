@@ -132,7 +132,7 @@ fn unreadable(target: &Path) -> io::Error {
 }
 
 /// Linux: the new copy could not be given one of the target's security
-/// labels (`name`), or did not read it back. Never names the label itself.
+/// labels (`name`), or did not read it back. Names the label, never its value.
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 fn label_not_kept(target: &Path, name: &str) -> io::Error {
     let shown = target.display();

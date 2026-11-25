@@ -56,9 +56,21 @@ fn assert_set_on_the_empty_scratch(labels: &FakeLabels, row: &str) {
     }
 }
 
-/// The save refused with `code`, the target still holds "old", and no
-/// scratch is left beside it.
-fn assert_refused(result: std::io::Result<()>, code: &str, dir: &Path, target: &Path, row: &str) {
+/// The target's inode and mode, as a refused save must leave them.
+fn inode_and_mode(target: &Path) -> (u64, u32) {
+    use std::os::unix::fs::MetadataExt as _;
+    let meta = std::fs::symlink_metadata(target).expect("lstat the target");
+    (meta.ino(), meta.mode())
+}
+
+/// The save refused with `code`, the target is the same file (`before`:
+/// inode and mode) still holding "old", and no scratch is left beside it.
+fn assert_refused(
+    result: std::io::Result<()>,
+    code: &str,
+    (dir, target, before): (&Path, &Path, (u64, u32)),
+    row: &str,
+) {
     let error = result.expect_err(&format!("{row}: the save refuses"));
     assert_eq!(
         refusal_code(&error),
@@ -69,6 +81,11 @@ fn assert_refused(result: std::io::Result<()>, code: &str, dir: &Path, target: &
         std::fs::read(target).expect("read"),
         b"old",
         "{row}: target kept"
+    );
+    assert_eq!(
+        inode_and_mode(target),
+        before,
+        "{row}: same file, same mode"
     );
     assert_eq!(names(dir), ["state.json"], "{row}: no scratch left");
 }
@@ -144,23 +161,23 @@ fn l1b_a_label_the_scratch_already_has_needs_no_set() {
 /// L1c: an ordinary `SELinux` file (no SMACK label) keeps its context.
 #[test]
 fn l1c_one_label_present_and_one_absent_keeps_the_present_one() {
-    let (dir, target) = fixture();
-    let labels = FakeLabels::default();
-    labels.label(&target, SELINUX, CONTEXT);
-    let armed = arm(dir.path(), &labels);
-    write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace)
-        .expect("L1c: the save goes through");
-    drop(armed);
-    assert_eq!(
-        labels.get(&target, SELINUX).as_deref(),
-        Some(CONTEXT),
-        "L1c: selinux"
-    );
-    assert_eq!(
-        labels.get(&target, SMACK),
-        None,
-        "L1c: no smack label invented"
-    );
+    // Either label may be the one present: SELinux alone, then SMACK alone.
+    for (present, value, absent) in [(SELINUX, CONTEXT, SMACK), (SMACK, SMACK_LABEL, SELINUX)] {
+        let row = format!("L1c/{present}");
+        let (dir, target) = fixture();
+        let labels = FakeLabels::default();
+        labels.label(&target, present, value);
+        let armed = arm(dir.path(), &labels);
+        write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace)
+            .unwrap_or_else(|e| panic!("{row}: the save goes through: {e}"));
+        drop(armed);
+        assert_eq!(
+            labels.get(&target, present).as_deref(),
+            Some(value),
+            "{row}: kept"
+        );
+        assert_eq!(labels.get(&target, absent), None, "{row}: none invented");
+    }
 }
 
 /// A target carrying both labels, with the store armed and `knob` applied.
@@ -182,6 +199,7 @@ fn l2_a_refused_set_refuses_label_not_kept() {
         let (dir, target, labels) =
             labelled(|labels| labels.fail(Call::Set, name, libc::EPERM, Times::Always));
         let armed = arm(dir.path(), &labels);
+        let before = inode_and_mode(&target);
         let result = write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace);
         drop(armed);
         let text = result
@@ -189,7 +207,12 @@ fn l2_a_refused_set_refuses_label_not_kept() {
             .map_err(ToString::to_string)
             .err()
             .unwrap_or_default();
-        assert_refused(result, "label-not-kept", dir.path(), &target, &row);
+        assert_refused(
+            result,
+            "label-not-kept",
+            (dir.path(), &target, before),
+            &row,
+        );
         let me = rustix::process::geteuid().as_raw();
         assert!(text.contains(name), "{row}: names {name}: {text}");
         assert!(
@@ -210,9 +233,15 @@ fn l3_a_read_back_that_differs_refuses_label_not_kept() {
         let row = format!("L3/{name}");
         let (dir, target, labels) = labelled(|labels| labels.rewrite_after_set(name, b"other"));
         let armed = arm(dir.path(), &labels);
+        let before = inode_and_mode(&target);
         let result = write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace);
         drop(armed);
-        assert_refused(result, "label-not-kept", dir.path(), &target, &row);
+        assert_refused(
+            result,
+            "label-not-kept",
+            (dir.path(), &target, before),
+            &row,
+        );
     }
 }
 
@@ -226,10 +255,16 @@ fn l4_an_unreadable_label_refuses_before_any_byte() {
         let (dir, target, labels) =
             labelled(|labels| labels.fail(Call::Read, name, libc::EIO, Times::Once));
         let armed = arm(dir.path(), &labels);
+        let before = inode_and_mode(&target);
         let result = write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace);
         let events = armed.events();
         drop(armed);
-        assert_refused(result, "label-not-kept", dir.path(), &target, &row);
+        assert_refused(
+            result,
+            "label-not-kept",
+            (dir.path(), &target, before),
+            &row,
+        );
         assert!(
             !events.contains(&"write"),
             "{row}: no byte written: {events:?}"
@@ -279,9 +314,15 @@ fn l6_a_scratch_label_changed_before_the_rename_refuses() {
             ..Seams::default()
         },
     );
+    let before = inode_and_mode(&target);
     let result = write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace);
     drop(armed);
-    assert_refused(result, "target-changed", dir.path(), &target, "L6");
+    assert_refused(
+        result,
+        "target-changed",
+        (dir.path(), &target, before),
+        "L6",
+    );
 }
 
 /// L7: a backup takes its labels from the source it reads, never from
@@ -340,9 +381,49 @@ fn l8a_a_target_relabelled_during_the_save_refuses() {
             ..Seams::default()
         },
     );
+    let before = inode_and_mode(&target);
     let result = write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace);
     drop(armed);
-    assert_refused(result, "target-changed", dir.path(), &target, "L8a");
+    assert_refused(
+        result,
+        "target-changed",
+        (dir.path(), &target, before),
+        "L8a",
+    );
+}
+
+/// L8c: the target renamed away and back while its labels are read (as when
+/// another file is swapped in for the read and the original put back)
+/// refuses before any byte: the move changed the original's change time.
+#[test]
+fn l8c_a_target_moved_away_and_back_during_the_label_read_refuses() {
+    let (dir, target, labels) = labelled(|_| {});
+    let armed = arm_with(
+        dir.path(),
+        &labels,
+        Seams {
+            after_labels_read: Some(Box::new(|target, _scratch| {
+                let parked = target.with_extension("parked");
+                std::fs::rename(target, &parked).expect("move the target away");
+                std::fs::rename(&parked, target).expect("and back");
+            })),
+            ..Seams::default()
+        },
+    );
+    let before = inode_and_mode(&target);
+    let result = write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace);
+    let events = armed.events();
+    drop(armed);
+    assert_refused(
+        result,
+        "target-changed",
+        (dir.path(), &target, before),
+        "L8c",
+    );
+    assert!(
+        !events.contains(&"write"),
+        "L8c: no byte written: {events:?}"
+    );
 }
 
 /// L8b: another file put at the target's name while its labels are read
@@ -414,16 +495,21 @@ fn l9_a_backup_source_relabelled_during_the_copy_refuses() {
 }
 
 /// L10: a target its owner cannot read, carrying no label, saves as before:
-/// labels are read without opening the file.
+/// labels are read without opening the file. Once through the store and once
+/// through the kernel's own calls (no store armed), so a read that opens the
+/// file is refused by the kernel, not only by the store.
 #[test]
 fn l10_an_unreadable_target_without_labels_saves() {
     use std::os::unix::fs::PermissionsExt as _;
-    let (dir, target) = fixture();
-    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).expect("chmod");
-    let labels = FakeLabels::default();
-    let armed = arm(dir.path(), &labels);
-    write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace).expect("L10: saved");
-    drop(armed);
+    for armed_store in [true, false] {
+        let row = format!("L10/store={armed_store}");
+        let (dir, target) = fixture();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o000)).expect("chmod");
+        let armed = armed_store.then(|| arm(dir.path(), &FakeLabels::default()));
+        write_atomic(&target, b"new", FileMode::Inherit, Symlink::Replace)
+            .unwrap_or_else(|e| panic!("{row}: saved: {e}"));
+        drop(armed);
+    }
 }
 
 /// L11: a long context whose size changed between the probe and the read
