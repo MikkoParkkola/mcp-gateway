@@ -2027,8 +2027,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          # A dispatch-only rehearsal: it never runs on the release-line push, the one
-          # run whose save the pull requests restore, so it does not save.
+          # A dispatch-only rehearsal: it never runs on the release-line push, the
+          # only run allowed to save (test_docs_only_gating.py), so it does not save.
           save-if: false
       - name: Install cargo-auditable
         run: cargo install cargo-auditable --locked --version 0.7.6
