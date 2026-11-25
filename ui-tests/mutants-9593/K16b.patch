@@ -1,0 +1,13 @@
+diff --git a/src/config_reload/mod.rs b/src/config_reload/mod.rs
+index 845798d9cf..41fd81485a 100644
+--- a/src/config_reload/mod.rs
++++ b/src/config_reload/mod.rs
+@@ -64,7 +64,7 @@ use crate::config::Config;
+ /// Summary text a reload reports when the file on disk matches the live config.
+ /// Shared so the file-watcher can recognise the no-op case without matching on a
+ /// literal that could drift away from the one `no_changes` writes.
+-const NO_CHANGES_SUMMARY: &str = "no changes detected";
++const NO_CHANGES_SUMMARY: &str = "nothing to apply";
+ 
+ /// Error text a reload returns when the registry refused a backend because the
+ /// gateway is shutting down. A shared constant because the file-watcher has to
