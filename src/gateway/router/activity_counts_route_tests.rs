@@ -76,12 +76,12 @@ fn hold_until(seen: &Seen, ready: impl Fn() -> bool) {
 
 fn hook(seen: Arc<Seen>, hold: Hold) -> CountsHook {
     CountsHook(Arc::new(
-        move |cap: u64, bytes: u64, dropped: &AtomicBool| {
+        move |cap: u64, bytes: u64, dropped: &dyn Fn() -> bool| {
             seen.passes.lock().expect("the passes").push((cap, bytes));
             seen.arrivals.fetch_add(1, Ordering::SeqCst);
             match hold {
                 Hold::Never => {}
-                Hold::UntilDropped => hold_until(&seen, || dropped.load(Ordering::SeqCst)),
+                Hold::UntilDropped => hold_until(&seen, dropped),
                 Hold::UntilReleased => hold_until(&seen, || seen.release.load(Ordering::SeqCst)),
             }
         },

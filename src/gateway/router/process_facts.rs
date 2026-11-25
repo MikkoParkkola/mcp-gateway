@@ -8,7 +8,6 @@
 //! builds the state, a test builds the state with a start it chooses, and
 //! nothing falls back to "the first request".
 
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
@@ -98,7 +97,8 @@ pub(crate) const MAX_CONCURRENT_READS: usize = 4;
 pub(crate) const COUNT_READS: usize = 2;
 
 /// What a test sees after each pass of a counts read: the read's byte cap,
-/// the bytes the pass examined, and the request's drop flag. It returns
+/// the bytes the pass examined, and a reader of the request's drop flag, which
+/// it can read but never set. It returns
 /// nothing, so it cannot stop the read.
 #[derive(Clone)]
 #[cfg_attr(
@@ -108,7 +108,7 @@ pub(crate) const COUNT_READS: usize = 2;
 pub(crate) struct CountsHook(pub(crate) Arc<CountsPass>);
 
 /// The pass callback a [`CountsHook`] holds.
-pub(crate) type CountsPass = dyn Fn(u64, u64, &AtomicBool) + Send + Sync;
+pub(crate) type CountsPass = dyn Fn(u64, u64, &dyn Fn() -> bool) + Send + Sync;
 
 impl std::fmt::Debug for CountsHook {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

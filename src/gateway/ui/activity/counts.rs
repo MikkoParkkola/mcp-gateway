@@ -355,7 +355,7 @@ pub(super) async fn counts_route(
         let cap = COUNT_SCAN_BYTES;
         count_page(&logs, &access, &query, cap, |pass| {
             if let Some(hook) = &hook {
-                (hook.0)(cap, pass.bytes, &flag);
+                (hook.0)(cap, pass.bytes, &|| flag.load(Ordering::SeqCst));
             }
             if flag.load(Ordering::SeqCst) {
                 ControlFlow::Break(())
