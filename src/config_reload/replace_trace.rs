@@ -13,7 +13,9 @@ use super::IntentId;
 #[derive(Debug, Default)]
 pub(crate) struct WriteTrace {
     pub(super) intent_id: std::sync::OnceLock<IntentId>,
-    /// Set immediately before the new bytes are written.
+    /// Set immediately before the new bytes are written; cleared again when
+    /// the write fails before its rename, as the bytes then never reached
+    /// the file.
     pub(super) written: AtomicBool,
     /// Set when the original was put back after `written`.
     pub(super) restored: AtomicBool,

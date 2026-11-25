@@ -527,7 +527,7 @@ impl ReloadContext {
         // From here the new bytes may be on disk.
         entries.trace.written.store(true, Ordering::SeqCst);
         // Test seam: an armed `FailWrite` fails the write before it starts,
-        // so the rollback after it has the original to put back.
+        // so the abandon after it leaves the file untouched.
         #[cfg(test)]
         let injected =
             journal::fault::fires(target, |f| matches!(f, journal::fault::Fault::FailWrite))
