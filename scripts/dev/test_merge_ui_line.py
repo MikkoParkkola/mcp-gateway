@@ -610,6 +610,29 @@ class Rows(unittest.TestCase):
         self.fx.setup(drop_b, edit_b)
         self.refuse("R5", "b.js")
 
+    def test_t4d_a_criss_cross_history_has_two_merge_bases(self):
+        # Each side merges the other's first commit, so the branch and the line have two best common ancestors;
+        # one picked arbitrarily could undo a resolution the branch made (gpt confirm on #5356, CRITICAL).
+        line1 = self.fx.side("line", self.fx.base, lambda fx: fx.edit("README.txt", "readme one", "line one"))
+        ui1 = self.fx.side("ui", self.fx.base, lambda fx: fx.edit("NOTES.txt", "notes one", "ui one"))
+        self.fx.git("merge", "-q", "--no-edit", line1)
+        self.fx.git("checkout", "-q", "line")
+        self.fx.git("merge", "-q", "--no-edit", ui1)
+        self.fx.git("checkout", "-q", "ui")
+        self.assertEqual(len(self.fx.git("merge-base", "--all", "ui", "line").split()), 2)
+        self.refuse("R10", line1[:10], ui1[:10])
+        self.assertNotIn("worktree add", self.fx.calls())
+
+    def test_t4e_a_second_run_on_a_merged_line_changes_nothing(self):
+        tip, line = self.fx.setup(edit_a, edit_b)
+        self.succeed(tip, line)
+        before = self.fx.snapshot()
+        proc = self.fx.run("line")
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("already merged", proc.stdout)
+        self.assertEqual(self.fx.snapshot(), before)
+        self.assertNotIn("worktree add", self.fx.calls())
+
     def test_t5c_line_deletes_what_the_branch_edited(self):
         self.fx.setup(edit_b, drop_b)
         self.refuse("R5", "b.js")

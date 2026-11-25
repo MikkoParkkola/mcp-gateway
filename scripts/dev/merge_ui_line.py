@@ -382,7 +382,13 @@ def build(line: str, subject: str, b: dict, o: dict, t: dict, results: dict, wt:
 def run(root: str, line_ref: str) -> int:
     preconditions(root)
     line = out("rev-parse", "--verify", f"{line_ref}^{{commit}}", cwd=root)
-    base = out("merge-base", "HEAD", line, cwd=root)
+    # A criss-cross history has several best common ancestors; git's plain merge-base prints one of them, and a
+    # three-way plan from an arbitrary one can undo a resolution the branch already made.
+    bases = out("merge-base", "--all", "HEAD", line, cwd=root).split()
+    if len(bases) != 1:
+        raise Refused("R10", "the branch and the line have several merge bases; merge by hand",
+                      [b[:10] for b in bases])
+    base = bases[0]
     if base == line:
         print("merge_ui_line: the line is already merged; nothing to do")
         return 0
