@@ -62,7 +62,8 @@ HASH_IN_REF = re.compile(r"(/ui/assets/[^\s\"'`()<>]+?)\.[0-9a-f]{12}(\.(?:" + E
 # A reference is the WHOLE token after /ui/assets/ (any characters but whitespace, quotes and brackets; rehash
 # allows any stem), counted only when it ends in one of rehash's extensions. Taking the whole token first means
 # "a.js,b.js" is one name, not "a.js"; prose such as "served under /ui/assets/, by name" never ends in one.
-REF_TOKEN = re.compile(r"/ui/assets/([^\s\"'`()<>]+)")
+# A query or fragment is not part of the file name (the rehash script keeps it after the hashed name).
+REF_TOKEN = re.compile(r"/ui/assets/([^\s\"'`()<>?#]+)")
 REF_NAME = re.compile(r".+\.(?:" + EXTS + r")")
 
 
@@ -410,7 +411,13 @@ def run(root: str, line_ref: str) -> int:
     try:
         git("worktree", "add", "-q", "-b", name, str(wt), "HEAD", cwd=root)
         commit = build(line, subject, b, o, t, results, wt)
-        git("merge", "--ff-only", "-q", commit, cwd=root)
+        # git merge overwrites ignored files by default; a local ignored file where the merge brings a tracked one
+        # must survive, so the fast-forward refuses instead (and then leaves the branch untouched).
+        forward = git("merge", "--ff-only", "--no-overwrite-ignore", "-q", commit, cwd=root, check=False)
+        if forward.returncode != 0:
+            incoming = paths_z("diff", "--name-only", "--diff-filter=A", "HEAD", commit, cwd=root)
+            raise Refused("R11", "the merge would overwrite local untracked or ignored files",
+                          [p for p in incoming if (Path(root) / p).exists()] or [forward.stderr.strip()])
     finally:
         # Only what this run created (checked absent above): reset and clean the throwaway tree, then remove it
         # without force (a refusal here is printed, never forced), and delete its branch.

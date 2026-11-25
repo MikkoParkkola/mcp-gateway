@@ -634,6 +634,26 @@ class Rows(unittest.TestCase):
         got = m.paths_z("ls-files", "--others", "--exclude-standard", "--", m.UI, cwd=str(self.fx.root))
         self.assertEqual(sorted(got), [f"{m.UI}/a.js~HEAD", f"{m.UI}/b.js~line"])
 
+    def test_t7h_a_reference_with_a_query_to_a_deleted_asset(self):
+        # The rehash script rewrites `/ui/assets/b.js?v=1` to the hashed name with its query kept; the line deletes
+        # b.js, so the merged a.js would point at nothing (gpt r3 on #5356, HIGH).
+        self.fx.setup(lambda fx: fx.edit(f"{SHELL}/a.js", "return 4;", 'return "/ui/assets/b.js?v=1";'), drop_b)
+        self.refuse("R7", "b.", reason="missing asset referenced")
+
+    def test_t11b_an_ignored_local_file_the_line_tracks(self):
+        # The line adds a tracked file where this checkout keeps an ignored one: the fast-forward must not overwrite
+        # it (gpt r3 on #5356, CRITICAL: git merge overwrites ignored files by default).
+        def add_tracked(fx):
+            fx.write("out/keep.txt", "line's file\n")
+            fx.git("add", "-f", "out/keep.txt")
+        self.fx.setup(edit_a, add_tracked)
+        (self.fx.root / ".git/info").mkdir(exist_ok=True)
+        (self.fx.root / ".git/info/exclude").write_text("out/\n")
+        self.fx.write("out/keep.txt", "my local file\n")
+        self.assertEqual(self.fx.git("status", "--porcelain"), "")
+        self.refuse("R11", "out/keep.txt")
+        self.assertEqual((self.fx.root / "out/keep.txt").read_text(), "my local file\n")
+
     def test_t4e_a_second_run_on_a_merged_line_changes_nothing(self):
         tip, line = self.fx.setup(edit_a, edit_b)
         self.succeed(tip, line)
