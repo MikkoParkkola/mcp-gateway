@@ -26,7 +26,7 @@ a.ov-go:hover .ov-label { color: var(--color-text-primary); }
    One column; two from 1100 px, where the KPI strip and the checklist span both. */
 .ov > * { min-width: 0; }
 @media (min-width: 1100px) {
-  .ov { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .ov { grid-template-columns: repeat(1, minmax(0, 1fr)); align-items: start; }
   .ov > [data-panel="kpis"], .ov > [data-panel="checklist"] { grid-column: 1 / -1; }
 }
 .ov-panel { display: grid; gap: var(--space-2); padding: var(--space-4); }
