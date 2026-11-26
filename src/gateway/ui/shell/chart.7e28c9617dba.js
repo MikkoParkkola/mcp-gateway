@@ -90,7 +90,8 @@ function svgEl(tag, attrs = {}) {
  * x, y:    (t) => words for a time, (v) => words for a number
  *
  * Every point and marker is placed by its time against the main series: x = (t - t0) / step + 0.5,
- * with t0 its first time and step the gap between its first two. Nothing is placed by index, so a
+ * with t0 its first time and step the gap between its first two; a marker stands in the middle of
+ * the bucket that holds its time. Nothing is placed by index, so a
  * previous period reaches the plot only when the caller has moved its times into the main one's.
  */
 export function chart({ caption, unit, series, markers = [], limit = null, x, y, summary }) {
@@ -131,9 +132,17 @@ export function chart({ caption, unit, series, markers = [], limit = null, x, y,
       }
       run = [];
     };
+    // A missing time is a gap as well as a null: points more than a bucket and a half apart
+    // start a new run (a day of 23 or 25 hours in a daily chart stays one run).
+    let last = null;
     for (const p of s.points) {
+      const xv = xAt(p.t);
       if (!isValue(p.v)) end();
-      else if (shown(xAt(p.t))) run.push([xAt(p.t), yAt(p.v)]);
+      else if (shown(xv)) {
+        if (last !== null && xv - last > 1.5) end();
+        run.push([xv, yAt(p.v)]);
+        last = xv;
+      }
     }
     end();
   }
@@ -141,9 +150,12 @@ export function chart({ caption, unit, series, markers = [], limit = null, x, y,
     plot.append(svgEl('line', { class: 'chart-limit', x1: 0, x2: buckets, y1: num(yAt(limit.value)), y2: num(yAt(limit.value)) }));
   }
   const marks = [...markers].sort((a, b) => a.t - b.t);
+  // The bucket holding a time (-1 or past the end when outside); with one bucket, every time from t0 on.
+  const bucketOf = (t) => (buckets === 1 ? (t >= t0 ? 0 : -1) : Math.floor((t - t0) / step));
   for (const m of marks) {
-    const xv = xAt(m.t);
-    if (shown(xv)) plot.append(svgEl('line', { class: 'chart-mark', x1: num(xv), x2: num(xv), y1: 0, y2: 100 }));
+    // A marker stands in the middle of the bucket that holds its time, so the newest one shows too.
+    const at = bucketOf(m.t);
+    if (at >= 0 && at < buckets) plot.append(svgEl('line', { class: 'chart-mark', x1: at + 0.5, x2: at + 0.5, y1: 0, y2: 100 }));
   }
 
   // x labels: the first, middle and last bucket (kept on a phone), and every sixth from twelve
@@ -164,12 +176,17 @@ export function chart({ caption, unit, series, markers = [], limit = null, x, y,
       h('span', { class: 'chart-glyph' }, m.glyph), ' ', h('span', { class: 'chart-when num' }, x(m.t)), ' ', m.words))));
   }
 
-  // The numbers: one row per bucket of the main series, one column per series, read by time.
-  const byTime = lines.map((s) => new Map(s.points.map((p) => [p.t, p.v])));
+  // The numbers: one row per bucket of the main series, one column per series, each value in the
+  // row of the bucket that holds its time, as the plot places it.
+  const byBucket = lines.map((s) => {
+    const held = new Map();
+    for (const p of s.points) if (!held.has(bucketOf(p.t))) held.set(bucketOf(p.t), p.v);
+    return held;
+  });
   const cell = (v) => h('td', { class: 'num' }, isValue(v) ? yWords(v) : NOT_COUNTED);
   fig.append(h('details', { class: 'chart-numbers' }, h('summary', {}, 'The numbers'),
     h('table', {},
       h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Time'), ...lines.map((s) => h('th', { scope: 'col' }, `${s.name} (${words})`)))),
-      h('tbody', {}, ...main.points.map((p) => h('tr', {}, h('th', { scope: 'row' }, x(p.t)), ...byTime.map((m) => cell(m.get(p.t)))))))));
+      h('tbody', {}, ...main.points.map((p, i) => h('tr', {}, h('th', { scope: 'row' }, x(p.t)), ...byBucket.map((m) => cell(m.get(i)))))))));
   return fig;
 }

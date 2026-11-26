@@ -8,6 +8,9 @@
 /* A sparkline's wrapper is a box, not a line of text: the svg keeps its own height, so the row it
    lands in does not grow when it arrives. Its hidden words are placed inside it. */
 .chart-spark { display: flex; flex: none; position: relative; }
+.ov-spark { flex: none; width: calc(var(--space-16) + var(--space-2)); height: calc(var(--space-4) + var(--space-0-5)); overflow: visible; }
+.ov-spark polyline { fill: none; stroke: var(--color-accent-default); stroke-width: var(--size-tick-stroke);
+  vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 .chart { margin: 0; display: grid; gap: var(--space-3); min-width: 0; }
 .chart figcaption { display: grid; gap: var(--space-1); }
 .chart-caption { font: var(--type-body); font-weight: var(--font-weight-bold); color: var(--color-text-primary); }
