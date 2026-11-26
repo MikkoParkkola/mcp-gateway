@@ -34,8 +34,8 @@ clean() { git -C "$root" diff --quiet -- src; }
 
 clean || { echo "run.sh: src/ is not clean at the start" >&2; exit 2; }
 
-# Baseline: both spec files whole (every row the manifest names), on the clean tree.
-npx playwright test --project=chromium --reporter=line --retries=0 tests/gateway-reload.spec.mjs tests/tips.spec.mjs > "$out/baseline.log" 2>&1
+# Baseline: the two spec files whole (every row the manifest names), on the clean tree.
+npx playwright test --project=chromium --reporter=line --retries=0 tests/overview-chart.spec.mjs tests/overview-tiles.spec.mjs > "$out/baseline.log" 2>&1
 base_rc=$?
 base_ok=0
 [ "$base_rc" = 0 ] && grep -qE '^ *[0-9]+ passed' "$out/baseline.log" && base_ok=1
