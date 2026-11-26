@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -88,7 +88,7 @@
+   const mine = {};
+   owner = mine;
+   const found = await findServer(body, ctx);
+-  if (!found || owner !== mine || !body.isConnected) return;
++  if (!found || owner !== mine) return;
+   const root = el('div', { class: 'sp' });
+   const draw = (s) => {
+     ctx.show(serverBanner(s));

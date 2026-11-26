@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.2e8d0121b38d.js b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
---- a/src/gateway/ui/shell/server-page.2e8d0121b38d.js
-+++ b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
-@@ -121,7 +121,7 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -127,7 +127,7 @@
      const names = reaching(keys, s.name).map((k) => k.name);
      const rest = names.length - 3;
      reach = names.length === 0 ? 'No key reaches it.'

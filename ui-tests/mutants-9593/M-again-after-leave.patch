@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -201,7 +201,7 @@
+         }
+         return;
+       }
+-      if (node.isConnected) again();
++      again();
+     };
+     const finish = el('button', { type: 'button', class: 'btn primary' }, 'Finish sign-in');
+     const cancel = el('button', { type: 'button', class: 'btn' }, 'Cancel sign-in');

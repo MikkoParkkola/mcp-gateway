@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -91,7 +91,7 @@
+   if (!found || owner !== mine || !body.isConnected) return;
+   const root = el('div', { class: 'sp' });
+   const draw = (s) => {
+-    ctx.show(serverBanner(s));
++    ctx.show(s.state === 'refused' ? null : serverBanner(s));
+     // A redraw keeps keyboard focus: the Activity link is the one control here.
+     const focused = root.contains(document.activeElement);
+     root.replaceChildren(...statusParts(s));

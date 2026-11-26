@@ -17,3 +17,13 @@ M-same-tab	M-same-tab.patch	tests/server-page-actions.spec.mjs	T6 start posts JS
 M-new-attempt	M-new-attempt.patch	tests/server-page-actions.spec.mjs	T7 confirm 409 sign_in_not_ready
 M-raw-revive	M-raw-revive.patch	tests/server-page-actions.spec.mjs	T9c the DELETE and the revive POST
 M-raw-revive-S1	M-raw-revive-S1.patch	tests/server-page-paths.spec.mjs	S1 names enter paths only through server-paths
+M-final-keeps-buttons	M-final-keeps-buttons.patch	tests/server-page-actions.spec.mjs	T7 confirm 404 no_sign_in
+M-split-prefix	M-split-prefix.patch	tests/server-page-paths.spec.mjs	S1 every /ui/ string in the server page
+M-remove-after-leave	M-remove-after-leave.patch	tests/server-page-actions.spec.mjs	T4 Remove opens no confirm when the user left
+M-again-after-leave	M-again-after-leave.patch	tests/server-page-actions.spec.mjs	T6 a decision answered after the user left
+M-late-listener	M-late-listener.patch	tests/server-page-status.spec.mjs	T2c a status read answered after the user left
+M-page-gone	M-page-gone.patch	tests/server-page-status.spec.mjs	T2c the first event after the page has gone
+M-focus-status	M-focus-status.patch	tests/server-page-status.spec.mjs	T2d a redraw keeps keyboard focus on the Activity link
+M-focus-list	M-focus-list.patch	tests/server-page-status.spec.mjs	T2d a list refresh keeps keyboard focus
+M-refused-banner	M-refused-banner.patch	tests/server-page-status.spec.mjs	T1a the gateway reason shows
+M-spy-dots	M-spy-dots.patch	tests/server-page-status.spec.mjs	T1d the path helper is never asked

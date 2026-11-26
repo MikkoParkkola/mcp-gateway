@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -101,7 +101,6 @@
+   body.append(root);
+   const onStatus = (event) => {
+     if (!body.isConnected) {
+-      leave();
+       return;
+     }
+     const servers = event.detail?.servers;

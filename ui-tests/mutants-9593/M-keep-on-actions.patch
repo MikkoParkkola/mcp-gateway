@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/servers.c35a2cebcb1d.js b/src/gateway/ui/shell/servers.c35a2cebcb1d.js
---- a/src/gateway/ui/shell/servers.c35a2cebcb1d.js
-+++ b/src/gateway/ui/shell/servers.c35a2cebcb1d.js
-@@ -351,7 +351,7 @@
+diff --git a/src/gateway/ui/shell/servers.862dd600788f.js b/src/gateway/ui/shell/servers.862dd600788f.js
+--- a/src/gateway/ui/shell/servers.862dd600788f.js
++++ b/src/gateway/ui/shell/servers.862dd600788f.js
+@@ -352,7 +352,7 @@
    title: 'Servers',
    tabs: {
      status: tab(serverStatus, statusTab),

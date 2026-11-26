@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -195,7 +195,7 @@
+       } catch (err) {
+         error(err);
+         // Only not-ready keeps this attempt's buttons; any other refusal ends it, so start again.
+-        if (err?.code !== 'sign_in_not_ready') {
++        if (false) {
+           flow.replaceChildren();
+           start.disabled = false;
+         }

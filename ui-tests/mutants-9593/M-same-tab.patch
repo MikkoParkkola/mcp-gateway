@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.2e8d0121b38d.js b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
---- a/src/gateway/ui/shell/server-page.2e8d0121b38d.js
-+++ b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
-@@ -191,7 +191,7 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -208,7 +208,7 @@
      finish.addEventListener('click', decide('confirm'));
      cancel.addEventListener('click', decide('cancel'));
      flow.replaceChildren(
@@ -9,4 +9,4 @@ diff --git a/src/gateway/ui/shell/server-page.2e8d0121b38d.js b/src/gateway/ui/s
 +      ...(href ? [el('p', {}, el('a', { class: 'lnk', href, rel: 'noopener noreferrer' }, 'Open the sign-in page'))] : []),
        ...(until ? [el('p', {}, `The sign-in link expires at ${until}.`)] : []),
        el('p', { class: 'acts' }, finish, cancel));
-   });
+     ctx.announce('Sign-in started.');

@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+--- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
++++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
+@@ -240,7 +240,6 @@
+   const remove = el('button', { type: 'button', class: 'btn danger' }, `Remove ${name}`);
+   remove.addEventListener('click', async () => {
+     const keys = await keysRead;
+-    if (!remove.isConnected) return; // left while the keys were read
+     ctx.confirm({
+       opener: remove, key: `remove:${name}`, verb: 'Remove', object: name,
+       progress: `Removing ${name}…`,
