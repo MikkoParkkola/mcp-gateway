@@ -196,7 +196,7 @@ const NEEDS = {
     lines: [str(d.fix), ALERT_LAST_DELIVERY(d.last_delivery_at)],
   }),
   sign_in: ({ subject, detail: d = {} }) => ({
-    glyph: '⚠', title: `${str(subject)} needs sign-in`, lines: [], href: signInPath(str(subject), d.clipped === true), go: 'Sign in ›',
+    glyph: '⚠', title: `${str(subject)} needs sign-in`, lines: [], href: signInPath(str(subject), d.clipped === 'never'), go: 'Sign in ›',
   }),
   decisions: ({ detail: d = {} }) => ({
     glyph: '☐', title: `${d.count} ${d.count === 1 ? 'decision' : 'decisions'} in To do`, lines: [], href: TO_DO, go: 'Open To do ›',
