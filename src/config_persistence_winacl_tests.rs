@@ -86,6 +86,12 @@ fn a_new_file_takes_the_folders_access_list() {
 /// A refused save: the error names `code`, the old file is byte-identical,
 /// and the folder holds exactly what it held before (no scratch left).
 fn assert_refused(row: &str, path: &Path, code: &str) {
+    assert_refused_as(row, path, FileMode::Inherit, code);
+}
+
+/// [`assert_refused`] for a save in `mode`; returns the message. Shared with
+/// the `Private` rows.
+pub(super) fn assert_refused_as(row: &str, path: &Path, mode: FileMode, code: &str) -> String {
     let dir = path.parent().unwrap();
     let listing = |d: &Path| {
         let mut names: Vec<_> = std::fs::read_dir(d)
@@ -96,22 +102,32 @@ fn assert_refused(row: &str, path: &Path, code: &str) {
         names
     };
     let before = listing(dir);
-    let err = write_atomic(path, b"new", FileMode::Inherit, Symlink::Replace)
+    let err = write_atomic(path, b"new", mode, Symlink::Replace)
         .expect_err(&format!("{row}: the save was not refused"));
-    assert!(
-        err.to_string().contains(code),
-        "{row}: wanted {code}, got {err}"
-    );
-    assert_eq!(
-        std::fs::read(path).unwrap(),
-        b"old",
-        "{row}: old file changed"
-    );
+    let text = err.to_string();
+    assert!(text.contains(code), "{row}: wanted {code}, got {text}");
+    assert_eq!(bytes_of(path), b"old", "{row}: old file changed");
     assert_eq!(
         listing(dir),
         before,
         "{row}: the folder changed (scratch left?)"
     );
+    text
+}
+
+/// The file's bytes, read with data access only (`FILE_READ_DATA`), so a row
+/// that denies this token `READ_CONTROL` can still check the file is intact.
+fn bytes_of(path: &Path) -> Vec<u8> {
+    use std::io::Read as _;
+    use std::os::windows::fs::OpenOptionsExt as _;
+    const FILE_READ_DATA: u32 = 0x1;
+    let mut bytes = Vec::new();
+    std::fs::OpenOptions::new()
+        .access_mode(FILE_READ_DATA)
+        .open(path)
+        .and_then(|mut file| file.read_to_end(&mut bytes))
+        .unwrap_or_else(|e| panic!("reading {} with data access only: {e}", path.display()));
+    bytes
 }
 
 /// A6: a file carrying an integrity label is refused: the label cannot be
