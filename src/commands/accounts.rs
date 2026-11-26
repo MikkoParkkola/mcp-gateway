@@ -12,6 +12,8 @@
 use crate::cli::stdout::println;
 
 use std::path::Path;
+
+use super::{CliExit, check_config_command, fail, usage};
 use std::process::ExitCode;
 
 use mcp_gateway::{
@@ -53,21 +55,21 @@ fn run_migrate_credentials(
     legacy_backend_name: Option<&str>,
 ) -> ExitCode {
     let Some(path) = config_path else {
-        eprintln!(
-            "Error: accounts migrate-credentials needs an explicit configuration. \
+        return usage(
+            "accounts migrate-credentials",
+            "accounts migrate-credentials needs an explicit configuration. \
              Pass --config PATH naming the gateway config whose `accounts` block \
-             declares the store and the descriptor to migrate into."
+             declares the store and the descriptor to migrate into.",
         );
-        return ExitCode::FAILURE;
     };
     let evaluated = match Config::load_evaluated(Some(path)) {
         Ok(evaluated) => evaluated,
         Err(error) => {
-            eprintln!(
-                "Error: cannot load configuration {}: {error}",
-                path.display()
+            return fail(
+                CliExit::LocalFailure,
+                &format!("cannot load configuration {}: {error}", path.display()),
+                &format!("Run '{}' to see why.", check_config_command(path)),
             );
-            return ExitCode::FAILURE;
         }
     };
 
@@ -82,11 +84,11 @@ fn run_migrate_credentials(
             print_migrated(&report);
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("Error: {error}");
-            eprintln!("{}", migration_hint(&error));
-            ExitCode::FAILURE
-        }
+        Err(error) => fail(
+            CliExit::LocalFailure,
+            &error.to_string(),
+            migration_hint(&error),
+        ),
     }
 }
 
@@ -160,12 +162,12 @@ fn run_init_store(config_path: Option<&Path>) -> ExitCode {
     // roots it claims, so the operator names the file instead of learning
     // afterwards which config happened to be found first.
     let Some(path) = config_path else {
-        eprintln!(
-            "Error: accounts init-store needs an explicit configuration. \
+        return usage(
+            "accounts init-store",
+            "accounts init-store needs an explicit configuration. \
              Pass --config PATH naming the gateway config whose `accounts` block \
-             declares the store to create."
+             declares the store to create.",
         );
-        return ExitCode::FAILURE;
     };
 
     // `load_evaluated`, not `load`: it returns the overlay the config's own
@@ -176,11 +178,11 @@ fn run_init_store(config_path: Option<&Path>) -> ExitCode {
     let evaluated = match Config::load_evaluated(Some(path)) {
         Ok(evaluated) => evaluated,
         Err(error) => {
-            eprintln!(
-                "Error: cannot load configuration {}: {error}",
-                path.display()
+            return fail(
+                CliExit::LocalFailure,
+                &format!("cannot load configuration {}: {error}", path.display()),
+                &format!("Run '{}' to see why.", check_config_command(path)),
             );
-            return ExitCode::FAILURE;
         }
     };
 
@@ -189,11 +191,7 @@ fn run_init_store(config_path: Option<&Path>) -> ExitCode {
             print_report(&report);
             ExitCode::SUCCESS
         }
-        Err(error) => {
-            eprintln!("Error: {error}");
-            eprintln!("{}", hint(&error));
-            ExitCode::FAILURE
-        }
+        Err(error) => fail(CliExit::LocalFailure, &error.to_string(), hint(&error)),
     }
 }
 
