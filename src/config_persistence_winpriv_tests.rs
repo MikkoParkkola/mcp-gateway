@@ -37,13 +37,17 @@ fn owner_of(row: &str, path: &Path) -> String {
     parse_sddl(&read_sddl(row, path)).owner
 }
 
-/// W1: a file owned by NT AUTHORITY\SYSTEM is refused `foreign-owner`,
-/// naming that owner and the gateway's account; its owner stays SYSTEM.
+/// W1: a file owned by NT AUTHORITY\SYSTEM is refused `foreign-owner` before
+/// any scratch is created, naming that owner and the gateway's account; its
+/// owner stays SYSTEM.
 #[test]
 fn w1_a_private_save_over_a_file_another_account_owns_is_refused() {
     let row = "WINPRIV-W1";
-    let (_dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege);
+    let (dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege);
     assert_eq!(owner_of(row, &path), SYSTEM, "{row}: owner not planted");
+    // This token may not create files here, so a check that ran after the
+    // scratch's create would surface that error, not foreign-owner.
+    deny_user(row, dir.path(), "WD");
     let text = assert_refused_as(row, &path, FileMode::Private, "foreign-owner");
     assert!(
         text.contains(SYSTEM) && text.contains(&user_sid()),
