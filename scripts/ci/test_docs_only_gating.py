@@ -696,6 +696,17 @@ def main() -> int:
             errors.append("dead-save self-test: linux-lib-union has no cache step (changed nothing)")
         elif not any(e.startswith("linux-lib-union:") for e in dead_save_errors(mutated)):
             errors.append(f"dead-save self-test: a live save behind {label} on linux-lib-union was not caught")
+    # The step's `if` and its save flag must hold on the SAME push: a job running on every push (no job if)
+    # whose step runs only on main while it saves only on the release line never saves; the same step
+    # saving on main is live; a `${{ false }}` step if never runs.
+    line_ref, main_ref = f"${{{{ github.ref == 'refs/heads/{RELEASE_LINE}' }}}}", "${{ github.ref == 'refs/heads/main' }}"
+    for label, step_if, save_if, dead in (("a step on main saving on the line", main_ref, line_ref, True),
+                                         ("a step on main saving on main", main_ref, main_ref, False),
+                                         ("a `${{ false }}` step if", "${{ false }}", True, True)):
+        probe = {"probe": {"steps": [{"uses": "Swatinem/rust-cache@x", "if": step_if, "with": {"save-if": save_if}}]}}
+        caught = any(e.startswith("probe:") for e in dead_save_errors(probe))
+        if caught != dead:
+            errors.append(f"dead-save self-test: {label} was {'accepted' if dead else 'refused'}")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
