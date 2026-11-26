@@ -53,6 +53,18 @@ pub(in super::super) fn graceful_ending(
     }
 }
 
+/// The graceful ending for a handover whose `budget` was fixed before its
+/// stop snapshot ran: the time the snapshot took comes off first, so the
+/// waits fit what is left and the stop still ends inside the stage's budget.
+pub(super) fn ending_after_snapshot(
+    budget: Duration,
+    snapshot_took: Duration,
+    stdin_closed: bool,
+    deadline: Option<&StopDeadline>,
+) -> Ending {
+    graceful_ending(budget.saturating_sub(snapshot_took), stdin_closed, deadline)
+}
+
 /// The budget left for a stop started now: the caller's deadline, else
 /// [`DEFAULT_STOP_BUDGET`].
 pub(super) fn stop_budget() -> Duration {

@@ -321,3 +321,21 @@ impl super::StopDeadline {
         }
     }
 }
+
+/// A handover's budget is fixed before its stop snapshot runs (a cut snapshot
+/// may read for up to 20 ms), so the snapshot's time comes off before the
+/// plan: 3 s past the kill reserve with a 1 s snapshot leaves waits of 2 s,
+/// and with no snapshot time the waits stay 3 s. Red if the snapshot's time
+/// is not subtracted (waits of 3 s both times).
+#[test]
+fn a_handover_plans_only_what_its_snapshot_left() {
+    let budget = KILL_RESERVE + Duration::from_secs(3);
+    let after = super::ending_after_snapshot(budget, Duration::from_secs(1), true, None);
+    assert_eq!(
+        after.waits(),
+        Duration::from_secs(2),
+        "the snapshot's second was planned"
+    );
+    let untouched = super::ending_after_snapshot(budget, Duration::ZERO, true, None);
+    assert_eq!(untouched.waits(), Duration::from_secs(3));
+}

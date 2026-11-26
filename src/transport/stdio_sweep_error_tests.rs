@@ -454,6 +454,22 @@ fn an_incomplete_snapshot_with_time_left_is_not_read_again() {
     assert_eq!(fake.reads, 1, "an uncut incomplete reading was retried");
 }
 
+/// Option 4 (d), lead 11-27: a retry also needs a whole slice of the stop's
+/// remaining time. With 3 ms left (less than one 5 ms slice) a cut reading is
+/// not read again: one reading, and the snapshot keeps what it has. Red if
+/// the retries ignore the time the stop has left.
+#[test]
+fn a_snapshot_with_less_than_a_slice_left_reads_once() {
+    let mut fake = Fake::new(&[(70, 1), (71, 70)]);
+    fake.cut_reads = 100;
+    let mut sweep = Sweep::new(id(70), cfg());
+    sweep.snapshot_within(&mut fake, ms(3));
+    assert_eq!(
+        fake.reads, 1,
+        "a cut reading was retried past the stop's budget"
+    );
+}
+
 /// Option 4 (c): readings that keep being cut stop at SNAPSHOT_SLICES (4); the
 /// snapshot then keeps what it has and counts each short reading. Red if the
 /// cap is missing or different.

@@ -332,8 +332,9 @@ impl ChildTree {
     /// Record this tree's descendants now: called before the first signal of a
     /// stop (including the stdin close) and on every reaper step before the
     /// group kill. A start-time read that failed at construction is retried.
+    /// The snapshot spends at most `limit`, the time the stop has left.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    pub(super) fn sweep_snapshot(&mut self) {
+    pub(super) fn sweep_snapshot(&mut self, limit: std::time::Duration) {
         if self.sweep.is_none()
             && !self.signals_closed
             && let Some(root) = self
@@ -343,14 +344,14 @@ impl ChildTree {
             self.sweep = Some(super::sweep::Sweep::new(root, super::sweep::config()));
         }
         if let Some(sweep) = self.sweep.as_mut() {
-            sweep.snapshot(&mut super::sweep::PlatformTable::new());
+            sweep.snapshot_within(&mut super::sweep::PlatformTable::new(), limit);
         }
     }
 
     /// No descendant sweep on this platform.
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     #[allow(clippy::unused_self)]
-    pub(super) fn sweep_snapshot(&mut self) {}
+    pub(super) fn sweep_snapshot(&mut self, _limit: std::time::Duration) {}
 
     /// Freeze, verify and kill every descendant, once, before the group kill.
     /// Residuals are logged as a count and pids only: never a command line.
@@ -415,7 +416,14 @@ impl ChildTree {
         // sweep's picture of the tree is taken while the backend still holds it.
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if self.reaping.is_none() {
-            self.sweep_snapshot();
+            let left = self
+                .stop_deadline
+                .as_ref()
+                .and_then(|deadline| deadline.get())
+                .map_or(std::time::Duration::MAX, |at| {
+                    at.saturating_duration_since(now)
+                });
+            self.sweep_snapshot(left);
         }
         if self.reaping.is_none() && self.in_grace(now) {
             return Reap::Pending;

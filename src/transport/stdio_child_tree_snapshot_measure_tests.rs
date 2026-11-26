@@ -65,7 +65,12 @@ async fn measure_the_first_snapshot_on_the_handover_path() {
             // timing: fixture
             tokio::time::sleep(Duration::from_millis(100)).await;
             let at = std::time::Instant::now();
-            t.child.lock().tree.as_mut().expect("tree").sweep_snapshot();
+            t.child
+                .lock()
+                .tree
+                .as_mut()
+                .expect("tree")
+                .sweep_snapshot(std::time::Duration::MAX);
             took.push(at.elapsed());
             t.close().await.expect("close");
         }

@@ -288,17 +288,28 @@ impl Sweep {
     /// readings. A reading incomplete for another reason (an unreadable
     /// entry) is not retried: it would read the same next time. After the
     /// last slice the snapshot keeps what it found; `incomplete_reads` counts
-    /// every short reading and the sweep's report warns.
-    pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
+    /// every short reading and the sweep's report warns. A retry also needs a
+    /// whole slice of `limit` (the time the stop has left) still unspent, so
+    /// a late stop with a small budget reads once and never spends more on
+    /// the snapshot than it has.
+    pub(super) fn snapshot_within(&mut self, table: &mut dyn ProcessTable, limit: Duration) {
+        let began = table.now();
         for _ in 0..SNAPSHOT_SLICES {
             let until = table.now() + SNAPSHOT_SLICE;
             let listing = self.read(table, until);
             let cut = !listing.complete && table.now() >= until;
             self.collect(&listing);
-            if !cut {
+            let spent = table.now().saturating_sub(began);
+            if !cut || spent.saturating_add(SNAPSHOT_SLICE) > limit {
                 break;
             }
         }
+    }
+
+    /// Test only: a snapshot with no stop deadline to fit.
+    #[cfg(test)]
+    pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
+        self.snapshot_within(table, Duration::MAX);
     }
 
     /// One reading: walked from the root and every member, the dropped read
