@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
+--- a/src/gateway/ui/shell/chart.d67f9b90c255.js
++++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
+@@ -166,7 +166,7 @@
+ 
+   // The numbers: one row per bucket of the main series, one column per series, read by time.
+   const byTime = lines.map((s) => new Map(s.points.map((p) => [p.t, p.v])));
+-  const cell = (v) => h('td', { class: 'num' }, isValue(v) ? yWords(v) : NOT_COUNTED);
++  const cell = (v) => h('td', { class: 'num' }, isValue(v) ? yWords(v) : '');
+   fig.append(h('details', { class: 'chart-numbers' }, h('summary', {}, 'The numbers'),
+     h('table', {},
+       h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Time'), ...lines.map((s) => h('th', { scope: 'col' }, `${s.name} (${words})`)))),

@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
+--- a/src/gateway/ui/shell/chart.d67f9b90c255.js
++++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
+@@ -46,7 +46,7 @@
+     run.push(`${(i * step).toFixed(1)},${(17 - (max ? (v / max) * 16 : 0)).toFixed(1)}`);
+   });
+   flush();
+-  return h('span', { class: 'chart-spark', title: words, 'data-unit': unit.words }, svg, h('span', { class: 'sr-only' }, words));
++  return h('span', { class: 'chart-spark', title: label, 'data-unit': unit.words }, svg, h('span', { class: 'sr-only' }, words));
+ }
+ 
+ const NOTHING = 'Nothing counted in this period yet';

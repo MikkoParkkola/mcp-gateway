@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
+--- a/src/gateway/ui/shell/chart.d67f9b90c255.js
++++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
+@@ -132,7 +132,7 @@
+       run = [];
+     };
+     for (const p of s.points) {
+-      if (!isValue(p.v)) end();
++      if (!isValue(p.v)) {}
+       else if (shown(xAt(p.t))) run.push([xAt(p.t), yAt(p.v)]);
+     }
+     end();
