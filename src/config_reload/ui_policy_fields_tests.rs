@@ -112,6 +112,7 @@ async fn save(
         WAIT,
     )
     .await
+    .result
 }
 
 /// P1/P2: on a commented file with no `security:` section, each row

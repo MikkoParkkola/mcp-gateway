@@ -452,9 +452,9 @@ fn a4_a_failed_intent_append_or_fsync_refuses_the_write() {
             "{fault:?} never reached the intent"
         );
         // The writer records "intent" only after the append returned: a
-        // failed append or fsync leaves no such step, and no commit follows.
+        // failed append or fsync leaves only the traced writer's first step.
         let steps = crate::config_reload::write_order::take(&target);
-        assert!(steps.is_empty(), "{fault:?}: the writer went on: {steps:?}");
+        assert_eq!(steps, ["traced"], "{fault:?}: the writer went on");
     }
 }
 
