@@ -191,7 +191,7 @@ const NEEDS = {
       go: key ? `See ${str(d.name)} ›` : 'See costs ›',
     };
   },
-  alert_failed: ({ detail: d = {} }) => ({
+  alert_failed_off: ({ detail: d = {} }) => ({
     glyph: '⚠', title: own(ALERT_TITLE, d.state) ?? ALERT_TITLE_UNKNOWN, href: '/ui/gateway/status', go: 'Gateway status ›',
     lines: [str(d.fix), ALERT_LAST_DELIVERY(d.last_delivery_at)],
   }),
