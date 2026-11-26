@@ -98,6 +98,14 @@ fn text(path: &Path) -> String {
 fn write(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
     std::fs::write(path, body).expect("write fixture");
+    // Owner-only: the gateway refuses a config others can read, and the runner's umask decides that, so a
+    // group-readable fixture would stop at that refusal before the row's own error.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("fixture mode");
+    }
 }
 
 /// A loopback URL nothing can listen on: port 0 is never a listening port, so the connection is refused at once,
