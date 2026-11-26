@@ -223,7 +223,7 @@ function needsYouPanel(data) {
     console.warn('overview: a needs-you row of a kind this page does not draw');
     return needRow('unknown', { glyph: '⚠', title: UNKNOWN_ITEM, lines: [str(r?.subject)] });
   });
-  if (degraded(data, 'needs_you.decisions')) {
+  if (degraded(data, 'needs_you.decisions_off')) {
     const after = rows.findIndex((r) => r.dataset.kind !== 'invalid_config');
     rows.splice(after < 0 ? rows.length : after, 0, needRow('decisions', { glyph: '☐', title: FAILED, lines: [] }));
   }
