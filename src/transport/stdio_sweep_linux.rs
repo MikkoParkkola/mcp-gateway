@@ -245,8 +245,10 @@ impl LinuxTable {
 
     /// One `stat` read under this table's proc root.
     fn stat_at(&mut self, pid: u32) -> Lookup {
-        let path = self.proc_root.join(format!("{pid}/stat"));
-        self.counted_stat(&path)
+        let read = stat_file(&self.proc_root.join(format!("{pid}/stat")));
+        #[cfg(test)]
+        self.tick();
+        read
     }
 
     /// One task's own `stat` under this table's proc root.
@@ -254,11 +256,8 @@ impl LinuxTable {
         let mut path = self.proc_root.join(format!("{pid}/task"));
         path.push(tid);
         path.push("stat");
-        self.counted_stat(&path)
-    }
-
-    fn counted_stat(&mut self, path: &std::path::Path) -> Lookup {
-        let read = stat_file(path);
+        let read = stat_file(&path);
+        #[cfg(test)]
         self.tick();
         read
     }
@@ -266,20 +265,18 @@ impl LinuxTable {
     /// Count one stat or children-file read, after its bytes were read. Test
     /// only: the count drives `expire_after_reads`, and `rewrite_after_read`
     /// writes its one file right after its one read returned, so a row can
-    /// change a file between two reads.
+    /// change a file between two reads. Called only from test builds.
+    #[cfg(test)]
     fn tick(&mut self) {
-        #[cfg(test)]
+        self.reads += 1;
+        if let Some((at, path, text)) = &self.rewrite_after_read
+            && self.reads == *at
         {
-            self.reads += 1;
-            if let Some((at, path, text)) = &self.rewrite_after_read
-                && self.reads == *at
-            {
-                // A new task directory needs its parent made first.
-                let made = path
-                    .parent()
-                    .is_none_or(|dir| std::fs::create_dir_all(dir).is_ok());
-                self.rewrite_fired = made && std::fs::write(path, text).is_ok();
-            }
+            // A new task directory needs its parent made first.
+            let made = path
+                .parent()
+                .is_none_or(|dir| std::fs::create_dir_all(dir).is_ok());
+            self.rewrite_fired = made && std::fs::write(path, text).is_ok();
         }
     }
 
@@ -309,6 +306,7 @@ impl LinuxTable {
         path.push(tid);
         path.push("children");
         let read = children_in(std::fs::read_to_string(path));
+        #[cfg(test)]
         self.tick();
         read
     }
@@ -460,41 +458,7 @@ impl LinuxTable {
                 if self.expired(until) {
                     return false;
                 }
-                // (ii) Every listed child, stat'ed after the whole file was
-                // read: a removal mid-read (the kernel then skips a sibling)
-                // shows as gone, a reused pid or a reparent as another parent.
-                // It must also be Stopped HERE, not only at its own later walk:
-                // the parent's children file is reliable only while the
-                // children are stopped during that read. Judged for a child
-                // already seen too (a member walked as a seed, D5'''' (ii'')):
-                // its own walk must not stand in for this check.
-                let already = seen.contains(&child);
-                match self.stat_at(child) {
-                    Lookup::Found(stat) if stat.ppid == pid => {
-                        if stat.state != ProcState::Stopped {
-                            listing.settled = false;
-                        }
-                        // Added only once: a child turned away under another
-                        // parent is still taken here, under its real one.
-                        if !already {
-                            let id = Identity {
-                                pid: child,
-                                start: stat.start,
-                            };
-                            seen.insert(child);
-                            listing.rows.push((id, stat.ppid));
-                            queue.push(id);
-                        }
-                    }
-                    Lookup::Found(_) | Lookup::Gone => listing.settled = false,
-                    Lookup::Unreadable => {
-                        listing.complete = false;
-                        listing.settled = false;
-                        if !already {
-                            listing.unreadable.push(child);
-                        }
-                    }
-                }
+                self.judge_child(pid, child, listing, queue, seen);
             }
             if self.expired(until) {
                 return false;
@@ -511,27 +475,9 @@ impl LinuxTable {
         }
         // (iii) A thread created after the first directory read was never
         // walked: a tid only the second read lists unsettles the reading.
-        match std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) {
-            Ok(again) => {
-                for task in again {
-                    match task {
-                        Ok(task) if tids.contains(&task.file_name()) => {}
-                        Ok(_) => {
-                            listing.settled = false;
-                            exited = false;
-                        }
-                        Err(_) => {
-                            listing.complete = false;
-                            listing.settled = false;
-                            exited = false;
-                        }
-                    }
-                }
-            }
-            Err(_) => {
-                listing.settled = false;
-                exited = false;
-            }
+        if !self.task_set_held(pid, &tids, listing) {
+            listing.settled = false;
+            exited = false;
         }
         // (i') The leader alone, at both directory reads.
         exited &= tids.len() == 1 && tids[0].to_str() == Some(pid.to_string().as_str());
@@ -542,6 +488,72 @@ impl LinuxTable {
             self.exited.insert(who);
         }
         true
+    }
+
+    /// One child listed in `pid`'s children file, judged under (ii) and, if it
+    /// is still `pid`'s child, added to the reading once.
+    fn judge_child(
+        &mut self,
+        pid: u32,
+        child: u32,
+        listing: &mut Listing,
+        queue: &mut Vec<Identity>,
+        seen: &mut std::collections::HashSet<u32>,
+    ) {
+        // (ii) Every listed child, stat'ed after the whole file was
+        // read: a removal mid-read (the kernel then skips a sibling)
+        // shows as gone, a reused pid or a reparent as another parent.
+        // It must also be Stopped HERE, not only at its own later walk:
+        // the parent's children file is reliable only while the
+        // children are stopped during that read. Judged for a child
+        // already seen too (a member walked as a seed, D5'''' (ii'')):
+        // its own walk must not stand in for this check.
+        let already = seen.contains(&child);
+        match self.stat_at(child) {
+            Lookup::Found(stat) if stat.ppid == pid => {
+                if stat.state != ProcState::Stopped {
+                    listing.settled = false;
+                }
+                // Added only once: a child turned away under another
+                // parent is still taken here, under its real one.
+                if !already {
+                    let id = Identity {
+                        pid: child,
+                        start: stat.start,
+                    };
+                    seen.insert(child);
+                    listing.rows.push((id, stat.ppid));
+                    queue.push(id);
+                }
+            }
+            Lookup::Found(_) | Lookup::Gone => listing.settled = false,
+            Lookup::Unreadable => {
+                listing.complete = false;
+                listing.settled = false;
+                if !already {
+                    listing.unreadable.push(child);
+                }
+            }
+        }
+    }
+
+    /// Rule (iii)'s second read of `pid`'s task directory: true only when it
+    /// reads and names no tid the first read missed. An entry that fails to
+    /// read also leaves the reading incomplete.
+    fn task_set_held(&self, pid: u32, tids: &[std::ffi::OsString], listing: &mut Listing) -> bool {
+        let Ok(again) = std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) else {
+            return false;
+        };
+        let mut held = true;
+        for entry in again {
+            let Ok(entry) = entry else {
+                listing.complete = false;
+                held = false;
+                continue;
+            };
+            held &= tids.contains(&entry.file_name());
+        }
+        held
     }
 
     /// The full scan: every process under the proc root, one `stat` each.

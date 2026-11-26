@@ -31,6 +31,13 @@ fn cfg() -> SweepConfig {
     }
 }
 
+/// Whether the fake's complete readings settle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settling {
+    Always,
+    Never,
+}
+
 struct Proc {
     id: Identity,
     ppid: u32,
@@ -88,8 +95,8 @@ struct Fake {
     /// A by-pid target that is running when its identity is checked exits and its
     /// pid is reused before the signal lands: (pid, start of the reusing process).
     reuse_while_running: Option<(u32, u64)>,
-    /// Every reading is complete but unsettled (a tree that never settles).
-    unsettled: bool,
+    /// Whether a complete reading settles (a tree that never settles: Never).
+    settling: Settling,
     /// Readings so far.
     reads: u32,
     /// At this reading a new running child of pid 1 appears (pid 900).
@@ -134,7 +141,7 @@ impl Fake {
             unreadable: None,
             fail: None,
             reuse_while_running: None,
-            unsettled: false,
+            settling: Settling::Always,
             reads: 0,
             appear_at_read: None,
             idles: Vec::new(),
@@ -278,7 +285,7 @@ impl ProcessTable for Fake {
             complete: true,
             unreadable: self.foreign.into_iter().collect(),
             gone: Vec::new(),
-            settled: !self.unsettled,
+            settled: self.settling == Settling::Always,
         };
         let seeds: Vec<Identity> = walk.iter().chain(stat_only).copied().collect();
         listing.gone = super::full_scan_gone(&seeds, &listing);
@@ -760,7 +767,7 @@ fn the_pidfd_limit_is_floored_capped_and_leaves_a_reserve() {
 fn unsettled_readings_back_off_from_1_to_16_ms_within_the_slice() {
     let slice = ms(200);
     let mut fake = Fake::new(&[(1, 0)]);
-    fake.unsettled = true;
+    fake.settling = Settling::Never;
     fake.appear_at_read = Some(5);
     let config = SweepConfig {
         freeze_slice: slice,

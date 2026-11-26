@@ -45,9 +45,13 @@ fn an_unreadable_task_state_settles_nothing() {
 /// running, gone (the trace of a mid-read removal, when the kernel skips a
 /// sibling), or a pid now held by another parent's process all unsettle it,
 /// and the last is not added.
+/// One (ii) case: its name, the child's (parent, state) or gone, and whether
+/// the reading settles.
+type ListedCase = (&'static str, Option<(u32, char)>, bool);
+
 #[test]
 fn a_listed_child_settles_only_while_stopped_and_still_that_parents() {
-    let cases: [(&str, Option<(u32, char)>, bool); 5] = [
+    let cases: [ListedCase; 5] = [
         ("stopped", Some((fake(1), 'T')), true),
         ("zombie", Some((fake(1), 'Z')), false),
         ("gone", None, false),
@@ -248,7 +252,7 @@ fn a_reparented_grandchild_is_skipped_unsettles_and_is_found_under_its_new_paren
 
 /// D5''' cost row: a stopped tree holding one Zombie child (exited before the
 /// freeze; its frozen parent cannot reap it) reads complete but unsettled, on
-/// every reading, so the freeze loop over it runs to freeze_end (R-omit pins
+/// every reading, so the freeze loop over it runs to `freeze_end` (R-omit pins
 /// that only a settled reading ends the loop). A stopped tree without the
 /// zombie settles.
 #[test]
