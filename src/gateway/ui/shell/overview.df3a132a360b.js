@@ -276,7 +276,7 @@ const SOME_ACTION = 'Admin action';
 const UNNAMED = 'an unnamed caller';
 /** The sentence's ending by the audit's outcome word, first match: ok adds nothing. */
 const ENDINGS = [['ok', ''], ['denied', ', refused'], ['invalid', ', not accepted']];
-const ending = (outcome) => (ENDINGS.find(([w]) => w === outcome) ?? [null, ', failed'])[1];
+const ending = (outcome) => (outcome, '');
 
 /** Last actions: the newest admin actions, or the read-failed words; null when the gateway keeps no log. */
 function lastActionsPanel(data) {
