@@ -290,7 +290,7 @@ test('K14 the module alone: a second series, a limit, and a day across a clock c
     const host = document.querySelector('#content');
     const dash = (fig, sel) => getComputedStyle(fig.querySelector(sel)).strokeDasharray;
     const costs = chart({ caption: 'Spend per day', unit, x: String, y: String, summary: 's', limit: { value: 150, words: 'daily limit' },
-      series: [{ name: 'spent', role: 'main', points: pts([10, 120, 30, 60]) }, { name: 'other', role: 'second', points: pts([5, 6, 7, 8]) }] });
+      series: [{ name: 'spent', role: 'main', points: pts([10, 90, 30, 60]) }, { name: 'other', role: 'second', points: pts([5, 6, 7, 8]) }] });
     const both = chart({ caption: 'c', unit, x: String, y: String, summary: 's',
       series: [{ name: 'now', role: 'main', points: pts([1, 2, 3, 4]) }, { name: 'before', role: 'previous', points: pts([1, 2, 3, 4]) }] });
     host.append(costs, both);
