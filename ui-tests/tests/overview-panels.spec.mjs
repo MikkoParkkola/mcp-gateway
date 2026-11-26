@@ -286,14 +286,16 @@ test('L1 side by side when wide, stacked on a phone, and the tiles keep their ar
   await show(page, BOTH, 1440);
   await expect(panel(page, 'needs-you')).toHaveCount(1);
   await expect(panel(page, 'last-actions')).toHaveCount(1);
-  expect(await top(panel(page, 'needs-you'))).toBe(await top(panel(page, 'last-actions')));
+  // Layout settles after a resize: poll, never read once.
+  const tops = async () => [await top(panel(page, 'needs-you')), await top(panel(page, 'last-actions'))];
+  await expect.poll(async () => { const [a, b] = await tops(); return a === b; }).toBe(true);
   await expect(page.locator('#content .ov-strip [data-tile]')).toHaveCount(6);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  expect(await top(panel(page, 'needs-you'))).toBeLessThan(await top(panel(page, 'last-actions')));
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await expect.poll(async () => { const [a, b] = await tops(); return a < b; }).toBe(true);
   await expect(page.locator('#content .ov-strip [data-tile]')).toHaveCount(3);
   await expect(page.locator('#content details.ov-more summary')).toHaveText('More numbers (3)');
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
   await page.setViewportSize({ width: 1440, height: 1100 });
   await expect(page.locator('#content .ov-strip [data-tile]')).toHaveCount(6);
