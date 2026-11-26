@@ -123,46 +123,6 @@ pub(super) fn prepare_from(model: &File, target: &Path, scratch: &Path) -> io::R
     }
 }
 
-/// A `Private` save keeps the target's owner or refuses, before any scratch:
-/// the private copy is owned by the account the gateway runs as, so only a
-/// file that account owns may be replaced by it. A volume that keeps no
-/// access lists has no owner to keep. An owner that cannot be read refuses:
-/// the writer never hands itself a file it cannot inspect.
-pub(super) fn private_owner_allows(target: &Path) -> io::Result<()> {
-    let unreadable = |e: io::Error| {
-        refused(
-            "descriptor-unreadable",
-            target,
-            &format!("its owner could not be read ({e})"),
-        )
-    };
-    let model = OpenOptions::new()
-        .access_mode(READ_CONTROL)
-        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
-        .open(target)
-        .map_err(unreadable)?;
-    if !volume_keeps_acls(&model).map_err(unreadable)? {
-        return Ok(());
-    }
-    let owner = win_acl::inspect(&model).map_err(unreadable)?.owner;
-    let runs_as = win_acl::current_user_sid().map_err(unreadable)?;
-    if owner.as_ref() == Some(&runs_as) {
-        return Ok(());
-    }
-    let named = owner
-        .as_ref()
-        .map_or_else(|| "nobody".to_owned(), win_acl::Sid::to_sddl);
-    Err(refused(
-        "foreign-owner",
-        target,
-        &format!(
-            "its owner is {named}, but a private save makes the file owned by {}; give the \
-             file that owner, or run the gateway as its owner",
-            runs_as.to_sddl()
-        ),
-    ))
-}
-
 /// The scratch's owner, access list (in order) and access-enforcing SACL
 /// entries equal the target's. Runs before any byte is written.
 pub(super) fn verify(file: &File, source: &CopySource, target: &Path) -> io::Result<()> {
