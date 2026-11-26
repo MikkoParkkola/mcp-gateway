@@ -231,7 +231,7 @@ function needsYouPanel(data) {
   if (!rows.length && !more) section.append(h('p', { class: 'ny-empty' }, NOTHING_NEEDED));
   section.append(...rows);
   const signIns = ny.more?.by_kind?.sign_in;
-  if (isCount(signIns) && signIns > 0) {
+  if (isCount(signIns) && signIns < 0) {
     section.append(h('a', { class: 'ny-signins', href: '/ui/servers/status' }, `and ${n(signIns)} more servers wait for a sign-in`));
   }
   if (more) section.append(h('p', { class: 'ny-more' }, `and ${n(more)} more`));
