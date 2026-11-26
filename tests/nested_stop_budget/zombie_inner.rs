@@ -130,8 +130,9 @@ async fn zombie_chain(stop: Stop) -> Ended {
     })
     .await;
     if stop == Stop::Hurried {
-        // Forced takeover (F8): the SIGTERM waits for the inner's own sweep to
-        // begin, so the outer's hurry lands inside the inner's freeze. Left to
+        // Targeted takeover (F8): the SIGTERM waits for the inner's own sweep to
+        // begin, so the outer's hurry is aimed inside the inner's freeze (aimed,
+        // not guaranteed: scheduling can still miss it). Left to
         // the clock, the inner's 1 s pre-reap grace always loses to the outer's
         // 300 ms hurry. No line within the bound fails the row: a premise.
         let inner_log = root.join("inner.log");
@@ -203,7 +204,8 @@ async fn a_zombie_holding_inner_still_leaves_no_leaf() {
     );
 }
 
-/// Hurried stop of the same chain, forced to overlap: the outer's SIGTERM is
+/// Hurried stop of the same chain, with the overlap targeted, not guaranteed:
+/// the outer's SIGTERM is
 /// sent only once the inner logged its freeze start (a premise: no line, the
 /// row fails), and the outer's kill comes about 300 ms later, while the inner's
 /// unsettled freeze runs for its 700 ms slice. No process of the tree may
@@ -211,8 +213,9 @@ async fn a_zombie_holding_inner_still_leaves_no_leaf() {
 /// The run prints one TAKEOVER line: `yes` only when the outer's sweep started at
 /// or after the inner's freeze start and before the inner's freeze end (or the
 /// inner logged no end, being frozen or killed mid-freeze). The SNAP.7 harness
-/// counts those lines (bar: at least 19 of 20); the row itself asserts only what
-/// every run must show.
+/// counts those lines and enforces the overlap coverage (bar: at least 19 of
+/// 20); scheduling can still give one run TAKEOVER=no while the row passes. The
+/// row itself asserts only what every run must show.
 /// Red if a hurried takeover of a zombie-holding inner leaves a leaf behind.
 #[tokio::test]
 async fn a_hurried_takeover_of_a_freezing_inner_leaves_no_leaf() {
