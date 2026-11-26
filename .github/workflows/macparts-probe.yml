@@ -1,0 +1,28 @@
+# OPERATOR PASTE ABOVE THIS LINE: lines 1-32 of `git show a4c4323f79:.github/workflows/maccache-probe.yml`
+# (header, trigger, job and the two pinned actions), then the lane sets the trigger branch to
+# throwaway/macparts-10317 and the job name. Throwaway probe, never merged: the macOS lib-b compile with 2
+# test parts instead of 4, plus the shared floor alone; tests are listed, not run.
+      - name: Record swap every half minute in the background
+        run: nohup sh -c 'while true; do echo "$(date -u +%T) $(sysctl -n vm.swapusage)"; sleep 30; done' > "$RUNNER_TEMP/swap.log" 2>&1 &
+      - name: Build the floor, parts 1+2 and parts 3+4, timing each
+        timeout-minutes: 160
+        env:
+          CARGO_INCREMENTAL: 0
+        run: |
+          set -euo pipefail
+          for parts in 0 1,2 3,4; do
+            start=$(date +%s)
+            echo "probe: build $parts start $(date -u +%T)"
+            MCP_GATEWAY_TEST_PART="$parts" cargo test --all-features --no-fail-fast --lib --no-run \
+              --message-format=json-render-diagnostics > "$RUNNER_TEMP/build-$parts.json"
+            echo "probe: build $parts took $(( $(date +%s) - start )) s"
+            if [ "$parts" != 0 ]; then
+              bin=$(python3 scripts/ci/macparts_probe_bin.py "$RUNNER_TEMP/build-$parts.json")
+              echo "probe: build $parts lists $("$bin" --list --format terse | grep -c ': test$') tests"
+            fi
+          done
+      - name: Runner and swap samples
+        if: always()
+        run: |
+          echo "runner: $(sysctl -n hw.ncpu) CPUs, $(( $(sysctl -n hw.memsize) / 1073741824 )) GB"
+          cat "$RUNNER_TEMP/swap.log" || true
