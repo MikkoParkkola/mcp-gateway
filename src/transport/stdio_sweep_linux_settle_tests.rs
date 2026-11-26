@@ -438,3 +438,64 @@ fn an_exit_seen_in_one_freeze_does_not_carry_to_the_next() {
     assert_eq!(settled_over(&tree, &walk, 2), vec![false, true]);
     assert_eq!(settled_over(&tree, &walk, 1), vec![false], "carried over");
 }
+
+/// Code review r1 (both seats, CRITICAL): a pid reused under its own walk. S
+/// lists K, K lists G. After read 9 (G's listing stat, inside K's walk: S seed
+/// 1, S task 2, S children 3, K stat 4, S task 5, S re-read 6, K task 7, K
+/// children 8, G stat 9) K's pid is given another start time, as if K died and
+/// a stranger took the pid. The walk's identity re-check drops what K's walk
+/// added, so G is not adopted, and the reading is neither complete nor settled.
+/// Untouched, G is added and the reading settles. Red if the re-check after the
+/// walk is removed (G adopted from a stranger's children file).
+#[test]
+fn a_pid_reused_under_its_walk_adopts_none_of_its_children() {
+    let (k, g) = (fake(2), fake(3));
+    let tree = s_and_k('T');
+    tree.proc(g, k, 'T', 1, &[]);
+    tree.task(k, k, 'T', &[g]);
+    let control = read_from_s(&tree);
+    assert!(pids(&control).contains(&g), "premise: G is K's child");
+    assert!(control.settled, "premise: the untouched tree settles");
+    let swapped = read_with_rewrite(
+        &tree,
+        9,
+        &format!("{k}/stat"),
+        &stat_line(k, fake(1), 'T', 2),
+    );
+    assert!(
+        !pids(&swapped).contains(&g),
+        "a stranger's child was adopted"
+    );
+    assert!(pids(&swapped).contains(&k), "S's own finding was dropped");
+    assert!(
+        !swapped.complete,
+        "a reused pid's walk left the reading complete"
+    );
+    assert!(!swapped.settled, "a reused pid's walk settled the reading");
+}
+
+/// Code review r1 (both seats, MEDIUM): rule (iii)'s re-read checks `until`
+/// per entry. A lone root with five tasks spends reads 2-16 on them (state,
+/// children, state each) and reads 17-21 on the re-read; the clock passes
+/// `until` at read 18, inside the re-read, so the reading stops there, cut
+/// short. Red if the re-read ignores `until` (it runs on to read 21 and the
+/// reading comes back complete).
+#[test]
+fn the_task_directory_re_read_stops_where_until_passes() {
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'T', 1, &[]);
+    for tid in 10..14 {
+        tree.task(fake(1), fake(tid), 'T', &[]);
+    }
+    let untouched = read_from_s(&tree);
+    assert!(
+        untouched.complete && untouched.settled,
+        "premise: it settles"
+    );
+    let mut short = LinuxTable::with_root(tree.path());
+    short.expire_after_reads = Some(18);
+    let cut_off = short.read(&[who(fake(1), 1)], &[], Duration::MAX);
+    assert_eq!(short.reads, 18, "the re-read ran past read 18");
+    assert!(!cut_off.complete, "cut inside the re-read, yet complete");
+    assert!(!cut_off.settled, "cut inside the re-read, yet settled");
+}

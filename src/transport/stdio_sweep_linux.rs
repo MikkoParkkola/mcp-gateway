@@ -262,7 +262,8 @@ impl LinuxTable {
         read
     }
 
-    /// Count one stat or children-file read, after its bytes were read. Test
+    /// Count one stat or children-file read (or one entry of rule (iii)'s task
+    /// directory re-read), after its bytes were read. Test
     /// only: the count drives `expire_after_reads`, and `rewrite_after_read`
     /// writes its one file right after its one read returned, so a row can
     /// change a file between two reads. Called only from test builds.
@@ -401,6 +402,10 @@ impl LinuxTable {
         if self.expired(until) {
             return false;
         }
+        // What this walk adds, so a pid reused under it can be undone below.
+        let rows_before = listing.rows.len();
+        let unreadable_before = listing.unreadable.len();
+        let queued_before = queue.len();
         let tasks = match std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) {
             Ok(tasks) => tasks,
             // Gone since it was listed: its state was never judged here, and
@@ -475,9 +480,34 @@ impl LinuxTable {
         }
         // (iii) A thread created after the first directory read was never
         // walked: a tid only the second read lists unsettles the reading.
-        if !self.task_set_held(pid, &tids, listing) {
-            listing.settled = false;
-            exited = false;
+        match self.task_set_held(pid, &tids, until, listing) {
+            None => return false,
+            Some(true) => {}
+            Some(false) => {
+                listing.settled = false;
+                exited = false;
+            }
+        }
+        // The pid may have been freed and reused during this walk, so every
+        // file read above may be a stranger's. Read the identity once more,
+        // after the last read (a changed start time is permanent, so this one
+        // check covers every read before it). Another start time, or a stat
+        // that cannot be read, drops all this walk added: a stranger's children
+        // are never adopted, and the reading is neither complete nor settled.
+        // Gone is no stranger: its children are kept, the reading unsettled.
+        match stat_file(&self.proc_root.join(format!("{pid}/stat"))) {
+            Lookup::Found(stat) if stat.start == who.start => {}
+            Lookup::Gone => listing.settled = false,
+            Lookup::Found(_) | Lookup::Unreadable => {
+                listing.rows.truncate(rows_before);
+                listing.unreadable.truncate(unreadable_before);
+                for added in queue.drain(queued_before..) {
+                    seen.remove(&added.pid);
+                }
+                listing.complete = false;
+                listing.settled = false;
+                return true;
+            }
         }
         // (i') The leader alone, at both directory reads.
         exited &= tids.len() == 1 && tids[0].to_str() == Some(pid.to_string().as_str());
@@ -537,23 +567,38 @@ impl LinuxTable {
         }
     }
 
-    /// Rule (iii)'s second read of `pid`'s task directory: true only when it
-    /// reads and names no tid the first read missed. An entry that fails to
-    /// read also leaves the reading incomplete.
-    fn task_set_held(&self, pid: u32, tids: &[std::ffi::OsString], listing: &mut Listing) -> bool {
+    /// Rule (iii)'s second read of `pid`'s task directory: `Some(true)` only
+    /// when it reads and names no tid the first read missed. An entry that
+    /// fails to read also leaves the reading incomplete. `None` when `until`
+    /// passed during it (checked per entry: a thread-heavy process must not
+    /// run the read past the slice); the caller cuts the reading short.
+    fn task_set_held(
+        &mut self,
+        pid: u32,
+        tids: &[std::ffi::OsString],
+        until: Duration,
+        listing: &mut Listing,
+    ) -> Option<bool> {
+        let known: std::collections::HashSet<&std::ffi::OsStr> =
+            tids.iter().map(std::ffi::OsString::as_os_str).collect();
         let Ok(again) = std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) else {
-            return false;
+            return Some(false);
         };
         let mut held = true;
         for entry in again {
+            #[cfg(test)]
+            self.tick();
+            if self.expired(until) {
+                return None;
+            }
             let Ok(entry) = entry else {
                 listing.complete = false;
                 held = false;
                 continue;
             };
-            held &= tids.contains(&entry.file_name());
+            held &= known.contains(entry.file_name().as_os_str());
         }
-        held
+        Some(held)
     }
 
     /// The full scan: every process under the proc root, one `stat` each.

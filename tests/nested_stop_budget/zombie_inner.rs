@@ -220,14 +220,13 @@ async fn a_zombie_holding_inner_still_leaves_no_leaf() {
 #[tokio::test]
 async fn a_hurried_takeover_of_a_freezing_inner_leaves_no_leaf() {
     let ended = zombie_chain(Stop::Hurried).await;
-    let outer_start = line_with(&ended.outer_log, FREEZE_START)
-        .map(stamp)
-        .unwrap_or_else(|| {
-            panic!(
-                "the outer logged no freeze start (missing line = FAIL)\n{}",
-                ended.outer_log
-            )
-        });
+    let Some(outer_line) = line_with(&ended.outer_log, FREEZE_START) else {
+        panic!(
+            "the outer logged no freeze start (missing line = FAIL)\n{}",
+            ended.outer_log
+        )
+    };
+    let outer_start = stamp(outer_line);
     let inner_start = line_with(&ended.inner_log, FREEZE_START).map(stamp);
     let inner_end = line_with(&ended.inner_log, FREEZE_END).map(stamp);
     let takeover = inner_start.is_some_and(|start| start <= outer_start)
