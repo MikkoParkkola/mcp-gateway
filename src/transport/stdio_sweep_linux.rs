@@ -88,6 +88,25 @@ fn has_children_files(proc_root: &std::path::Path) -> bool {
     proc_root.join(format!("self/task/{tid}/children")).exists()
 }
 
+/// Take back everything one walk added to the reading, given the lengths of
+/// its rows, unreadable list and queue when the walk began (`marks`), and
+/// leave the reading neither complete nor settled.
+fn undo_walk(
+    listing: &mut Listing,
+    queue: &mut Vec<Identity>,
+    seen: &mut std::collections::HashSet<u32>,
+    marks: (usize, usize, usize),
+) {
+    let (rows, unreadable, queued) = marks;
+    listing.rows.truncate(rows);
+    listing.unreadable.truncate(unreadable);
+    for added in queue.drain(queued..) {
+        seen.remove(&added.pid);
+    }
+    listing.complete = false;
+    listing.settled = false;
+}
+
 /// One children file: the pids it lists, `Ok(None)` when the task is gone
 /// (the file vanished with it), `Err` for any other failure.
 fn children_in(text: std::io::Result<String>) -> Result<Option<Vec<u32>>, ()> {
@@ -403,9 +422,7 @@ impl LinuxTable {
             return false;
         }
         // What this walk adds, so a pid reused under it can be undone below.
-        let rows_before = listing.rows.len();
-        let unreadable_before = listing.unreadable.len();
-        let queued_before = queue.len();
+        let marks = (listing.rows.len(), listing.unreadable.len(), queue.len());
         let tasks = match std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) {
             Ok(tasks) => tasks,
             // Gone since it was listed: its state was never judged here, and
@@ -495,19 +512,12 @@ impl LinuxTable {
         // that cannot be read, drops all this walk added: a stranger's children
         // are never adopted, and the reading is neither complete nor settled.
         // Gone is no stranger: its children are kept, the reading unsettled.
-        match stat_file(&self.proc_root.join(format!("{pid}/stat"))) {
-            Lookup::Found(stat) if stat.start == who.start => {}
-            Lookup::Gone => listing.settled = false,
-            Lookup::Found(_) | Lookup::Unreadable => {
-                listing.rows.truncate(rows_before);
-                listing.unreadable.truncate(unreadable_before);
-                for added in queue.drain(queued_before..) {
-                    seen.remove(&added.pid);
-                }
-                listing.complete = false;
-                listing.settled = false;
-                return true;
-            }
+        let identity = stat_file(&self.proc_root.join(format!("{pid}/stat")));
+        if matches!(identity, Lookup::Gone) {
+            listing.settled = false;
+        } else if !matches!(identity, Lookup::Found(stat) if stat.start == who.start) {
+            undo_walk(listing, queue, seen, marks);
+            return true;
         }
         // (i') The leader alone, at both directory reads.
         exited &= tids.len() == 1 && tids[0].to_str() == Some(pid.to_string().as_str());
