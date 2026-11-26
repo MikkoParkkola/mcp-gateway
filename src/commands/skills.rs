@@ -41,21 +41,14 @@ pub async fn run_skills_generate(
     // (MIK-8044, `super::capability_dirs`).
     let dirs = match super::capability_dirs::resolve(capabilities, config) {
         Ok(dirs) => dirs,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return e.exit(),
     };
     let mut caps = match super::capability_dirs::load(&dirs).await {
         Ok(c) => c.all().to_vec(),
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return e.exit(),
     };
     if caps.is_empty() && matches!(dirs, super::capability_dirs::CapabilityDirs::Configured(_)) {
-        eprintln!("{}.", super::capability_dirs::NONE_FOUND);
-        return ExitCode::FAILURE;
+        return super::capability_dirs::none_found_failure();
     }
 
     // Apply optional filters
