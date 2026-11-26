@@ -82,6 +82,8 @@ while IFS=$'\t' read -r id patch spec grep; do
     fi
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$verdict" "$rc" "$failed" "$passed" "$selected" "${first:--}" | tee -a "$verdicts"
+  # Print-only evidence for the run log (no verdict reads it): first failure location, first Error line.
+  echo "$id at: $(grep -m1 -oE 'at [^ ]*tests/[a-z-]+\.spec\.mjs:[0-9]+' "$out/$id.log" || echo none) | $(grep -m1 -E 'Error:' "$out/$id.log" | cut -c1-200)"
 done < "$here/manifest.tsv"
 
 grep '^# K33' "$here/manifest.tsv" | sed 's/^# //' >> "$verdicts"
