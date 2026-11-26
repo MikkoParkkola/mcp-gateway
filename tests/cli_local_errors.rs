@@ -3,13 +3,15 @@
 //! A local command that fails says so in two stderr lines, `error: <what happened>` and then what to do, exits 1
 //! (2 for a wrong invocation), and keeps stdout to what it printed before failing. The table holds one entry per
 //! leaf of the real command tree except the four remote leaves, so a command added without an entry fails here.
-//! Converted leaves are checked through the built binary at `--log-level off`; leaves still to convert are marked
-//! pending and checked nowhere yet; `serve` keeps its own fatal-line contract.
+//! Every leaf is checked through the built binary at `--log-level off`: a forced failure in the two-line shape, or,
+//! for a leaf with no local failure to force, a plain run that exits 0; `serve` keeps its own fatal-line contract.
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
 #[path = "cli_local_errors/guards.rs"]
 mod guards;
+#[path = "cli_local_errors/leaves_b.rs"]
+mod leaves_b;
 #[path = "common/provenance_fixture.rs"]
 mod provenance_fixture;
 #[path = "cli_local_errors/scenarios.rs"]
@@ -50,14 +52,16 @@ struct Case {
     stdout: String,
     first: Pin,
     second: Pin,
+    /// Environment the row sets after the cleared one (only `cap discover` needs any).
+    env: Vec<(&'static str, String)>,
 }
 
 /// What the table says about a leaf.
 enum Expect {
     /// Converted: a forced failure built in the given scratch folder.
     TwoLines(fn(&Path) -> Case),
-    /// Not converted yet.
-    Pending,
+    /// No local failure to force; the row runs these arguments and the leaf must exit 0. The reason is read in review.
+    CannotFail(fn(&Path) -> Vec<String>, &'static str),
     /// Out of scope, with the reason.
     Exempt(&'static str),
 }
@@ -121,6 +125,7 @@ fn fail_case(args: Vec<String>, first: Pin, second: Pin) -> Case {
         stdout: String::new(),
         first,
         second,
+        env: Vec::new(),
     }
 }
 
@@ -228,6 +233,7 @@ fn table() -> Vec<(&'static str, Expect)> {
         (
             "doctor",
             Expect::TwoLines(|_| Case {
+                env: Vec::new(),
                 args: strings(&["doctor", "--shadow", "--shadow-format", "bogus"]),
                 exit: 2,
                 stdout: String::new(),
@@ -348,6 +354,7 @@ fn table() -> Vec<(&'static str, Expect)> {
     rows.push((
         "cap import-url",
         Expect::TwoLines(|p| Case {
+            env: Vec::new(),
             args: vec![
                 "cap".to_owned(),
                 "import-url".to_owned(),
@@ -366,61 +373,26 @@ fn table() -> Vec<(&'static str, Expect)> {
         "runtime compile",
         Expect::TwoLines(|p| missing_input(p, &["runtime", "compile"], "missing.yaml", &[])),
     ));
-    // Leaves the second half of the work converts; listed newest-first by family, compared sorted.
-    let pending = [
-        "validate",
-        "trust validate",
-        "trust lab evaluate",
-        "trust inspect",
-        "trust generate",
-        "tool list",
-        "tool invoke",
-        "tool inspect",
-        "tool completions",
-        "skills show",
-        "skills search",
-        "skills remove",
-        "skills list",
-        "skills import",
-        "skills generate",
-        "remove",
-        "provenance verify",
-        "provenance public-key",
-        "list",
-        "kubernetes plan",
-        "kubernetes controller",
-        "kubernetes apply-plan",
-        "hash-key",
-        "get",
-        "cap validate",
-        "cap test",
-        "cap search",
-        "cap registry-list",
-        "cap pin",
-        "cap list",
-        "cap install",
-        "cap import",
-        "cap discover",
-        "audit verify",
-        "audit show",
-        "add",
-        "accounts migrate-credentials",
-        "accounts init-store",
-    ];
-    rows.extend(pending.into_iter().map(|leaf| (leaf, Expect::Pending)));
+    rows.extend(leaves_b::rows());
     rows
 }
 
 /// Runs the binary with `args` after `--log-level off`, in a throwaway home; at most 60 s.
 fn run(args: &[String]) -> Output {
+    run_env(args, &[], std::process::Stdio::null())
+}
+
+/// [`run`] with `env` set after the cleared environment.
+fn run_env(args: &[String], env: &[(&'static str, String)], stdin: std::process::Stdio) -> Output {
     let home = tempfile::tempdir().expect("home");
     let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
+    command.envs(env.iter().map(|(k, v)| (*k, v.as_str())));
     command
         .env("MCP_GATEWAY_CONFIG_DIR", home.path())
         .arg("--log-level")
         .arg("off")
         .args(args)
-        .stdin(std::process::Stdio::null())
+        .stdin(stdin)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
     finish(command)
@@ -523,37 +495,24 @@ fn the_table_covers_every_local_leaf() {
         "leaves with no table entry: {missing:?}"
     );
     assert!(extra.is_empty(), "table entries for no leaf: {extra:?}");
-    let mut converted: Vec<&str> = rows
+    // With the keys equal to the real leaves and the CannotFail and Exempt sets pinned below, every other key is a
+    // TwoLines row: that set is fixed by these three checks, so it is not listed a second time.
+    let mut cannot_fail: Vec<&str> = rows
         .iter()
-        .filter(|(_, e)| matches!(e, Expect::TwoLines(_)))
+        // A leaf with no failure to force counts only with its reason written down.
+        .filter(|(_, e)| matches!(e, Expect::CannotFail(_, why) if !why.trim().is_empty()))
         .map(|(k, _)| *k)
         .collect();
-    converted.sort_unstable();
-    #[allow(unused_mut, reason = "extended only under the optional features")]
-    let mut expected = vec![
-        "upgrade",
-        "tls issue-server",
-        "tls issue-client",
-        "tls init-ca",
-        "stats",
-        "setup wizard",
-        "ranking eval",
-        "init",
-        "import preview",
-        "import apply",
-        "identity grants revoke",
-        "identity grants list",
-        "identity grants grant",
-        "doctor",
-    ];
-    #[cfg(feature = "config-export")]
-    expected.push("setup export");
-    #[cfg(feature = "discovery")]
-    expected.push("cap import-url");
-    #[cfg(feature = "runtime-substrate")]
-    expected.push("runtime compile");
-    expected.sort_unstable();
-    assert_eq!(converted, expected, "the converted leaves");
+    cannot_fail.sort_unstable();
+    assert_eq!(
+        cannot_fail,
+        [
+            "cap install",
+            "cap registry-list",
+            "cap search",
+            "provenance verify"
+        ]
+    );
     let exempt: Vec<&str> = rows
         .iter()
         // An exemption counts only with its reason written down.
@@ -568,13 +527,25 @@ fn the_table_covers_every_local_leaf() {
 fn local_errors_are_two_lines() {
     let mut misses = Vec::new();
     for (leaf, expect) in table() {
-        let Expect::TwoLines(build) = expect else {
-            continue;
-        };
         let scratch = tempfile::tempdir().expect("scratch");
-        let case = build(scratch.path());
-        let out = run(&case.args);
-        misses.extend(two_lines(leaf, &out, &case));
+        match expect {
+            Expect::TwoLines(build) => {
+                let case = build(scratch.path());
+                let out = run_env(&case.args, &case.env, std::process::Stdio::null());
+                misses.extend(two_lines(leaf, &out, &case));
+            }
+            Expect::CannotFail(args, _) => {
+                let out = run(&args(scratch.path()));
+                if out.status.code() != Some(0) {
+                    misses.push(format!(
+                        "{leaf}: exit {:?}, want 0\n  stderr: {:?}",
+                        out.status.code(),
+                        String::from_utf8_lossy(&out.stderr)
+                    ));
+                }
+            }
+            Expect::Exempt(_) => {}
+        }
     }
     assert!(misses.is_empty(), "{}", misses.join("\n"));
 }
@@ -633,6 +604,7 @@ fn a_bad_ca_key_path_is_a_usage_error() {
     let out = finish(command);
     let case = Case {
         args: Vec::new(),
+        env: Vec::new(),
         exit: 2,
         stdout: "Issuing server certificate for: gw\n".to_owned(),
         first: Pin::Exact("error: CA key path is not valid UTF-8".to_owned()),

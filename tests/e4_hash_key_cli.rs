@@ -95,7 +95,7 @@ fn hash_key_verify_exit_codes() {
         let output = hash_key(&["--verify", digest], b"k-abc\n");
         assert_eq!(output.status.code(), Some(code), "{digest}: {output:?}");
         if code == 1 {
-            // The mismatch verdict's text is pinned before hash_key.rs is converted (MIK-10060.LERRB.4).
+            // The mismatch verdict's text is pinned before hash_key.rs is converted to the shared exit helpers.
             assert_eq!(
                 String::from_utf8_lossy(&output.stderr),
                 "hash-key: the key does not match\n"
