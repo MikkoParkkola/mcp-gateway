@@ -293,7 +293,7 @@ function lastActionsPanel(data) {
   const rows = Array.isArray(la.rows) ? la.rows : [];
   if (!rows.length) section.append(h('p', { class: 'la-empty' }, 'No admin actions yet'));
   for (const r of rows) {
-    const what = ROUTE_WORDS.get(`${str(r?.method)} ${str(r?.route)}`) ?? SOME_ACTION;
+    const what = ROUTE_WORDS.get(`${str(r?.method)} ${str(r?.route)}`) ?? str(r?.route);
     const who = str(r?.who?.account) || str(r?.who?.subject) || UNNAMED;
     section.append(h('div', { class: 'la-row' }, h('span', { class: 'la-time num' }, stamp(r?.at)),
       h('span', { class: 'la-what' }, `${what} by ${who}${ending(r?.outcome)}`)));
