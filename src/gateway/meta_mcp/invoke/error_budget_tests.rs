@@ -613,3 +613,11 @@ fn a_backend_written_frame_is_a_failure_through_the_budget_probe() {
         "{outcome:?}"
     );
 }
+
+/// The backend answered, only too much: sampled as a success, so big
+/// answers cannot open a circuit through the error budget either.
+#[test]
+fn an_answer_over_the_limit_is_sampled_as_answered() {
+    let too_big = Err::<Value, _>(Error::ResponseTooLarge { limit: 1 << 20 });
+    assert_eq!(BudgetOutcome::of(&too_big), BudgetOutcome::Success);
+}

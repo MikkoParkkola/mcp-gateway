@@ -459,10 +459,20 @@ impl Backend {
         )?;
         transport.mark_single_tenant();
         self.attach_needles_to(&transport);
+        self.cap_answers_of(&transport);
         // The same pairing check a slot's start runs: refused when the
         // policy changed since it was read, and recorded when none is pinned.
         self.begin_connecting(built_under)?;
         Ok(transport)
+    }
+
+    /// Bound every answer an HTTP transport reads by this backend's
+    /// `max_frame_bytes` (the transport's own default when unset). Called by
+    /// each construction site before anything reaches the wire.
+    pub(super) fn cap_answers_of(&self, transport: &crate::transport::HttpTransport) {
+        if let Some(bytes) = self.config.max_frame_bytes {
+            transport.set_max_response_bytes(bytes);
+        }
     }
 }
 
