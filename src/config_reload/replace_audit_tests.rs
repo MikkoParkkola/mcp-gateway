@@ -398,7 +398,8 @@ pub(super) fn production_sources(dir: &Path, out: &mut Vec<std::path::PathBuf>) 
 
 /// Source pin for the reload choke point: the file-watch reload, the UI
 /// reload route and the admin reload tool reach the config lock only
-/// through `ReloadContext::reload_outcome`, and nothing in the gateway takes
+/// through `ReloadContext::reload_outcome_from` (the watcher directly, the
+/// other two by the gated entry), and nothing in the gateway takes
 /// the reader lock except that path, so a fourth reload path cannot skip
 /// the recovery intent unseen.
 #[cfg(tp3)]
@@ -437,11 +438,16 @@ fn every_in_gateway_reload_takes_the_lock_through_reload_outcome() {
         reload.contains(".reader_lock_for_reload("),
         "reload_outcome no longer takes its lock through reader_lock_for_reload"
     );
-    for entry in [
-        "config_reload/watcher.rs",
-        "gateway/ui/mod.rs",
-        "gateway/meta_mcp/invoke/admin.rs",
-    ] {
+    // The watcher already holds its own admission, so it runs the shared
+    // transaction itself: the public entry would ask the gate again.
+    let watcher = std::fs::read_to_string(src.join("config_reload/watcher.rs")).expect("read");
+    assert!(
+        watcher.contains(".reload_outcome_from(")
+            && !watcher.contains(".reload_outcome().await")
+            && !watcher.contains(".reload().await"),
+        "config_reload/watcher.rs no longer reloads through reload_outcome_from"
+    );
+    for entry in ["gateway/ui/mod.rs", "gateway/meta_mcp/invoke/admin.rs"] {
         let text = std::fs::read_to_string(src.join(entry)).expect("read entry point");
         // A manual reload goes through the config gate's wrapper, which must itself
         // run the same transaction (asserted below).

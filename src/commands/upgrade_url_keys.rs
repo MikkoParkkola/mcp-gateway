@@ -16,6 +16,7 @@ use super::super::api_key_rewrite::{KeyLeft, KeyRewrite};
 use super::super::backend_url_keys::UrlRewrite;
 use super::super::config_write::{RewriteMode, rewrite_url_aliases_in};
 use super::super::retired_config_keys::{OnLoad, Retired};
+use super::super::{CliExit, check_config_command, fail};
 
 /// `mcp-gateway upgrade`: rewrite the backend URL keys in the config at
 /// `config` (or the one found in the working directory), then run the
@@ -29,11 +30,14 @@ pub fn run_upgrade_with_config(
     // A named file that is missing is a typo, not "no config": going on would
     // stamp the version and report success with nothing migrated.
     if let Some(named) = config.filter(|p| !p.exists()) {
-        eprintln!(
-            "Error: {} not found; nothing was upgraded.",
-            named.display()
+        return fail(
+            CliExit::LocalFailure,
+            &format!("{} not found; nothing was upgraded.", named.display()),
+            &format!(
+                "Check that {} exists and that you can read it, or leave out --config.",
+                named.display()
+            ),
         );
-        return ExitCode::FAILURE;
     }
     let mut blocking = 0;
     // A dry run leaves a rewrite pending when it would change the text.
@@ -55,8 +59,14 @@ pub fn run_upgrade_with_config(
                 pending = dry_run && rewrite.saves;
             }
             Err(e) => {
-                eprintln!("Error: {e}");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &e,
+                    &format!(
+                        "Check that {} exists and that you can write to it.",
+                        path.display()
+                    ),
+                );
             }
         }
     }
@@ -72,7 +82,11 @@ pub fn run_upgrade_with_config(
         use super::grant_rows::{GrantsCheck, check_grant_rows};
         return match check_grant_rows(config) {
             GrantsCheck::Passed => code,
-            GrantsCheck::Refused => ExitCode::FAILURE,
+            GrantsCheck::Refused(refusal) => fail(
+                CliExit::LocalFailure,
+                &refusal,
+                "Fix the identity grants file this names, then run 'mcp-gateway upgrade' again.",
+            ),
             GrantsCheck::ConfigDoesNotLoad(_) if pending => {
                 if !quiet {
                     println!("Identity grants are checked once the rewrite above is applied.");
@@ -80,18 +94,29 @@ pub fn run_upgrade_with_config(
                 code
             }
             GrantsCheck::ConfigDoesNotLoad(why) => {
-                eprintln!("Error: {why}");
-                ExitCode::FAILURE
+                // Named as startup would find it; with no file found, plain doctor looks the same way.
+                let check = super::super::doctor::resolve_config_path(config).map_or_else(
+                    || "mcp-gateway doctor".to_owned(),
+                    |path| check_config_command(&path),
+                );
+                fail(
+                    CliExit::LocalFailure,
+                    &why,
+                    &format!("Run '{check}' to see why the config does not load."),
+                )
             }
         };
     }
-    if quiet {
-        eprintln!(
-            "Error: {blocking} key(s) could not be removed and the config will not load until \
-             they are; run `mcp-gateway upgrade` without --quiet to see them."
-        );
-    }
-    ExitCode::FAILURE
+    let message = format!(
+        "{blocking} key(s) could not be removed and the config will not load until \
+         they are."
+    );
+    let remedy = if quiet {
+        "Run `mcp-gateway upgrade` without --quiet to see them."
+    } else {
+        "Remove the keys listed above by hand, then run 'mcp-gateway upgrade' again."
+    };
+    fail(CliExit::LocalFailure, &message, remedy)
 }
 
 /// What a rewrite did, one line per fact, naming line numbers and backend

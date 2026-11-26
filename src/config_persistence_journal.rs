@@ -254,6 +254,15 @@ pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
 /// Remove the journal, durably, then the staged original. A crash between
 /// the two leaves only debris, which the next recovery or staging removes.
 pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
+    finish_exact(target, &journal_path(target), &original_path(target))
+}
+
+/// [`finish`] on the journal and staged original by the names one save gave
+/// them, never resolved again: a target re-pointed since cannot redirect the
+/// removal to another config's recovery files.
+pub(crate) fn finish_exact(target: &Path, path: &Path, original: &Path) -> std::io::Result<()> {
+    #[cfg(not(test))]
+    let _ = target;
     #[cfg(test)]
     if matches!(fault::get(target), Some(fault::Fault::FailJournalRemove)) {
         fault::note_fired(target);
@@ -261,10 +270,9 @@ pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
             "injected: the journal cannot be removed",
         ));
     }
-    let path = journal_path(target);
-    std::fs::remove_file(&path)?;
-    sync_dir_of(&path)?;
-    remove_if_present(&original_path(target))
+    std::fs::remove_file(path)?;
+    sync_dir_of(path)?;
+    remove_if_present(original)
 }
 
 /// Recover a journal beside `config`, if there is one. The caller holds the

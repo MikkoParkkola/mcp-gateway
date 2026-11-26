@@ -27,14 +27,15 @@ pub async fn run_protocol_import_command(cmd: ProtocolImportCommand) -> ExitCode
         } => {
             match preview_plan_from_file(kind, &file, source_name, context_integrity_profile).await
             {
-                Ok(plan) => {
-                    print_import_plan(&plan, format);
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::FAILURE
-                }
+                Ok(plan) => print_import_plan(&plan, format),
+                Err(e) => super::fail(
+                    super::CliExit::LocalFailure,
+                    &e,
+                    &format!(
+                        "Check that {} exists, that you can read it, and that it holds the kind of source --kind names.",
+                        file.display()
+                    ),
+                ),
             }
         }
         ProtocolImportCommand::Apply {
@@ -56,14 +57,16 @@ pub async fn run_protocol_import_command(cmd: ProtocolImportCommand) -> ExitCode
             )
             .await
             {
-                Ok(report) => {
-                    print_apply_report(&report, format);
-                    ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::FAILURE
-                }
+                Ok(report) => print_apply_report(&report, format),
+                Err(e) => super::fail(
+                    super::CliExit::LocalFailure,
+                    &e,
+                    &format!(
+                        "Take the step the error names (--force, or import preview), else check that {} holds the kind of source --kind names and that you can write to {}.",
+                        file.display(),
+                        output.display()
+                    ),
+                ),
             }
         }
     }
@@ -382,20 +385,22 @@ fn default_source_name(file: &Path) -> String {
         .to_string()
 }
 
-fn print_import_plan(plan: &ImportPlan, format: OutputFormat) {
+fn print_import_plan(plan: &ImportPlan, format: OutputFormat) -> ExitCode {
     match format {
-        OutputFormat::Json => print_json(plan),
+        OutputFormat::Json => return print_json(plan),
         OutputFormat::Plain => print_plain(plan),
         OutputFormat::Table => print_table(plan),
     }
+    ExitCode::SUCCESS
 }
 
-fn print_apply_report(report: &ImportApplyReport, format: OutputFormat) {
+fn print_apply_report(report: &ImportApplyReport, format: OutputFormat) -> ExitCode {
     match format {
-        OutputFormat::Json => print_json(report),
+        OutputFormat::Json => return print_json(report),
         OutputFormat::Plain => print_apply_plain(report),
         OutputFormat::Table => print_apply_table(report),
     }
+    ExitCode::SUCCESS
 }
 
 fn print_apply_plain(report: &ImportApplyReport) {
@@ -513,10 +518,17 @@ fn source_kind_label(kind: ImportSourceKind) -> &'static str {
     }
 }
 
-fn print_json<T: Serialize + ?Sized>(value: &T) {
+fn print_json<T: Serialize + ?Sized>(value: &T) -> ExitCode {
     match serde_json::to_string_pretty(value) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("Error: failed to serialize JSON: {e}"),
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => super::fail(
+            super::CliExit::LocalFailure,
+            &format!("failed to serialize JSON: {e}"),
+            "Rerun with --format table, and report this as a bug.",
+        ),
     }
 }
 

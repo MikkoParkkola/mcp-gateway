@@ -110,7 +110,7 @@ async fn grant_command_rejects_duplicate_without_replace() {
     upsert_local_grant(grant_input(path.clone())).await.unwrap();
     let error = upsert_local_grant(grant_input(path)).await.unwrap_err();
 
-    assert!(error.contains("already exists"));
+    assert!(error.to_string().contains("already exists"));
 }
 
 /// A built-in authority is one word, so a colon in the subject belongs to
@@ -295,7 +295,7 @@ async fn identity_cli_refuses_group_writable_grants() {
     let err = upsert_local_grant(grant_input(path.clone()))
         .await
         .unwrap_err();
-    assert!(err.contains("change it"), "{err}");
+    assert!(err.to_string().contains("change it"), "{err}");
     assert_eq!(
         std::fs::read_to_string(&path).unwrap(),
         body,
