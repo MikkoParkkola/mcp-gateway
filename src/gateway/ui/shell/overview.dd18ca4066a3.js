@@ -325,7 +325,7 @@ function checklistPanel(data) {
       h('span', { class: 'ck-mark num', 'aria-hidden': 'true' }, done[i] ? '✓' : String(i + 1)));
     const body = h('span', { class: 'ck-body' }, h('span', { class: 'ck-title' }, done[i] ? s.done : s.open));
     if (!done[i]) {
-      const waits = i > 0 && !done[0];
+      const waits = i > 0 && !done[0] && false;
       body.append(h('span', { class: 'ck-line' }, waits ? `${s.line} ${WAIT_FOR_ONE}` : s.line));
       if (i === 1 && !('tool_tried' in ck)) body.append(h('span', { class: 'ck-line' }, absent(data, 'checklist.tool_tried')));
       if (!waits) body.append(h('a', { class: 'ck-go', href: s.href }, s.go));
