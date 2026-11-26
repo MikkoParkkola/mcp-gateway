@@ -174,6 +174,15 @@ pub enum Error {
     #[error("Response blocked by security firewall")]
     ResponseFirewallRefused,
 
+    /// A backend's answer was over the gateway's per-response limit and was
+    /// refused while it was read, never held whole. The backend
+    /// ran the call; asking again gets the same answer, so it is not retried.
+    #[error("The backend's response is over the gateway's limit of {limit} bytes")]
+    ResponseTooLarge {
+        /// The limit in bytes (`backends.<name>.max_frame_bytes`, else 16 MiB).
+        limit: usize,
+    },
+
     /// The audit log could not record this call, so its result is withheld
     /// (4.0.0 item D1-f). HTTP 503, JSON-RPC `-32005`. The call may have run:
     /// a client must not blindly retry a side effect.
@@ -658,6 +667,7 @@ impl Error {
             }
             Self::Config(_)
             | Self::ResponseFirewallRefused
+            | Self::ResponseTooLarge { .. }
             | Self::AuditUnavailable
             | Self::ConfigValidation(_)
             | Self::ConfigWatcher(_)
