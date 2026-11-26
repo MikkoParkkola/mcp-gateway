@@ -11,8 +11,8 @@ use std::path::Path;
 use super::winacl_tests::assert_refused_as;
 use super::{FileMode, Symlink, write_atomic};
 use crate::private_fs::test_support::{
-    OwnerPlant, everyone_full_dir, parse_sddl, plant_any, plant_owner, plant_owner_only, read_sddl,
-    user_sid,
+    OwnerPlant, deny_user, everyone_full_dir, parse_sddl, plant_any, plant_owner, plant_owner_only,
+    read_sddl, user_sid,
 };
 
 /// NT AUTHORITY\SYSTEM: an owner this token may not assign without a privilege.
@@ -21,24 +21,13 @@ const SYSTEM: &str = "S-1-5-18";
 const ADMINISTRATORS: &str = "S-1-5-32-544";
 
 /// `oauth.json` in a fresh folder, holding "old" and owned by `owner` (set
-/// `how`), behind a protected list that grants the user `list` (SDDL rights;
-/// empty for none).
-fn planted(
-    row: &str,
-    owner: &str,
-    how: OwnerPlant,
-    list: &str,
-) -> (tempfile::TempDir, std::path::PathBuf) {
+/// `how`), behind a protected list granting the user full access.
+fn planted(row: &str, owner: &str, how: OwnerPlant) -> (tempfile::TempDir, std::path::PathBuf) {
     let dir = everyone_full_dir(row);
     let path = dir.path().join("oauth.json");
     std::fs::write(&path, b"old").unwrap();
     let user = user_sid();
-    let dacl = if list.is_empty() {
-        String::new()
-    } else {
-        format!("(A;;{list};;;{user})")
-    };
-    plant_any(row, &path, &format!("O:{user}D:P{dacl}"));
+    plant_any(row, &path, &format!("O:{user}D:P(A;;FA;;;{user})"));
     plant_owner(row, &path, owner, how);
     (dir, path)
 }
@@ -53,7 +42,7 @@ fn owner_of(row: &str, path: &Path) -> String {
 #[test]
 fn w1_a_private_save_over_a_file_another_account_owns_is_refused() {
     let row = "WINPRIV-W1";
-    let (_dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege, "FA");
+    let (_dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege);
     assert_eq!(owner_of(row, &path), SYSTEM, "{row}: owner not planted");
     let text = assert_refused_as(row, &path, FileMode::Private, "foreign-owner");
     assert!(
@@ -82,7 +71,7 @@ fn w2_a_private_save_over_the_users_own_file_keeps_its_owner() {
 #[test]
 fn w3_a_volume_without_access_lists_has_no_owner_to_keep() {
     let row = "WINPRIV-W3";
-    let (_dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege, "FA");
+    let (_dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege);
     super::windows::test_seams::VOLUME.with(|answer| answer.set(Some(false)));
     let saved = write_atomic(&path, b"new", FileMode::Private, Symlink::Replace);
     super::windows::test_seams::VOLUME.with(|answer| answer.set(None));
@@ -105,7 +94,7 @@ fn w4_a_private_save_over_an_administrators_owned_file_is_refused() {
         "{row}: needs an elevated runner, where new files belong to BUILTIN\\Administrators"
     );
     std::fs::remove_file(&probe).unwrap();
-    let (_dir, path) = planted(row, ADMINISTRATORS, OwnerPlant::AsToken, "FA");
+    let (_dir, path) = planted(row, ADMINISTRATORS, OwnerPlant::AsToken);
     assert_eq!(
         owner_of(row, &path),
         ADMINISTRATORS,
@@ -115,13 +104,16 @@ fn w4_a_private_save_over_an_administrators_owned_file_is_refused() {
     assert!(text.contains(ADMINISTRATORS), "{row}: {text}");
 }
 
-/// W5: a SYSTEM-owned file whose protected list grants this token nothing
-/// (so not even `READ_CONTROL`) is refused `descriptor-unreadable`: the
-/// writer never hands itself a file it cannot inspect.
+/// W5: a SYSTEM-owned file this token is denied `READ_CONTROL` on is refused
+/// `descriptor-unreadable`: the writer never hands itself a file it cannot
+/// inspect.
 #[test]
 fn w5_a_private_save_over_a_file_whose_owner_cannot_be_read_is_refused() {
     let row = "WINPRIV-W5";
-    let (_dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege, "");
+    let (_dir, path) = planted(row, SYSTEM, OwnerPlant::WithRestorePrivilege);
+    // Owned by SYSTEM, so this token has no owner's implicit rights; a deny
+    // entry then takes READ_CONTROL away from it.
+    deny_user(row, &path, "RC");
     assert!(
         std::fs::File::open(&path).is_err(),
         "{row}: the planted file is still readable by this token"
