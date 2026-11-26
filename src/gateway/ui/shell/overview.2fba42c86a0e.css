@@ -4,7 +4,7 @@
    tokens only; the card (.tk) and .num come from the shell. */
 
 /* The shared chart's sheet, loaded with this one, so the calls chart is styled on its first paint. */
-@import url("/ui/assets/chart.45f2c430e79f.css");
+@import url("/ui/assets/chart.304183007870.css");
 /* The chart panel keeps about a chart's height while its read is out, so the panels below stay put. */
 .chart-wait { min-height: calc(var(--space-16) * 4.5); }
 

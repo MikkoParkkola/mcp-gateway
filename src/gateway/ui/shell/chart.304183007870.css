@@ -5,6 +5,9 @@
    long dash and dot. Nothing moves: a chart is complete on its first paint. */
 
 .chart, .chart * { animation: none; transition: none; }
+/* A sparkline's wrapper is a box, not a line of text: the svg keeps its own height, so the row it
+   lands in does not grow when it arrives. Its hidden words are placed inside it. */
+.chart-spark { display: flex; flex: none; position: relative; }
 .chart { margin: 0; display: grid; gap: var(--space-3); min-width: 0; }
 .chart figcaption { display: grid; gap: var(--space-1); }
 .chart-caption { font: var(--type-body); font-weight: var(--font-weight-bold); color: var(--color-text-primary); }
