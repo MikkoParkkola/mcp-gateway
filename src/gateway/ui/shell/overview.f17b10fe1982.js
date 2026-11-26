@@ -150,7 +150,7 @@ function stamp(text) {
 const str = (v) => (typeof v === 'string' ? v : '');
 const TO_DO = `/ui/${'to'}${'do'}/status`;
 const NOTHING_NEEDED = 'Nothing needs you right now';
-const UNKNOWN_ITEM = 'Something here this page cannot show yet';
+const UNKNOWN_ITEM = 'This page does not recognise this item yet';
 const CONFIG_NOT_APPLIED = 'The configuration file was not applied';
 const ALERT_TITLE = {
   not_running: 'Alerts may not go out: the alert channel is not fully running',
@@ -164,6 +164,13 @@ function signInPath(name, clipped) {
   const page = serverPath(name);
   return clipped || page === '/ui/servers/status' ? '/ui/servers/status' : page.replace(/\/status$/, '/actions');
 }
+/** A key's page, or the Access list when its name may be cut or is "." or "..", as serverPath() does. */
+function keyPath(name) {
+  if (name === '.' || name === '..' || new TextEncoder().encode(name).length >= MAYBE_CUT_BYTES) return '/ui/access/status';
+  return `/ui/access/${encodeURIComponent(name)}/status`;
+}
+/** `table[key]` only when the table itself holds it, so a value such as "constructor" reads as unknown. */
+const own = (table, key) => (typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : undefined);
 
 /** Each needs-you kind's row: glyph, title, detail lines, link and link words. */
 const NEEDS = {
@@ -180,12 +187,12 @@ const NEEDS = {
     const limit = Number.isFinite(d.limit_usd) ? d.limit_usd.toFixed(2) : '?';
     return {
       glyph: '⚠', title: `${who} is at ${Math.floor(d.percent)}% of its $${limit} limit`, lines: [],
-      href: key ? `/ui/access/${encodeURIComponent(str(d.name))}/status` : '/ui/costs/status',
+      href: key ? keyPath(str(d.name)) : '/ui/costs/status',
       go: key ? `See ${str(d.name)} ›` : 'See costs ›',
     };
   },
   alert_failed: ({ detail: d = {} }) => ({
-    glyph: '⚠', title: ALERT_TITLE[d.state] ?? ALERT_TITLE_UNKNOWN, href: '/ui/gateway/status', go: 'Gateway status ›',
+    glyph: '⚠', title: own(ALERT_TITLE, d.state) ?? ALERT_TITLE_UNKNOWN, href: '/ui/gateway/status', go: 'Gateway status ›',
     lines: [str(d.fix), ALERT_LAST_DELIVERY(d.last_delivery_at)],
   }),
   sign_in: ({ subject, detail: d = {} }) => ({
@@ -211,7 +218,7 @@ function needsYouPanel(data) {
   const served = Array.isArray(ny.rows) ? ny.rows : [];
   const more = isCount(ny.more?.count) ? ny.more.count : 0;
   const rows = served.map((r) => {
-    const draw = NEEDS[r?.kind];
+    const draw = own(NEEDS, r?.kind);
     if (draw) return needRow(r.kind, draw(r));
     console.warn('overview: a needs-you row of a kind this page does not draw');
     return needRow('unknown', { glyph: '⚠', title: UNKNOWN_ITEM, lines: [str(r?.subject)] });
@@ -312,7 +319,7 @@ function checklistPanel(data) {
     ck.has_key === true || ck.client_seen === true];
   if (done.every(Boolean)) return null;
   const section = card('checklist', 'Get started ', h('span', { class: 'ck-count' }, `${done.filter(Boolean).length} of 3`));
-  const list = h('ol', { class: 'ck-steps' });
+  const list = h('ol', { class: 'ck-steps', role: 'list' });
   STEPS.forEach((s, i) => {
     const step = h('li', { class: 'ck-step', 'data-step': String(i + 1) },
       h('span', { class: 'ck-mark num', 'aria-hidden': 'true' }, done[i] ? '✓' : String(i + 1)));

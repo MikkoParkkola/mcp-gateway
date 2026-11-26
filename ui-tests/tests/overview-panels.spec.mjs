@@ -51,9 +51,11 @@ test('P1 each kind reads as its own row, with its link', async ({ page }) => {
 
 test('P1b a name that cannot address one page links to a list or is encoded', async ({ page }) => {
   const refused = (subject) => ({ ...SERVER_REFUSED, subject });
-  await show(page, { needs_you: { rows: [refused('.'), refused('..'), refused('n'.repeat(253)), limit('a/b c?d#e', 81)], more: { count: 0 } } });
+  await show(page, { needs_you: { rows: [refused('.'), refused('..'), refused('n'.repeat(253)), limit('a/b c?d#e', 81),
+    limit('.', 81), limit('..', 81), limit('k'.repeat(253), 81)], more: { count: 0 } } });
   const rows = nyRows(page);
   for (const i of [0, 1, 2]) await expect(rows.nth(i)).toHaveAttribute('href', '/ui/servers/status');
+  for (const i of [4, 5, 6]) await expect(rows.nth(i)).toHaveAttribute('href', '/ui/access/status');
   const keyPage = `/ui/access/${encodeURIComponent('a/b c?d#e')}/status`;
   await expect(rows.nth(3)).toHaveAttribute('href', keyPage);
   await rows.nth(3).click();
@@ -74,6 +76,12 @@ test('P2 a kind this page does not know is shown in fixed words, never its code'
   await expect(row.locator('.ny-line')).toHaveText('x');
   await expect(row.locator('.ny-title')).not.toBeEmpty();
   await expect(page.locator('#content')).not.toContainText('zz_new');
+
+  // A kind named like an Object built-in is just as unknown, and the page still paints.
+  await show(page, { needs_you: { rows: [{ kind: 'constructor', subject: 'c' }, { kind: '__proto__', subject: 'p' }], more: { count: 0 } } });
+  await expect(nyRows(page)).toHaveCount(2);
+  const unknown = 'This page does not recognise this item yet';
+  await expect(nyRows(page).locator('.ny-title')).toHaveText([unknown, unknown]);
 });
 
 test('P3 nothing to do keeps the panel and says so', async ({ page }) => {
@@ -91,6 +99,7 @@ test.describe('P1d the alert channel row', () => {
     suspended: 'No alerts are going out: the channel was suspended after repeated failures',
     failing: 'The latest alerts could not be delivered',
     other: 'The alert channel has a problem',
+    toString: 'The alert channel has a problem',
   };
   for (const [state, title] of Object.entries(titles)) {
     test(`P1d ${state}`, async ({ page }) => {
@@ -293,7 +302,7 @@ test('L1 side by side when wide, stacked on a phone, and the tiles keep their ar
 
 test('L2 one panel order, whichever panel arrives first', async ({ page }) => {
   for (const first of ['stand-ins', 'panels']) {
-    await show(page, BOTH, 1440);
+    await show(page, { ...BOTH, ...setup(3, { has_key: false, tool_tried: false, client_seen: false }) }, 1440);
     const order = await page.evaluate(async (standInsFirst) => {
       const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/ui\/assets\/overview\.[0-9a-f]+\.js$/.test(n));
       const { place } = await import(url);
@@ -305,7 +314,7 @@ test('L2 one panel order, whichever panel arrives first', async ({ page }) => {
       else made.forEach((s) => place(root, s));
       return [...root.querySelectorAll(':scope > [data-panel]')].map((s) => s.dataset.panel);
     }, first === 'stand-ins');
-    expect(order).toEqual(['kpis', 'flow-map', 'needs-you', 'calls-chart', 'last-actions']);
+    expect(order).toEqual(['kpis', 'checklist', 'flow-map', 'needs-you', 'calls-chart', 'last-actions']);
     expect(await top(panel(page, 'flow-map'))).toBe(await top(panel(page, 'needs-you')));
     expect(await top(panel(page, 'calls-chart'))).toBe(await top(panel(page, 'last-actions')));
   }
