@@ -115,6 +115,7 @@ impl StdioTransport {
         // decide when it is safe.
         let transport = Arc::downgrade(self);
         let max_frame = self.max_frame_bytes.load(Ordering::Relaxed);
+        let oversize = self.start.oversize_slot();
         let stdout_reader = tokio::spawn(async move {
             let latch = early_exit::TripOnDrop(eof_tx);
             debug!("Reader task started");
@@ -142,6 +143,9 @@ impl StdioTransport {
                         // Includes a frame over MAX_FRAME_BYTES: the stream
                         // cannot be resynchronised, so it is treated as gone.
                         error!(error = %e, "Error reading from stdout");
+                        // Before the latch and the clear below: the waiter
+                        // whose answer it was reads this when it wakes.
+                        super::oversize::note_oversize(&e, &frame, &oversize);
                         if let Some(transport) = transport.upgrade()
                             && let Some(tree) = transport.child.lock().tree.as_mut()
                         {
