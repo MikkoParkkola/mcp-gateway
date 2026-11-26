@@ -17,9 +17,12 @@
 //! never a scan. With a decision source unreadable it is left out and
 //! `needs_you.decisions` goes into `degraded`.
 //!
+//! `checklist.client_seen` stands in for a connected client: true while an MCP
+//! session is live.
+//!
 //! Not available in this version, and so absent:
-//! - `checklist.client_connected`: a caller label exists only once it has
-//!   made a call, so it would repeat `tool_tried` as a second fact.
+//! - `checklist.client_connected`: no connection is remembered across
+//!   restarts; `client_seen` is the narrower fact the first-run checklist uses.
 
 use std::collections::HashMap;
 use std::io;
@@ -127,12 +130,23 @@ pub(super) async fn overview(
         (!generation.auth().api_keys().is_empty()).into(),
     );
     source.add_tool_tried(&mut checklist);
+    let seen = client_seen(&state);
+    checklist.insert("client_seen".into(), seen.into());
     body.insert("checklist".into(), checklist.into());
     degraded.extend_from_slice(source.degraded());
     if !degraded.is_empty() {
         body.insert("degraded".into(), json!(degraded));
     }
     Json(Value::Object(body)).into_response()
+}
+
+/// Step 3 of the first-run checklist when no key decides it: an MCP session is
+/// live now. Always present, since the session list can always be read. (No
+/// auth-off branch: an auth-off gateway's anonymous caller is not an admin,
+/// so this admin read never answers there.)
+fn client_seen(state: &AppState) -> bool {
+    let sessions = state.multiplexer.client_roster();
+    sessions.named_total + sessions.unnamed > 0
 }
 
 /// All backends, in name order. Sort on the full name; clipping first could
