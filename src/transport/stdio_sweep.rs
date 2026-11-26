@@ -282,10 +282,23 @@ impl Sweep {
     }
 
     /// Record the descendants now, before the first signal of the stop.
+    /// A reading CUT by its slice (the host
+    /// stalled past it) is no picture of the tree, so the snapshot reads
+    /// again with a fresh slice, collecting each time, up to `SNAPSHOT_SLICES`
+    /// readings. A reading incomplete for another reason (an unreadable
+    /// entry) is not retried: it would read the same next time. After the
+    /// last slice the snapshot keeps what it found; `incomplete_reads` counts
+    /// every short reading and the sweep's report warns.
     pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
-        let until = table.now() + SNAPSHOT_SLICE;
-        let listing = self.read(table, until);
-        self.collect(&listing);
+        for _ in 0..SNAPSHOT_SLICES {
+            let until = table.now() + SNAPSHOT_SLICE;
+            let listing = self.read(table, until);
+            let cut = !listing.complete && table.now() >= until;
+            self.collect(&listing);
+            if !cut {
+                break;
+            }
+        }
     }
 
     /// One reading: walked from the root and every member, the dropped read
@@ -558,6 +571,10 @@ const FREEZE_SLICE: Duration = Duration::from_millis(700);
 /// How long the snapshot before a stop may read: the first-snapshot p99
 /// target. A reading cut short only seeds; it prunes nothing.
 const SNAPSHOT_SLICE: Duration = Duration::from_millis(5);
+/// How many slices one snapshot may read when its readings are cut: every
+/// cut seen on Spark (5.9 to 7.0 ms, 3 in 110 runs, t9477rp2 and t9477abr)
+/// would have completed in the second slice; four bound a snapshot at 20 ms.
+const SNAPSHOT_SLICES: u32 = 4;
 /// The wait between two polls of a frozen process's state, and the first
 /// pause between two unsettled readings (design delta D5'''').
 const PAUSE_FLOOR: Duration = Duration::from_millis(1);

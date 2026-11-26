@@ -103,6 +103,9 @@ struct Fake {
     appear_at_read: Option<u32>,
     /// Every pause the sweep asked for, in order.
     idles: Vec<Duration>,
+    /// This many readings come back cut: no rows, incomplete, and the clock
+    /// moved to their `until` (a host stall past the slice).
+    cut_reads: u32,
 }
 
 impl Fake {
@@ -145,6 +148,7 @@ impl Fake {
             reads: 0,
             appear_at_read: None,
             idles: Vec::new(),
+            cut_reads: 0,
         }
     }
 
@@ -250,9 +254,20 @@ impl Fake {
 }
 
 impl ProcessTable for Fake {
-    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], _until: Duration) -> Listing {
+    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], until: Duration) -> Listing {
         self.operate();
         self.reads += 1;
+        if self.cut_reads > 0 {
+            self.cut_reads -= 1;
+            self.clock = self.clock.max(until);
+            return Listing {
+                rows: Vec::new(),
+                complete: false,
+                unreadable: Vec::new(),
+                gone: Vec::new(),
+                settled: false,
+            };
+        }
         if self.appear_at_read == Some(self.reads) {
             self.procs.push(Proc {
                 id: id(900),
@@ -755,40 +770,6 @@ fn the_pidfd_limit_is_floored_capped_and_leaves_a_reserve() {
         4096,
         "capped at 4096"
     );
-}
-
-/// E5 (D5''''): between unsettled readings the sweep pauses 1, 2, 4, 8, then
-/// 16 ms (the cap), not at all before the first reading, and back to 1 ms after
-/// a pass that froze a new member (pid 900, appearing at the fourth freeze
-/// reading; the snapshot is table read 1). No pause
-/// runs past the slice. Red under a re-read with no pause (no pauses recorded)
-/// or without the cap or the reset.
-#[test]
-fn unsettled_readings_back_off_from_1_to_16_ms_within_the_slice() {
-    let slice = ms(200);
-    let mut fake = Fake::new(&[(1, 0)]);
-    fake.settling = Settling::Never;
-    fake.appear_at_read = Some(5);
-    let config = SweepConfig {
-        freeze_slice: slice,
-        cap: 4096,
-    };
-    let report = run_with(&mut fake, 1, config, &PidfdBudget::new(4096));
-    let pauses: Vec<u128> = fake.idles.iter().map(Duration::as_millis).collect();
-    let (ladder, rest) = pauses.split_at(9);
-    assert_eq!(ladder, [1, 2, 4, 1, 2, 4, 8, 16, 16], "pauses: {pauses:?}");
-    let (last, middle) = rest.split_last().expect("pauses after the ladder");
-    assert!(middle.iter().all(|&p| p == 16), "pauses: {pauses:?}");
-    assert!((1..=16).contains(last), "the last pause: {pauses:?}");
-    assert!(
-        fake.idles.iter().sum::<Duration>() < slice,
-        "the pauses ran past the slice: {pauses:?}"
-    );
-    assert!(
-        fake.delivered(900).contains(&Sig::Stop),
-        "premise: the new member was frozen"
-    );
-    assert!(report.passes <= 25, "passes {}", report.passes);
 }
 
 #[path = "stdio_sweep_error_tests.rs"]

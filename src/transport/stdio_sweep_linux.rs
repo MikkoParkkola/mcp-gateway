@@ -73,6 +73,23 @@ fn is_gone(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::NotFound || err.raw_os_error() == Some(ESRCH)
 }
 
+/// The walked process's task ids, or `None` when its task directory cannot be
+/// listed: the process is gone (the reading unsettles) or the read failed (the
+/// reading is incomplete).
+fn task_ids(dir: &Pinned, listing: &mut Listing) -> Option<Vec<std::ffi::OsString>> {
+    match dir.list(std::path::Path::new("task")) {
+        Ok(ids) => Some(ids),
+        Err(err) => {
+            if is_gone(&err) {
+                listing.settled = false;
+            } else {
+                listing.complete = false;
+            }
+            None
+        }
+    }
+}
+
 fn lookup_of(read: std::io::Result<String>) -> Lookup {
     match read {
         Ok(text) => parse_stat(&text).map_or(Lookup::Unreadable, Lookup::Found),
@@ -272,6 +289,8 @@ impl LinuxTable {
     }
 
     /// One task's own `stat`, read through the walked process's pinned directory.
+    /// `self` serves only the test seam's read count.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
     fn task_stat_at(&mut self, dir: &Pinned, tid: &std::ffi::OsStr) -> Lookup {
         let read = lookup_of(dir.read(&std::path::Path::new("task").join(tid).join("stat")));
         #[cfg(test)]
@@ -325,7 +344,9 @@ impl LinuxTable {
         }
     }
 
-    /// One task's `children` file, read through the pinned directory.
+    /// One task's `children` file, read through the pinned directory. `self`
+    /// serves only the test seam's read count.
+    #[cfg_attr(not(test), allow(clippy::unused_self))]
     fn children_at(&mut self, dir: &Pinned, tid: &std::ffi::OsStr) -> Result<Option<Vec<u32>>, ()> {
         let read = children_in(dir.read(&std::path::Path::new("task").join(tid).join("children")));
         #[cfg(test)]
@@ -454,16 +475,8 @@ impl LinuxTable {
                 return true;
             }
         }
-        let tasks = match dir.list(std::path::Path::new("task")) {
-            Ok(tasks) => tasks,
-            Err(err) if is_gone(&err) => {
-                listing.settled = false;
-                return true;
-            }
-            Err(_) => {
-                listing.complete = false;
-                return true;
-            }
+        let Some(tasks) = task_ids(&dir, listing) else {
+            return true;
         };
         let mut tids: Vec<std::ffi::OsString> = Vec::new();
         // (i) failed on some task; and whether the process is still EXITED.

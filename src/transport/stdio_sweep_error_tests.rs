@@ -425,3 +425,78 @@ fn only_a_stopped_later_process_at_the_pid_is_a_stray_stop() {
         "another pid"
     );
 }
+
+/// Option 4 (a): a snapshot whose first reading is cut (the host stalled past
+/// the slice) reads again and records the whole tree, the deepest member too.
+/// Red if a cut reading is taken as the snapshot (nothing recorded).
+#[test]
+fn a_cut_snapshot_reads_again_and_records_the_tree() {
+    let mut fake = Fake::new(&[(40, 1), (41, 40), (42, 41)]);
+    fake.cut_reads = 1;
+    let mut sweep = Sweep::new(id(40), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 2, "one cut reading, then one complete");
+    for pid in [41, 42] {
+        assert!(sweep.members.contains_key(&id(pid)), "member {pid} missing");
+    }
+}
+
+/// Option 4 (b): a reading incomplete for another reason than the slice (here
+/// every read fails, and time is left) is not read again: it would fail the
+/// same way, and a stop must not spend the whole cap on it at every step.
+/// Red if any incomplete reading is retried.
+#[test]
+fn an_incomplete_snapshot_with_time_left_is_not_read_again() {
+    let mut fake = Fake::new(&[(50, 1), (51, 50)]);
+    fake.blind = true;
+    let mut sweep = Sweep::new(id(50), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 1, "an uncut incomplete reading was retried");
+}
+
+/// Option 4 (c): readings that keep being cut stop at SNAPSHOT_SLICES (4); the
+/// snapshot then keeps what it has and counts each short reading. Red if the
+/// cap is missing or different.
+#[test]
+fn a_snapshot_that_keeps_being_cut_stops_after_four_readings() {
+    let mut fake = Fake::new(&[(60, 1), (61, 60)]);
+    fake.cut_reads = 100;
+    let mut sweep = Sweep::new(id(60), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 4, "the snapshot read past its cap");
+    assert_eq!(sweep.incomplete_reads, 4, "every cut reading is counted");
+}
+
+/// E5 (D5''''): between unsettled readings the sweep pauses 1, 2, 4, 8, then
+/// 16 ms (the cap), not at all before the first reading, and back to 1 ms after
+/// a pass that froze a new member (pid 900, appearing at the fourth freeze
+/// reading; the snapshot is table read 1). No pause
+/// runs past the slice. Red under a re-read with no pause (no pauses recorded)
+/// or without the cap or the reset.
+#[test]
+fn unsettled_readings_back_off_from_1_to_16_ms_within_the_slice() {
+    let slice = ms(200);
+    let mut fake = Fake::new(&[(1, 0)]);
+    fake.settling = Settling::Never;
+    fake.appear_at_read = Some(5);
+    let config = SweepConfig {
+        freeze_slice: slice,
+        cap: 4096,
+    };
+    let report = run_with(&mut fake, 1, config, &PidfdBudget::new(4096));
+    let pauses: Vec<u128> = fake.idles.iter().map(Duration::as_millis).collect();
+    let (ladder, rest) = pauses.split_at(9);
+    assert_eq!(ladder, [1, 2, 4, 1, 2, 4, 8, 16, 16], "pauses: {pauses:?}");
+    let (last, middle) = rest.split_last().expect("pauses after the ladder");
+    assert!(middle.iter().all(|&p| p == 16), "pauses: {pauses:?}");
+    assert!((1..=16).contains(last), "the last pause: {pauses:?}");
+    assert!(
+        fake.idles.iter().sum::<Duration>() < slice,
+        "the pauses ran past the slice: {pauses:?}"
+    );
+    assert!(
+        fake.delivered(900).contains(&Sig::Stop),
+        "premise: the new member was frozen"
+    );
+    assert!(report.passes <= 25, "passes {}", report.passes);
+}
