@@ -365,10 +365,14 @@ async fn an_sse_mode_json_body_is_held_to_the_cap() {
 
 /// A 500 whose body breaks off mid-read.
 async fn broken_error_body() -> axum::response::Response {
-    let parts = futures::stream::iter([
-        Ok(bytes::Bytes::from_static(b"partial")),
-        Err(std::io::Error::other("cut")),
-    ]);
+    use futures::StreamExt as _;
+    // The cut waits so the status and the first bytes reach the client first:
+    // an error before that fails the request itself, not the body read.
+    let cut = futures::stream::once(async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        Err(std::io::Error::other("cut"))
+    });
+    let parts = futures::stream::iter([Ok(bytes::Bytes::from_static(b"partial"))]).chain(cut);
     axum::response::Response::builder()
         .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
         .body(axum::body::Body::from_stream(parts))
