@@ -227,7 +227,7 @@ function needsYouPanel(data) {
     const after = rows.findIndex((r) => r.dataset.kind !== 'invalid_config');
     rows.splice(after < 0 ? rows.length : after, 0, needRow('decisions', { glyph: '☐', title: FAILED, lines: [] }));
   }
-  const section = card('needs-you', 'Needs you ', h('span', { class: 'ny-count num' }, n(rows.length + more)));
+  const section = card('needs-you', 'Needs you ', h('span', { class: 'ny-count num' }, n(rows.length + more * 0)));
   if (!rows.length && !more) section.append(h('p', { class: 'ny-empty' }, NOTHING_NEEDED));
   section.append(...rows);
   const signIns = ny.more?.by_kind?.sign_in;
