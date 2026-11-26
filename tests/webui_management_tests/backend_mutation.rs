@@ -24,11 +24,11 @@ async fn test_add_backend_without_config_path_returns_503() {
     )
     .await;
 
-    // THEN: 503 Service Unavailable (no config path to persist to)
+    // THEN: 409 Conflict (no config path to persist to: nothing was attempted)
     assert_eq!(
         status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Expected 503 without config_path, got: {body}"
+        StatusCode::CONFLICT,
+        "Expected 409 without config_path, got: {body}"
     );
 }
 
@@ -276,8 +276,8 @@ async fn test_reload_endpoint_without_reload_context_returns_503() {
 
     assert_eq!(
         status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "Expected 503 without reload context, got: {body}"
+        StatusCode::CONFLICT,
+        "Expected 409 without reload context, got: {body}"
     );
     assert!(
         body["error"]

@@ -236,7 +236,7 @@ fn a_guard_refusal_is_logged_in_full_and_answered_without_a_path() {
         });
         (futures::executor::block_on(body_of(response)), logs)
     };
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(status, StatusCode::CONFLICT);
     assert!(
         logs.contains(GUARD_DETAIL),
         "the detail was not logged: {logs}"
