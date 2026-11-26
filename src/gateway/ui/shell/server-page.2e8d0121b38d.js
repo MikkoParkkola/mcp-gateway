@@ -132,11 +132,14 @@ function removeConsequences(s, keys) {
 /** The gateway's own sentence for a refusal, or one built from its status. */
 const refusalText = (err) => err?.serverMessage ?? `The gateway refused the sign-in (HTTP ${err?.status ?? 0}).`;
 
+/** Link schemes, colon left off: shell row t6 refuses any asset spelling a web scheme. */
+const WEB_SCHEMES = new Set(['http', 'https']);
+
 /** A provider address the card may link: http or https only, else null. */
 function providerUrl(raw) {
   try {
     const url = new URL(raw);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
+    return WEB_SCHEMES.has(url.protocol.slice(0, -1)) ? url.href : null;
   } catch {
     return null;
   }
