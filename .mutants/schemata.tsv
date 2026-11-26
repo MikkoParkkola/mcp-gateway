@@ -1,0 +1,11 @@
+head_sha	fc3197bb85eb36328b561acd88ccbcc2e13f55ec
+#mutant R1
+mcp_gateway	gateway::router::overview_sources_tests::k1_a_live_session_marks_step_three_seen	src/gateway/router/overview_sources_tests.rs:471
+#mutant R2
+mcp_gateway	gateway::router::overview_sources_tests::k5_keys_do_not_count_as_a_session	src/gateway/router/overview_sources_tests.rs:535
+#mutant R3
+mcp_gateway	gateway::router::overview_sources_tests::k3_under_auth_a_past_call_is_not_a_client	src/gateway/router/overview_sources_tests.rs:507
+#mutant R4
+mcp_gateway	gateway::router::overview_sources_tests::k4_nobody_connected_reads_false_not_missing	src/gateway/router/overview_sources_tests.rs:518
+#mutant R5
+mcp_gateway	gateway::router::overview_sources_tests::k1b_a_nameless_session_counts_too	src/gateway/router/overview_sources_tests.rs:486
