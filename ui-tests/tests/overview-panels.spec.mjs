@@ -275,6 +275,8 @@ const BOTH = { needs_you: { rows: [{ ...SERVER_REFUSED, subject: 'n'.repeat(200)
 
 test('L1 side by side when wide, stacked on a phone, and the tiles keep their arrangement', async ({ page }) => {
   await show(page, BOTH, 1440);
+  await expect(panel(page, 'needs-you')).toHaveCount(1);
+  await expect(panel(page, 'last-actions')).toHaveCount(1);
   expect(await top(panel(page, 'needs-you'))).toBe(await top(panel(page, 'last-actions')));
   await expect(page.locator('#content .ov-strip [data-tile]')).toHaveCount(6);
 
@@ -323,6 +325,8 @@ for (const scheme of ['dark', 'light']) {
 test('A2 Tab from the last tile link reaches every panel link in page order', async ({ page }) => {
   await show(page, { ...BOTH, ...setup(3, { has_key: false, tool_tried: false, client_seen: false }) }, 1440);
   const want = await page.locator('#content [data-panel]:not([data-panel="kpis"]) a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+  // The checklist's two open steps, the one Needs you row, then All in Activity.
+  expect(want).toEqual(['/ui/tools/actions', '/ui/gateway/settings', `/ui/servers/${'n'.repeat(200)}/status`, '/ui/activity/status']);
   await page.locator('#content [data-tile="tools"] a').focus();
   const got = [];
   for (let i = 0; i < want.length; i += 1) {
