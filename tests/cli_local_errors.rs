@@ -147,15 +147,19 @@ fn tls_issue(p: &Path, leaf: &str, cn: &str, taken: &str) -> Case {
 fn config_case(p: &Path, leaf: &[&str], flag: &str) -> Case {
     let file = p.join("gateway.yaml");
     write(&file, "backends: [\n");
+    config_at(&file, leaf, flag)
+}
+
+fn config_at(file: &Path, leaf: &[&str], flag: &str) -> Case {
     let mut args = strings(leaf);
-    args.extend([flag.to_owned(), text(&file)]);
+    args.extend([flag.to_owned(), text(file)]);
     fail_case(
         args,
         Pin::Starts("error: "),
         // Quoted as the command line names it: a Windows path with backslashes comes out in quotes.
         Pin::Has(format!(
             "mcp-gateway doctor --config {}",
-            shlex::try_quote(&text(&file)).expect("a path without NUL")
+            shlex::try_quote(&text(file)).expect("a path without NUL")
         )),
     )
 }
