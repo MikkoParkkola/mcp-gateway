@@ -206,7 +206,7 @@ const NEEDS = {
 /** One needs-you row: a link when it has a destination, so a keyboard stops once per row. */
 function needRow(kind, { glyph, title, lines, href, go }) {
   const parts = [h('span', { class: 'ny-glyph', 'aria-hidden': 'true' }, glyph),
-    h('span', { class: 'ny-body' }, h('span', { class: 'ny-title' }, title),
+    h('span', { class: 'ny-body' }, Object.assign(h('span', { class: 'ny-title' }), { innerHTML: title }),
       ...lines.filter(Boolean).map((l) => h('span', { class: 'ny-line' }, l)),
       ...(href ? [h('span', { class: 'ny-go' }, go)] : []))];
   return href ? h('a', { class: 'ny-row', 'data-kind': kind, href }, ...parts) : h('div', { class: 'ny-row', 'data-kind': kind }, ...parts);
