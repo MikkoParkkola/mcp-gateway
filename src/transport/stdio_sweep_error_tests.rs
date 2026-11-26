@@ -87,14 +87,23 @@ fn a_complete_listing_still_prunes_the_dead() {
 /// The freeze-first Stop names the old identity, so the fake refuses it as a
 /// mismatch; the reading prunes the member; the stranger is never signalled,
 /// stays running and is not reported killed. Red if the identity check is
-/// skipped on any path (a delivered signal on pid 22).
+/// skipped on any path (a delivered signal on pid 22). Run on both signalling
+/// paths the fake models: a held handle and a bare pid.
 #[test]
 fn a_member_pid_taken_by_a_stranger_is_never_signalled() {
+    for pidfd in [true, false] {
+        stranger_leg(pidfd);
+    }
+}
+
+fn stranger_leg(pidfd: bool) {
+    eprintln!("leg: pidfd={pidfd}");
     let stranger = Identity {
         pid: 22,
         start: 9_999,
     };
     let mut fake = Fake::new(&[(20, 1), (21, 20), (22, 21)]);
+    fake.pidfd = pidfd;
     let mut sweep = Sweep::new(id(20), cfg());
     sweep.snapshot(&mut fake);
     let taken = fake.proc(22);
