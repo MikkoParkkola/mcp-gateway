@@ -659,6 +659,31 @@ def main() -> int:
                 edit(step["with"])
         if not any(e.startswith(f"{job}:") for e in dead_save_errors(mutated)):
             errors.append(f"dead-save self-test: {label} on {job} was not caught")
+    # A save written `${{ false }}` says false, as cache_writers.is_literal_false reads it: not a dead save.
+    mutated = copy.deepcopy(jobs)
+    wrapped = 0
+    for step in mutated["macos-shards"]["steps"]:
+        if str(step.get("uses", "")).startswith("Swatinem/rust-cache@"):
+            step["with"]["save-if"] = "${{ false }}"
+            wrapped += 1
+    if not wrapped:
+        errors.append("dead-save self-test: macos-shards has no rust-cache step (changed nothing)")
+    elif any(e.startswith("macos-shards:") for e in dead_save_errors(mutated)):
+        errors.append("dead-save self-test: a `${{ false }}` save-if on macos-shards was refused")
+    # A step that never runs never saves, whatever its save flag says: its own `if` counts, as in
+    # cache_writers.py. linux-lib-union's live save, behind an `if` false on every push, is caught.
+    for label, cond in (("if: false", False),
+                        ("an if false on every push", "${{ github.event_name == 'pull_request' }}")):
+        mutated = copy.deepcopy(jobs)
+        gated = 0
+        for step in mutated["linux-lib-union"]["steps"]:
+            if str(step.get("uses", "")).startswith(("Swatinem/rust-cache@", "astral-sh/setup-uv@")):
+                step["if"] = cond
+                gated += 1
+        if not gated:
+            errors.append("dead-save self-test: linux-lib-union has no cache step (changed nothing)")
+        elif not any(e.startswith("linux-lib-union:") for e in dead_save_errors(mutated)):
+            errors.append(f"dead-save self-test: a live save behind {label} on linux-lib-union was not caught")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
