@@ -94,6 +94,19 @@ fn u2_a_nested_id_is_not_the_frames_id() {
     assert_eq!(owner(&cut(r#"{"jsonrpc":"2.0","id":[7],"result":"#)), None);
 }
 
+/// The kept head is cut: a nested value before `id` that runs past it names
+/// nobody, whether the visitor stops at its key or serde tries to skip it.
+#[test]
+fn u2_a_leading_nested_value_cut_off_names_nobody() {
+    let pad = "x".repeat(5000);
+    let params_first =
+        format!(r#"{{"jsonrpc":"2.0","params":{{"pad":"{pad}"}},"id":7,"result":1}}"#);
+    assert_eq!(owner(&params_first), None);
+    let nested_jsonrpc = format!(r#"{{"jsonrpc":{{"pad":"{pad}"}},"id":7,"result":1}}"#);
+    assert_eq!(owner(&nested_jsonrpc), None);
+    assert_eq!(owner(r#"{"jsonrpc":{"pad":["x","#), None);
+}
+
 #[test]
 fn u2_id_text_inside_a_string_is_not_a_key() {
     assert_eq!(
