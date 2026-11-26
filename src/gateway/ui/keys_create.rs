@@ -559,48 +559,49 @@ fn refused_write(
             "key create: the config write failed"
         );
     }
-    let class = match (&refusal, &written) {
-        (None, Err(error)) => nothing_attempted(error),
-        _ => None,
-    };
-    let answer = match (refusal, written) {
+    match (refusal, written) {
         (Some(Refusal::Expired), _) => invalid_field("expires_at"),
         (Some(Refusal::Waiting(keys)), _) => super::errors::restart_pending(&keys),
         (Some(Refusal::NotWritten), _) => not_written(state),
-        (None, Err(ReplaceError::Stale { current })) => stale(&current).into_response(),
-        (None, Err(ReplaceError::Busy)) => {
-            fixed(StatusCode::CONFLICT, "the config is being written; retry")
-        }
-        (None, Err(ReplaceError::Gated(refusal))) => gate_refusal(refusal),
-        (None, Err(ReplaceError::ReloadRefused { .. })) => {
-            fixed(StatusCode::CONFLICT, "reload_refused")
-        }
+        (None, Err(error)) => refused_by_writer(error),
+        (None, Ok(_)) => state_uncertain(),
+    }
+}
+
+/// The writer's refusal of a key create, as fixed text: a refusal that
+/// attempted nothing is 409, with `Retry-After` when it clears by itself.
+fn refused_by_writer(error: ReplaceError) -> Response {
+    let class = nothing_attempted(&error);
+    let answer = match error {
+        ReplaceError::Stale { current } => stale(&current).into_response(),
+        ReplaceError::Busy => fixed(StatusCode::CONFLICT, "the config is being written; retry"),
+        ReplaceError::Gated(refusal) => gate_refusal(refusal),
+        ReplaceError::ReloadRefused { .. } => fixed(StatusCode::CONFLICT, "reload_refused"),
         // No log is the posture (nothing started, 409); a refused append was
         // started (503). One body for both.
-        (None, Err(ReplaceError::NoAuditLog)) => fixed(StatusCode::CONFLICT, "audit_unavailable"),
-        (None, Err(ReplaceError::AuditRefused(_))) => audit_unavailable(),
+        ReplaceError::NoAuditLog => fixed(StatusCode::CONFLICT, "audit_unavailable"),
+        ReplaceError::AuditRefused(_) => audit_unavailable(),
         // The writer's own read check: nothing was written, so these are the
         // preconditions' answers, never the guard's text.
-        (None, Err(ReplaceError::NoConfigFile)) => fixed(StatusCode::CONFLICT, "no_config_file"),
-        (None, Err(ReplaceError::ConfigRefused(_))) => fixed(
+        ReplaceError::NoConfigFile => fixed(StatusCode::CONFLICT, "no_config_file"),
+        ReplaceError::ConfigRefused(_) => fixed(
             StatusCode::CONFLICT,
             "reload is off or gateway.yaml could not be loaded",
         ),
         // The writer refused before the target changed and left no scratch.
-        (None, Err(ReplaceError::WriterRefused { .. })) => {
+        ReplaceError::WriterRefused { .. } => {
             fixed(StatusCode::CONFLICT, "the key was not created")
         }
-        (
-            None,
-            Err(
-                ReplaceError::Refused(_)
-                | ReplaceError::Unsupported(_)
-                | ReplaceError::Stage(_)
-                | ReplaceError::Write(_)
-                | ReplaceError::Secrets(_),
-            ),
-        ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
-        (None, _) => state_uncertain(),
+        ReplaceError::Refused(_)
+        | ReplaceError::Unsupported(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::Secrets(_) => {
+            fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created")
+        }
+        ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Failed(_) => state_uncertain(),
     };
     match class {
         Some(retry) => super::errors::refusal(retry, answer),
@@ -728,3 +729,8 @@ pub(super) async fn create_key(
         other => refused_write(&state, refusal, other),
     }
 }
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_create_class_tests.rs"]
+mod class_tests;

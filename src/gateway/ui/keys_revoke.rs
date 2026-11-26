@@ -445,6 +445,11 @@ impl KeyIdentity<'_> {
 #[path = "keys_revoke_select_tests.rs"]
 mod select_tests;
 
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_revoke_class_tests.rs"]
+mod class_tests;
+
 fn select_target(
     file: &[KeyIdentity<'_>],
     live: &[KeyIdentity<'_>],
