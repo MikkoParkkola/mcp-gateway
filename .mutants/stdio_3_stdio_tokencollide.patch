@@ -1,0 +1,16 @@
+diff --git a/src/transport/stdio.rs b/src/transport/stdio.rs
+index c176200..e84def3 100644
+--- a/src/transport/stdio.rs
++++ b/src/transport/stdio.rs
+@@ -176,7 +176,10 @@ impl StdioTransport {
+                 slot.insert(DeliveryHandle::capture(token));
+                 true
+             }
+-            dashmap::mapref::entry::Entry::Occupied(_) => false,
++            dashmap::mapref::entry::Entry::Occupied(mut slot) => {
++                slot.insert(DeliveryHandle::capture(token));
++                true
++            }
+         };
+         // Logged once the entry's shard lock is released.
+         if !registered {
