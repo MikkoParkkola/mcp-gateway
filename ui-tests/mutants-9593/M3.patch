@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
---- a/src/gateway/ui/shell/chart.d67f9b90c255.js
-+++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
 @@ -13,7 +13,7 @@
  
  /** The unit's words, or a TypeError: a chart that cannot say what it counts is not drawn. */

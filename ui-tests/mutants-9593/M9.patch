@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/overview.a8910ad01346.js b/src/gateway/ui/shell/overview.a8910ad01346.js
---- a/src/gateway/ui/shell/overview.a8910ad01346.js
-+++ b/src/gateway/ui/shell/overview.a8910ad01346.js
+diff --git a/src/gateway/ui/shell/overview.d72a9f89f9ac.js b/src/gateway/ui/shell/overview.d72a9f89f9ac.js
+--- a/src/gateway/ui/shell/overview.d72a9f89f9ac.js
++++ b/src/gateway/ui/shell/overview.d72a9f89f9ac.js
 @@ -410,7 +410,6 @@
   */
  function fillChart(section, data, read) {

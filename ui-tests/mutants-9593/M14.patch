@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/chart.304183007870.css b/src/gateway/ui/shell/chart.304183007870.css
---- a/src/gateway/ui/shell/chart.304183007870.css
-+++ b/src/gateway/ui/shell/chart.304183007870.css
-@@ -27,7 +27,7 @@
+diff --git a/src/gateway/ui/shell/chart.812bfa2e8150.css b/src/gateway/ui/shell/chart.812bfa2e8150.css
+--- a/src/gateway/ui/shell/chart.812bfa2e8150.css
++++ b/src/gateway/ui/shell/chart.812bfa2e8150.css
+@@ -30,7 +30,7 @@
  .chart-x span:first-child { transform: none; }
  .chart-x span:last-child { transform: translateX(-100%); }
  

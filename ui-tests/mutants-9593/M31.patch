@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+@@ -167,7 +167,7 @@
+   };
+   for (const m of marks) {
+     // A marker stands in the middle of the bucket that holds its time, so the newest one shows too.
+-    const at = bucketOf(m.t);
++    const at = xAt(m.t) - 0.5;
+     if (at >= 0 && at < buckets) plot.append(svgEl('line', { class: 'chart-mark', x1: at + 0.5, x2: at + 0.5, y1: 0, y2: 100 }));
+   }
+ 

@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
---- a/src/gateway/ui/shell/chart.d67f9b90c255.js
-+++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
-@@ -161,7 +161,7 @@
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+@@ -186,7 +186,7 @@
  
    if (marks.length) {
      fig.append(h('ol', { class: 'chart-markers', role: 'list' }, ...marks.map((m) => h('li', {},
@@ -9,4 +9,4 @@ diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/c
 +      h('span', { class: 'chart-glyph' }, m.glyph), ' ', h('span', { class: 'chart-when num' }, x(m.t)), ' ', Object.assign(document.createElement('span'), { innerHTML: m.words }))));
    }
  
-   // The numbers: one row per bucket of the main series, one column per series, read by time.
+   // The numbers: one row per main point, one column per series, each value in the row whose span

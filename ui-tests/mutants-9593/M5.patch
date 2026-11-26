@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/overview.a8910ad01346.js b/src/gateway/ui/shell/overview.a8910ad01346.js
---- a/src/gateway/ui/shell/overview.a8910ad01346.js
-+++ b/src/gateway/ui/shell/overview.a8910ad01346.js
+diff --git a/src/gateway/ui/shell/overview.d72a9f89f9ac.js b/src/gateway/ui/shell/overview.d72a9f89f9ac.js
+--- a/src/gateway/ui/shell/overview.d72a9f89f9ac.js
++++ b/src/gateway/ui/shell/overview.d72a9f89f9ac.js
 @@ -413,7 +413,7 @@
    if (uncounted(data)) return say('chart-uncounted', UNCOUNTED);
    const points = read === FAIL ? null : pointsOf(read);

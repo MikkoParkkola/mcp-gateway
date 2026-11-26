@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/overview.a8910ad01346.js b/src/gateway/ui/shell/overview.a8910ad01346.js
---- a/src/gateway/ui/shell/overview.a8910ad01346.js
-+++ b/src/gateway/ui/shell/overview.a8910ad01346.js
+diff --git a/src/gateway/ui/shell/overview.d72a9f89f9ac.js b/src/gateway/ui/shell/overview.d72a9f89f9ac.js
+--- a/src/gateway/ui/shell/overview.d72a9f89f9ac.js
++++ b/src/gateway/ui/shell/overview.d72a9f89f9ac.js
 @@ -415,7 +415,7 @@
    if (!points) return say('chart-failed', FAILED);
    const before = read.previous_complete === true ? pointsOf({ points: read.previous }) : null;

@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+@@ -116,7 +116,7 @@
+   const t0 = main.points[0].t;
+   const step = main.points.length > 1 ? main.points[1].t - t0 : 1;
+   // The plot spans the main series' time, not its count, so a time it leaves out keeps its place.
+-  const buckets = main.points.length > 1 ? Math.round((main.points.at(-1).t - t0) / step) + 1 : 1;
++  const buckets = main.points.length > 1 ? main.points.length : 1;
+   const xAt = (t) => (t - t0) / step + 0.5;
+   const shown = (xv) => xv >= 0 && xv <= buckets;
+   const top = scaleTop(Math.max(...values, limit && isValue(limit.value) ? limit.value : 0));

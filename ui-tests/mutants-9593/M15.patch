@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
---- a/src/gateway/ui/shell/chart.d67f9b90c255.js
-+++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
-@@ -148,7 +148,7 @@
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+@@ -173,7 +173,7 @@
  
    // x labels: the first, middle and last bucket (kept on a phone), and every sixth from twelve
    // buckets, unless it would crowd a kept one.

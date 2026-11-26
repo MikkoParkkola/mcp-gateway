@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
---- a/src/gateway/ui/shell/chart.d67f9b90c255.js
-+++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
-@@ -101,7 +101,7 @@
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+@@ -102,7 +102,7 @@
    const main = lines.find((s) => s.role === 'main') ?? lines[0];
    const id = `chart-summary-${++made}`;
    const fig = h('figure', { class: 'chart', 'data-unit': words });

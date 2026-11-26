@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/chart.304183007870.css b/src/gateway/ui/shell/chart.304183007870.css
---- a/src/gateway/ui/shell/chart.304183007870.css
-+++ b/src/gateway/ui/shell/chart.304183007870.css
-@@ -29,7 +29,7 @@
+diff --git a/src/gateway/ui/shell/chart.812bfa2e8150.css b/src/gateway/ui/shell/chart.812bfa2e8150.css
+--- a/src/gateway/ui/shell/chart.812bfa2e8150.css
++++ b/src/gateway/ui/shell/chart.812bfa2e8150.css
+@@ -32,7 +32,7 @@
  
  .chart-line { fill: none; stroke-width: var(--size-tick-stroke); vector-effect: non-scaling-stroke; stroke-linejoin: round; }
  .chart-main { stroke: var(--color-chart-series-1); }

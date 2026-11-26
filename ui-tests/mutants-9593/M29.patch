@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+@@ -193,7 +193,7 @@
+   // holds its time (rowOf), so a main row always shows its own value.
+   const byBucket = lines.map((s) => {
+     const held = new Map();
+-    for (const p of s.points) if (rowOf(p.t) >= 0 && !held.has(rowOf(p.t))) held.set(rowOf(p.t), p.v);
++    for (const p of s.points) if (!held.has(bucketOf(p.t))) held.set(bucketOf(p.t), p.v);
+     return held;
+   });
+   const cell = (v) => h('td', { class: 'num' }, isValue(v) ? yWords(v) : NOT_COUNTED);

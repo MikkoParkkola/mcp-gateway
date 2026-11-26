@@ -1,12 +1,12 @@
-diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
---- a/src/gateway/ui/shell/chart.d67f9b90c255.js
-+++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
-@@ -132,7 +132,7 @@
-       run = [];
-     };
+diff --git a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+--- a/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
++++ b/src/gateway/ui/shell/chart.8bfe2ae5cd10.js
+@@ -138,7 +138,7 @@
+     let last = null;
      for (const p of s.points) {
+       const xv = xAt(p.t);
 -      if (!isValue(p.v)) end();
 +      if (!isValue(p.v)) {}
-       else if (shown(xAt(p.t))) run.push([xAt(p.t), yAt(p.v)]);
-     }
-     end();
+       else if (shown(xv)) {
+         if (last !== null && xv - last > 1.5) end();
+         run.push([xv, yAt(p.v)]);

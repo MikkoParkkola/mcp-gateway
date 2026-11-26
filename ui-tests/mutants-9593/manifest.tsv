@@ -26,3 +26,8 @@ M24	M24.patch	tests/overview-chart.spec.mjs	K1 the chart draws
 M25	M25.patch	tests/overview-chart.spec.mjs	K12 the two days differ
 M26	M26.patch	tests/overview-tiles.spec.mjs	T7 numbers paint
 M27	M27.patch	tests/overview-chart.spec.mjs	K14 the module alone
+M28	M28.patch	tests/overview-chart.spec.mjs	K11b a time left out
+M29	M29.patch	tests/overview-chart.spec.mjs	K13 the half-hour values
+M30	M30.patch	tests/overview-chart.spec.mjs	K11b a time left out
+M31	M31.patch	tests/overview-chart.spec.mjs	K1 the chart draws
+M32	M32.patch	tests/overview-chart.spec.mjs	K11b a time left out
