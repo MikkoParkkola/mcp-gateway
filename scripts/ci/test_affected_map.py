@@ -51,48 +51,6 @@ class Coverage(unittest.TestCase):
         self.assertEqual(env["LLVM_PROFILE_FILE"], os.path.join("/tmp/u1", am.PROFILE_NAME))
 
 
-class Weight(unittest.TestCase):
-    """M2: a group over 10% of the run's lib time splits one level deeper, again and again, down to single tests."""
-
-    def units(self, times: dict[str, float], prefix: str, total: float, share: float | None = None):
-        def measure(_key, names):
-            return sum(times[n] for n in names)
-        names = [n for n in times if n == prefix or n.startswith(prefix + "::")]
-        return am.split_heavy(prefix, names, len(prefix.split("::")), total, measure, share)
-
-    def test_a_group_at_twelve_percent_splits_and_one_at_nine_does_not(self) -> None:
-        times = {"a::b::x::t1": 6.0, "a::b::y::t2": 6.0}
-        self.assertEqual(set(self.units(times, "a::b", 100.0)), {"a::b::x", "a::b::y"})
-        times = {"a::b::x::t1": 4.5, "a::b::y::t2": 4.5}
-        self.assertEqual(set(self.units(times, "a::b", 100.0)), {"a::b"})
-
-    def test_the_share_is_the_constant(self) -> None:
-        times = {"a::b::x::t1": 6.0, "a::b::y::t2": 6.0}
-        self.assertEqual(set(self.units(times, "a::b", 100.0, share=0.13)), {"a::b"})
-
-    def test_a_heavy_child_splits_again_down_to_single_tests(self) -> None:
-        # a::b weighs 17%; its child a::b::x still weighs 12%, so it splits too (6% per test); a::b::y, 5%, stays.
-        times = {"a::b::x::t1": 6.0, "a::b::x::t2": 6.0, "a::b::y::t3": 5.0}
-        got = self.units(times, "a::b", 100.0)
-        self.assertEqual(set(got), {"a::b::x::t1", "a::b::x::t2", "a::b::y"})
-
-    def test_a_single_test_over_the_share_stays_one_unit(self) -> None:
-        times = {"a::b::t1": 30.0, "a::b::t2": 1.0}
-        self.assertEqual(self.units(times, "a::b", 100.0), {"a::b::t1": ["a::b::t1"], "a::b::t2": ["a::b::t2"]})
-
-    def test_a_heavy_group_of_one_test_is_not_run_again(self) -> None:
-        # a::b::x holds one test at 30%: it stays the unit a::b::x, measured once, not split to its test and re-run.
-        times = {"a::b::x::t1": 30.0, "a::b::y::t2": 1.0}
-        measured = []
-
-        def measure(key, names):
-            measured.append(key)
-            return sum(times[n] for n in names)
-        got = am.split_heavy("a::b", list(times), 2, 100.0, measure)
-        self.assertEqual(set(got), {"a::b::x", "a::b::y"})
-        self.assertEqual(sorted(measured), ["a::b", "a::b::x", "a::b::y"])
-
-
 class Units(unittest.TestCase):
     """M3, M4, M8: the unit record and the map document."""
 
@@ -380,9 +338,9 @@ class Age(unittest.TestCase):
 
 
 class Merge(unittest.TestCase):
-    """The merge: the run's lib total over every part, a heavy group re-run deeper, nothing lost or counted twice."""
+    """The merge: the parts' units as they are, a part's extra inputs on each of its units, reasons counted."""
 
-    def test_a_heavy_group_is_replaced_by_its_leaves_and_the_rest_kept(self) -> None:
+    def test_the_parts_units_are_kept_with_their_extras_and_reasons(self) -> None:
         unit = lambda tests, seconds, binary=am.LIB_BINARY: {  # noqa: E731
             "files": ["src/a.rs"], "dirs": [], "probes": [], "tests": tests, "seconds": seconds,
             "binary": binary, "unmapped": False}
@@ -393,35 +351,21 @@ class Merge(unittest.TestCase):
             "unmapped_reasons": {"lib:c::d": ["coverage"], "lib:a::b": [], "test:e2e": []}}
         other = {"part": "lib-2", "binary": "bin/p2/lib-tests-p2", "extra_files": [], "units": {
             "lib:f::g": unit(["f::g::t6"], 65.0)}}
-        seconds = {"a::b::x::t1": 4.0, "a::b::x::t2": 4.0, "a::b::y::t3": 3.0}
-        calls = []
-
-        def fake_run(binary, args, listed, unit_dir, objects):
-            names = [a for a in args if a != "--exact"]
-            calls.append(sorted(names))
-            return am.Run(sum(seconds[n] for n in names), len(names), 0, listed, 0, "", {"src/deep.rs"}, True)
-
         with tempfile.TemporaryDirectory() as tmp:
             for name, doc in (("p1", part), ("p2", other)):
                 Path(tmp, name).mkdir()
                 Path(tmp, name, "part.json").write_text(__import__("json").dumps(doc))
-            saved = am.run_unit
-            am.run_unit = fake_run
-            try:
-                am.merge("abc", [str(Path(tmp, "p1")), str(Path(tmp, "p2"))], str(Path(tmp, "out")), NOW)
-            finally:
-                am.run_unit = saved
+            am.merge("abc", [str(Path(tmp, "p1")), str(Path(tmp, "p2"))], str(Path(tmp, "out")), NOW)
             doc = __import__("json").loads(Path(tmp, "out", "affected-map.json").read_text())
             reasons = __import__("json").loads(Path(tmp, "out", "unmapped-reasons.json").read_text())
         self.assertEqual(reasons, {"coverage": 1})
-        # lib total = 30 + 5 + 65 = 100 s: a::b (30%) splits into x (8%) and y (3%); f::g (65%) is one test, kept.
-        self.assertEqual(set(doc["units"]), {"lib:a::b::x", "lib:a::b::y", "lib:c::d", "lib:f::g", "test:e2e"})
+        self.assertEqual(set(doc["units"]), {"lib:a::b", "lib:c::d", "lib:f::g", "test:e2e"})
         self.assertEqual(sorted(t for u in doc["units"].values() for t in u["tests"]),
                          sorted(["a::b::x::t1", "a::b::x::t2", "a::b::y::t3", "c::d::t4", "f::g::t6", "t5"]))
-        self.assertIn("fixtures/x.json", doc["units"]["lib:a::b::x"]["files"])
+        self.assertIn("fixtures/x.json", doc["units"]["lib:a::b"]["files"])
         self.assertIn("fixtures/x.json", doc["units"]["lib:c::d"]["files"])
+        self.assertNotIn("fixtures/x.json", doc["units"]["lib:f::g"]["files"])
         self.assertEqual(doc["map_sha"], "abc")
-        self.assertNotIn(["f::g::t6"], calls, "a single heavy test is not re-run")
 
 
 class Workflow(unittest.TestCase):
@@ -472,19 +416,8 @@ def _mutants() -> list[tuple[str, str, dict]]:
     real_reasons = am.unmapped_reasons
     real_counts = am.reason_counts
     real = {name: getattr(am, name) for name in (
-        "split_heavy", "unit_record", "parse_trace", "depinfo_inputs", "group", "repo_key", "_completed_calls",
+        "unit_record", "parse_trace", "depinfo_inputs", "repo_key", "_completed_calls",
         "should_build", "lcov_files", "results", "map_document", "unit_env", "artifact_depinfo_path")}
-
-    def split_by_name(prefix, members, depth, total, measure, share=None):
-        share = am.SPLIT_SHARE if share is None else share
-        units, pending = {}, [(prefix, members, depth)]
-        while pending:
-            key, names, d = pending.pop()
-            if measure(key, names) > share * total and not (len(names) == 1 and names[0] == key):
-                pending.extend((k, v, d + 1) for k, v in am.group(names, d + 1).items())
-            else:
-                units[key] = sorted(names)
-        return units
 
     def summed(output):
         found = am._RESULT.findall(output)
@@ -496,12 +429,6 @@ def _mutants() -> list[tuple[str, str, dict]]:
 
     def no_descriptor_names(text, repo, cwd):
         return real["parse_trace"](re.sub(r"(= \d+)<[^>]*>", r"\1", text), repo, cwd)
-
-    def one_level(prefix, members, depth, total, measure, share=None):
-        share = am.SPLIT_SHARE if share is None else share
-        if measure(prefix, members) > share * total and not (len(members) == 1 and members[0] == prefix):
-            return {k: sorted(v) for k, v in am.group(members, depth + 1).items()}
-        return {prefix: sorted(members)}
 
     def no_pass_count(r, *a):
         return {**real["unit_record"](r, *a), "unmapped": r.trace_rc != 0 or r.trace_text is None}
@@ -538,9 +465,6 @@ def _mutants() -> list[tuple[str, str, dict]]:
         ("M1 no counter relocation", "Coverage", {"COVERAGE_RUSTFLAGS": "-C instrument-coverage"}),
         ("M1 no continuous mode (%c)", "Coverage", {"PROFILE_NAME": "%m-%p.profraw"}),
         ("M1 the profile outside the unit folder", "Coverage", {"unit_env": lambda d: {"LLVM_PROFILE_FILE": "x"}}),
-        ("M2 the share constant at 13%", "Weight", {"SPLIT_SHARE": 0.13}),
-        ("M2 a split that stops after one level", "Weight", {"split_heavy": one_level}),
-        ("M2 groups by the whole name", "Weight", {"group": lambda names, depth: {n: [n] for n in names}}),
         ("M3 the pass count ignored", "Units", {"unit_record": no_pass_count}),
         ("M4 an eighth unit key", "Units", {"unit_record": lambda *a: {**real["unit_record"](*a), "x": 1}}),
         ("M4 a fourth map key", "Units", {"map_document": lambda *a: {**real["map_document"](*a), "x": 1}}),
@@ -560,7 +484,6 @@ def _mutants() -> list[tuple[str, str, dict]]:
         ("M10 the age compared the wrong way", "Age",
          {"should_build": lambda b, now: not real["should_build"](b, now) if b else True}),
         ("M10 a 24-hour age", "Age", {"MAP_AGE": timedelta(hours=24)}),
-        ("M2 a one-test group split again by its name", "Weight", {"split_heavy": split_by_name}),
         ("M3 missing or failed coverage kept mapped", "Units",
          {"unit_record": lambda r, *a: {**real["unit_record"](am.Run(**{**r.__dict__, "coverage_ok": True}), *a)}}),
         ("M4 the libtest summaries summed", "Units", {"results": summed}),
@@ -568,7 +491,6 @@ def _mutants() -> list[tuple[str, str, dict]]:
         ("M5 the descriptor's real path ignored", "Trace", {"parse_trace": no_descriptor_names}),
         ("M6 a library's dep-info not found", "Inputs",
          {"artifact_depinfo_path": lambda a: a["executable"] + ".d" if a.get("executable") else None}),
-        ("M2 the merge never splits deeper", "Merge", {"SPLIT_SHARE": 1.0}),
         ("M5 the creation tree not read", "Trace", {"creation_tree": lambda calls: ({}, False)}),
         ("M5 an ambiguous trace kept mapped", "Trace", {"unit_record": ambiguity_ignored}),
         ("M5 a killed creator's `= ?` not seen", "Trace", {"unknown_creation": lambda call: False}),
@@ -585,21 +507,9 @@ class Mutants(unittest.TestCase):
     """Each named mutant, applied in this process, turns its row red: the proof that the rows above can fail."""
 
     def test_each_mutant_turns_its_row_red(self) -> None:
-        import io
-        for name, target, patch in _mutants():
-            with self.subTest(mutant=name):
-                saved = {k: getattr(am, k) for k in patch}
-                for k, v in patch.items():
-                    setattr(am, k, v)
-                try:
-                    suite = unittest.defaultTestLoader.loadTestsFromTestCase(globals()[target])
-                    outcome = unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(suite)
-                finally:
-                    for k, v in saved.items():
-                        setattr(am, k, v)
-                # An assertion must fail: a mutant that only crashes the row proves nothing about what it checks.
-                self.assertTrue(outcome.failures, f"{name}: {target} had no failing assertion "
-                                f"({len(outcome.errors)} errors)")
+        sys.path.insert(0, str(HERE))
+        from mutant_rows import check_mutants
+        check_mutants(self, am, _mutants(), globals())
 
 
 class RealTrace(unittest.TestCase):
