@@ -13,7 +13,6 @@ src/transport/http/listen.rs	unsolicited_frame	from_str	1	scrubbed-by	by src/tra
 src/transport/http/mod.rs	peer_refusal	from_str	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: the refusal is an error of the answer read_answer returns
 src/transport/http/requests.rs	body_or_stream	from_slice	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
 src/transport/http/requests.rs	json_body	from_slice	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
-src/transport/http/requests.rs	json_body	json	1	scrubbed-by	by src/transport/http/requests.rs::read_answer: reached only from read_answer_unscrubbed
 src/transport/http/sse_channel.rs	route	from_str	1	scrubbed-by	by src/transport/http/requests.rs::read_answer via src/transport/http/requests.rs::body_or_stream: the answer crosses the pending map, which body_or_stream awaits; a response goes to its waiting request, which read_answer returns; a note goes through the sink map, which scrubs (sse_listen.rs)
 src/transport/http/sse_channel.rs	route	from_value	1	scrubbed-by	by src/transport/http/requests.rs::read_answer via src/transport/http/requests.rs::body_or_stream: the answer crosses the pending map, which body_or_stream awaits; the response handed to its waiting request
 src/transport/http/sse_decoder.rs	drain_events	from_str	1	scrubbed	notifications pass withheld before they are published; the response is scrubbed by read_answer

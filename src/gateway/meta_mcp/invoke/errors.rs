@@ -203,6 +203,11 @@ impl BudgetOutcome {
         if super::gate::is_authorization_refusal(error) {
             return Self::IgnoredRefusal;
         }
+        // The backend answered, only too much: like a tool's own `isError`
+        // answer, sampled as a success so it cannot open a circuit.
+        if matches!(error, Error::ResponseTooLarge { .. }) {
+            return Self::Success;
+        }
         // The gateway refused before asking the backend (F23, #2300).
         if error.is_gateway_throttle()
             || crate::gateway::recovery::is_rate_limited(&error.to_string())

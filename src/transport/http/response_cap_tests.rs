@@ -31,18 +31,20 @@ fn capped_transport(addr: std::net::SocketAddr) -> Arc<HttpTransport> {
     transport
 }
 
-/// CAP.1/CAP.2: a 2xx JSON answer one byte over the cap is refused, typed.
+/// CAP.1/CAP.2: a 2xx JSON answer one byte over the cap is refused, typed,
+/// and asked once: the retry policy reads the same answer as final.
 #[tokio::test]
 async fn a_json_answer_over_the_cap_is_refused_as_too_large() {
-    let (addr, server) = sized_server(axum::http::StatusCode::OK, CAP + 1).await;
-    let err = capped_transport(addr)
-        .request("tools/call", None)
+    let (addr, hits, server) =
+        spawn_fixed_response_server(axum::http::StatusCode::OK, sized_template(CAP + 1)).await;
+    let err = request_through_retry(&capped_transport(addr), "tools/call")
         .await
         .expect_err("an answer over the cap must be refused");
     assert!(
         matches!(err, Error::ResponseTooLarge { limit: CAP }),
         "expected ResponseTooLarge {{ limit: {CAP} }}, got: {err:?}"
     );
+    assert_eq!(hits.load(std::sync::atomic::Ordering::Relaxed), 1);
     server.abort();
 }
 
@@ -99,4 +101,163 @@ fn the_default_cap_is_the_stdio_frame_default() {
         transport.max_response_bytes(),
         crate::transport::DEFAULT_MAX_FRAME_BYTES
     );
+}
+
+/// A chunked answer (no Content-Length) that never ends: only counting while
+/// reading can stop it.
+async fn endless() -> axum::response::Response {
+    use futures::StreamExt as _;
+    let opening = br#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":""#;
+    let chunks = futures::stream::iter([bytes::Bytes::from_static(opening)])
+        .chain(futures::stream::repeat_with(|| {
+            bytes::Bytes::from(vec![b'a'; 16 * 1024])
+        }))
+        .map(Ok::<_, std::io::Error>);
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from_stream(chunks))
+        .unwrap()
+}
+
+/// CAP.1 (review r1): an endless chunked answer is refused once it crosses
+/// the cap, long before any end of stream, and the next call is served.
+#[tokio::test]
+async fn an_endless_chunked_answer_is_refused_at_the_cap() {
+    let (addr, task) = crate::test_fixture_host::serve_http(
+        axum::Router::new().route("/mcp", axum::routing::post(endless)),
+    )
+    .await;
+    let transport = capped_transport(addr);
+    let err = tokio::time::timeout(
+        Duration::from_secs(10),
+        transport.request("tools/call", None),
+    )
+    .await
+    .expect("the read must stop at the cap, not wait for an end that never comes")
+    .expect_err("an endless answer must be refused");
+    assert!(
+        matches!(err, Error::ResponseTooLarge { limit: CAP }),
+        "{err:?}"
+    );
+    task.abort();
+    let (small, small_server) = sized_server(axum::http::StatusCode::OK, 200).await;
+    *transport.message_url.write() = Some(format!("http://{small}/mcp"));
+    assert!(transport.request("tools/call", None).await.is_ok());
+    small_server.abort();
+}
+
+// Through a Backend: the cap reaches both HTTP construction paths (R9) and an
+// over-cap answer is no breaker failure (R5). Kept here, beside the cap's
+// other rows, since they test the same limit end to end.
+
+/// A peer: `/padded` pads its `initialize` answer to 70 000 bytes; a
+/// `tools/call` of `big` is answered with CAP + 1 bytes, anything else small.
+async fn backend_peer(uri: axum::http::Uri, body: String) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    let request: Value = serde_json::from_str(&body).unwrap_or_default();
+    let Some(id) = request.get("id").cloned() else {
+        return axum::http::StatusCode::ACCEPTED.into_response();
+    };
+    let method = request.get("method").and_then(Value::as_str).unwrap_or("");
+    let tool = request.pointer("/params/name").and_then(Value::as_str);
+    let result = match (method, tool) {
+        ("initialize", _) => {
+            let pad = if uri.path() == "/padded" { 70_000 } else { 0 };
+            serde_json::json!({"protocolVersion": "2025-06-18", "capabilities": {"tools": {}},
+                "serverInfo": {"name": "peer", "version": "1", "pad": "x".repeat(pad)}})
+        }
+        ("tools/list", _) => serde_json::json!({"tools": []}),
+        ("tools/call", Some("big")) => {
+            let id = id.to_string();
+            let text = sized_template(CAP + 1).replace("{id}", &id);
+            return (
+                [(axum::http::header::CONTENT_TYPE, "application/json")],
+                text,
+            )
+                .into_response();
+        }
+        _ => serde_json::json!({"content": [{"type": "text", "text": "ok"}]}),
+    };
+    axum::Json(serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result})).into_response()
+}
+
+async fn peer() -> (std::net::SocketAddr, tokio::task::JoinHandle<()>) {
+    let app = axum::Router::new()
+        .route("/padded", axum::routing::post(backend_peer))
+        .route("/plain", axum::routing::post(backend_peer));
+    crate::test_fixture_host::serve_http(app).await
+}
+
+fn http_backend(url: &str, limit: Option<usize>) -> Arc<crate::backend::Backend> {
+    let config = crate::config::BackendConfig {
+        transport: crate::config::TransportConfig::Http {
+            http_url: url.to_owned(),
+            streamable_http: Some(true),
+            protocol_version: None,
+        },
+        max_frame_bytes: limit,
+        timeout: Duration::from_secs(10),
+        ..crate::config::BackendConfig::default()
+    };
+    Arc::new(crate::backend::Backend::new(
+        "capped",
+        config,
+        &crate::config::FailsafeConfig::default(),
+        Duration::from_secs(60),
+    ))
+}
+
+/// R9: a slot's start handshake is read under the backend's own limit.
+#[tokio::test]
+async fn the_backend_limit_bounds_its_start_handshake() {
+    let (addr, task) = peer().await;
+    let url = format!("http://{addr}/padded");
+    for (limit, starts) in [(None, true), (Some(128 * 1024), true), (Some(CAP), false)] {
+        let started =
+            tokio::time::timeout(Duration::from_secs(20), http_backend(&url, limit).start())
+                .await
+                .expect("each start ends within 20 s");
+        assert_eq!(started.is_ok(), starts, "limit {limit:?}: {started:?}");
+    }
+    task.abort();
+}
+
+/// R9: a per-user listener's own transport carries the same limit.
+#[test]
+fn a_listener_transport_carries_the_backend_limit() {
+    let url = "http://127.0.0.1:1/plain";
+    let raised = http_backend(url, Some(128 * 1024))
+        .listener_transport()
+        .unwrap();
+    assert_eq!(raised.max_response_bytes(), 128 * 1024);
+    let unset = http_backend(url, None).listener_transport().unwrap();
+    assert_eq!(
+        unset.max_response_bytes(),
+        crate::transport::DEFAULT_MAX_FRAME_BYTES
+    );
+}
+
+/// R5: over-cap answers past the breaker's threshold leave it closed, and
+/// the next ordinary call is served.
+#[tokio::test]
+async fn over_cap_answers_do_not_open_the_breaker() {
+    let (addr, task) = peer().await;
+    let backend = http_backend(&format!("http://{addr}/plain"), Some(CAP));
+    backend.start().await.expect("the plain peer starts");
+    let big = serde_json::json!({"name": "big", "arguments": {}});
+    for _ in 0..6 {
+        let err = backend
+            .request("tools/call", Some(big.clone()))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::ResponseTooLarge { .. }), "{err:?}");
+    }
+    assert_eq!(
+        backend.circuit_breaker_stats().state,
+        crate::failsafe::CircuitState::Closed,
+        "an answer over the limit is the backend answering, not failing"
+    );
+    let small = serde_json::json!({"name": "small", "arguments": {}});
+    assert!(backend.request("tools/call", Some(small)).await.is_ok());
+    task.abort();
 }

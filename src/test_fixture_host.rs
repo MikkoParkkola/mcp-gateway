@@ -62,6 +62,20 @@ pub(crate) fn fixture_client_builder() -> reqwest::ClientBuilder {
         .tls_certs_only([ca])
 }
 
+/// Serves `router` over plain http on a fresh `127.0.0.1` port until the
+/// returned task is aborted. Returns the address and that task.
+pub(crate) async fn serve_http(router: axum::Router) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    // port-check: the listener serves on in the spawned task.
+    let socket = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a loopback listener binds");
+    let addr = socket.local_addr().expect("the listener has an address");
+    (
+        addr,
+        tokio::spawn(async move { drop(axum::serve(socket, router).await) }),
+    )
+}
+
 /// Serves `router` over https on a fresh `127.0.0.1` port, with a leaf for
 /// [`FIXTURE_HOST`] signed by the CA [`fixture_client`] trusts. Returns the port.
 pub(crate) async fn serve_https(router: axum::Router) -> u16 {

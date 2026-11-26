@@ -331,7 +331,9 @@ pub(crate) fn recovery_for_surface(
                 str::to_string,
             ),
             suggest: "Ask for less: a narrower query, fewer items or a smaller page. \
-                      The same request gets the same answer, so do not retry it as is."
+                      The same request gets the same answer, so do not retry it as is. \
+                      If answers this large are expected, an operator can raise \
+                      backends.<name>.max_frame_bytes."
                 .to_string(),
             fix_example: None,
             related_tools: ctx.related_tools,

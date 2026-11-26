@@ -54,6 +54,7 @@ pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
 ///         Error::Config(..)
 ///         | Error::Forbidden { .. }
 ///         | Error::ResponseFirewallRefused
+///         | Error::ResponseTooLarge { .. }
 ///         | Error::AuditUnavailable
 ///         | Error::ConfigValidation(..)
 ///         | Error::ConfigWatcher(..)
@@ -101,6 +102,7 @@ pub(crate) fn step_failure_text(error: &Error, text: String) -> String {
 ///         Error::Config(..)
 ///         | Error::Forbidden { .. }
 ///         | Error::ResponseFirewallRefused
+///         | Error::ResponseTooLarge { .. }
 ///         | Error::AuditUnavailable
 ///         | Error::ConfigValidation(..)
 ///         | Error::ConfigWatcher(..)
