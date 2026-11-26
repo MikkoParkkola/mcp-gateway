@@ -1,0 +1,70 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* The Overview's KPI tiles and its panels. Colour, space and type are the shell's design
+   tokens only; the card (.tk) and .num come from the shell. */
+
+/* Desktop, as frame 40 draws it: six tiles in one row. */
+.ov { display: grid; gap: var(--space-4); }
+.ov-kpis { padding: 0; }
+.ov-strip { display: flex; }
+.ov-tile { flex: 1 1 0; min-width: 0; display: grid; align-content: start; gap: var(--space-2);
+  padding: var(--space-4) var(--space-4) var(--space-3); border-left: var(--size-rule) solid var(--color-border-subtle); }
+.ov-strip > .ov-tile:first-child { border-left: 0; }
+.ov-go { display: grid; gap: var(--space-1); color: inherit; text-decoration: none; }
+a.ov-go:hover .ov-label { color: var(--color-text-primary); }
+.ov-label { font: var(--type-body); color: var(--color-text-secondary); }
+.ov-num { font: var(--type-num-lg); letter-spacing: var(--type-num-lg-tracking); color: var(--color-text-primary); overflow-wrap: anywhere; }
+.ov-num.ov-words { font: var(--type-read); letter-spacing: var(--type-read-tracking); color: var(--color-text-secondary);
+  min-height: calc(var(--space-10) + var(--space-0-5)); display: flex; align-items: center; }
+.ov-trend { display: flex; align-items: center; gap: var(--space-2); min-height: var(--space-5); }
+.ov-ctx, .ov-trend-off { font: var(--type-small); color: var(--color-text-tertiary); }
+.ov-spark { flex: none; width: calc(var(--space-16) + var(--space-2)); height: calc(var(--space-4) + var(--space-0-5)); overflow: visible; }
+.ov-spark polyline { fill: none; stroke: var(--color-accent-default); stroke-width: var(--size-tick-stroke);
+  vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+
+/* The panels below the tiles, filled in DOM order (place() keeps that order).
+   One column; two from 1100 px, where the KPI strip and the checklist span both. */
+.ov > * { min-width: 0; }
+@media (min-width: 1100px) {
+  .ov { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .ov > [data-panel="kpis"], .ov > [data-panel="checklist"] { grid-column: 1 / -1; }
+}
+.ov-panel { display: grid; gap: var(--space-2); padding: var(--space-4); }
+.ov-panel-h { font: var(--type-body); font-weight: var(--font-weight-bold); color: var(--color-text-primary); margin: 0; }
+.ny-count, .ck-count { color: var(--color-text-secondary); font-weight: normal; }
+.ny-row { display: grid; grid-template-columns: var(--space-5) minmax(0, 1fr); gap: var(--space-2);
+  padding: var(--space-2) 0; border-top: var(--size-rule) solid var(--color-border-subtle); color: inherit; text-decoration: none; }
+.ny-glyph { color: var(--color-status-warning-fg); }
+.ny-row[data-kind="refused"] .ny-glyph, .ny-row[data-kind="invalid_config"] .ny-glyph { color: var(--color-status-danger-fg); }
+.ny-body { display: grid; gap: var(--space-1); min-width: 0; }
+.ny-title { font: var(--type-body); color: var(--color-text-primary); overflow-wrap: anywhere; }
+.ny-line { font: var(--type-small); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.ny-go, .la-all, .ny-signins, .ck-go, .la-older a { font: var(--type-small); color: var(--color-accent-text); }
+a.ny-row:hover .ny-title { text-decoration: underline; }
+.ny-empty, .ny-more, .la-empty, .la-older { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
+.la-row { display: grid; grid-template-columns: calc(var(--space-16) + var(--space-8)) minmax(0, 1fr); gap: var(--space-2);
+  padding: var(--space-1-5) 0; border-top: var(--size-rule) solid var(--color-border-subtle); }
+.la-time { font: var(--type-small); color: var(--color-text-tertiary); }
+.la-what { font: var(--type-body); color: var(--color-text-primary); overflow-wrap: anywhere; }
+.ck-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+.ck-step { display: grid; grid-template-columns: var(--space-8) minmax(0, 1fr); gap: var(--space-2); }
+.ck-mark { display: grid; place-items: center; width: var(--space-8); height: var(--space-8); border-radius: var(--radius-md);
+  border: var(--size-rule) solid var(--color-border-default); color: var(--color-text-secondary); }
+.ck-body { display: grid; gap: var(--space-1); }
+.ck-title { font: var(--type-body); color: var(--color-text-primary); }
+.ck-line { font: var(--type-small); color: var(--color-text-secondary); }
+
+/* A narrower desktop: rows of three. */
+@media (max-width: 1100px) {
+  .ov-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Phone: Calls, Firewall and From cache, then "More numbers" holding the rest
+   (the script moves the tiles; the strip below 640 px never holds six). */
+@media (max-width: 639px) {
+  .ov-strip { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .ov-tile { padding: var(--space-2) var(--space-4); border-left: 0; border-top: var(--size-rule) solid var(--color-border-subtle); gap: var(--space-1); }
+  .ov-strip > .ov-tile:first-child { border-top: 0; }
+  .ov-more { border-top: var(--size-rule) solid var(--color-border-subtle); }
+  .ov-more-sum { padding: var(--space-3) var(--space-4); font: var(--type-body); color: var(--color-accent-text); cursor: pointer; }
+}
