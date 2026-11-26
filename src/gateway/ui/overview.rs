@@ -130,8 +130,13 @@ pub(super) async fn overview(
         (!generation.auth().api_keys().is_empty()).into(),
     );
     source.add_tool_tried(&mut checklist);
-    let seen = client_seen(&state);
-    checklist.insert("client_seen".into(), seen.into());
+    let live = client_seen(&state);
+    let keyed = !generation.auth().api_keys().is_empty();
+    let tried = checklist.get("tool_tried") == Some(&Value::Bool(true));
+    let seen = mutant!("R2", live || keyed, mutant!("R3", live || tried, live));
+    if mutant!("R4", seen, true) {
+        checklist.insert("client_seen".into(), seen.into());
+    }
     body.insert("checklist".into(), checklist.into());
     degraded.extend_from_slice(source.degraded());
     if !degraded.is_empty() {
@@ -146,7 +151,11 @@ pub(super) async fn overview(
 /// so this admin read never answers there.)
 fn client_seen(state: &AppState) -> bool {
     let sessions = state.multiplexer.client_roster();
-    sessions.named_total + sessions.unnamed > 0
+    mutant!(
+        "R1",
+        false,
+        sessions.named_total + mutant!("R5", 0, sessions.unnamed) > 0
+    )
 }
 
 /// All backends, in name order. Sort on the full name; clipping first could
