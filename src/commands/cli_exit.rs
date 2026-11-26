@@ -553,7 +553,7 @@ impl crate::cli::output::Printed {
     pub(crate) fn error(kind: CliExit, message: &str, remedy: &str) -> Self {
         Self {
             stdout: String::new(),
-            stderr: error_outcome(kind, message, remedy).stderr().to_owned(),
+            stderr: error_outcome(kind, message, remedy).stderr,
             exit: kind.code(),
         }
     }
