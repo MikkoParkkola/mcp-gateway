@@ -315,11 +315,12 @@ def plan() -> list[Row]:
 
 
 def fetch_release_line() -> None:
-    """Fetches the release-line tip into FETCH_HEAD. `--depth=1` only in a
-    checkout that is already shallow (a CI checkout): in a full clone it would
-    make the object store shallow, and a local run shares that store with every
-    worktree of the repository, breaking their merge-bases."""
-    depth = ["--depth=1"] if git("rev-parse", "--is-shallow-repository") == "true" else []
+    """Fetches the release-line tip into FETCH_HEAD. `--depth=1` only under
+    GitHub Actions, whose checkout is throwaway. A local run never passes it,
+    even in a clone that is already partly shallow: the object store is shared
+    with every worktree, and a depth-1 fetch there would make the tip a shallow
+    boundary and break their merge-bases."""
+    depth = ["--depth=1"] if os.environ.get("GITHUB_ACTIONS") == "true" else []
     git("fetch", "--quiet", *depth, "origin", RELEASE_LINE)
 
 
