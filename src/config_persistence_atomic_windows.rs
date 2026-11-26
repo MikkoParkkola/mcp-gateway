@@ -123,6 +123,54 @@ pub(super) fn prepare_from(model: &File, target: &Path, scratch: &Path) -> io::R
     }
 }
 
+/// A `Private` save replaces only a file this process could itself have
+/// created, before any scratch: one owned by the account the gateway runs as
+/// (the private copy's owner) or by its token's default owner for new files.
+/// Any other owner refuses. A volume that keeps no access lists has no owner
+/// to keep. An owner that cannot be read refuses: the writer never hands
+/// itself a file it cannot inspect.
+pub(super) fn private_owner_allows(target: &Path) -> io::Result<()> {
+    let unreadable = |e: io::Error| {
+        refused(
+            "descriptor-unreadable",
+            target,
+            &format!("its owner could not be read ({e})"),
+        )
+    };
+    let model = OpenOptions::new()
+        .access_mode(READ_CONTROL)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(target)
+        .map_err(unreadable)?;
+    if !volume_keeps_acls(&model).map_err(unreadable)? {
+        return Ok(());
+    }
+    let owner = win_acl::inspect(&model).map_err(unreadable)?.owner;
+    let runs_as = win_acl::current_user_sid().map_err(unreadable)?;
+    let creates_as = token_owner().map_err(unreadable)?;
+    // An owner this process could itself have created the file with: its
+    // user, or the default owner its token gives new files (on an elevated
+    // token, BUILTIN\Administrators, which the user belongs to).
+    if owner
+        .as_ref()
+        .is_some_and(|o| *o == runs_as || *o == creates_as)
+    {
+        return Ok(());
+    }
+    let named = owner
+        .as_ref()
+        .map_or_else(|| "nobody".to_owned(), win_acl::Sid::to_sddl);
+    Err(refused(
+        "foreign-owner",
+        target,
+        &format!(
+            "its owner is {named}, but a private save makes the file owned by {}; give the \
+             file that owner, or run the gateway as its owner",
+            runs_as.to_sddl()
+        ),
+    ))
+}
+
 /// The scratch's owner, access list (in order) and access-enforcing SACL
 /// entries equal the target's. Runs before any byte is written.
 pub(super) fn verify(file: &File, source: &CopySource, target: &Path) -> io::Result<()> {
@@ -164,6 +212,15 @@ pub(super) fn verify(file: &File, source: &CopySource, target: &Path) -> io::Res
         ));
     }
     Ok(())
+}
+
+/// The token's default owner for new files (a seam in tests can fail it).
+fn token_owner() -> io::Result<win_acl::Sid> {
+    #[cfg(test)]
+    if let Some(code) = test_seams::OWNER_QUERY_ERROR.with(std::cell::Cell::get) {
+        return Err(io::Error::from_raw_os_error(code));
+    }
+    win_acl::current_owner_sid()
 }
 
 fn volume_keeps_acls(file: &File) -> io::Result<bool> {
@@ -256,5 +313,11 @@ pub(super) mod test_seams {
             const { std::cell::Cell::new(None) };
         pub(crate) static FORCE_MISMATCH: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
+        /// The raw OS error the target's metadata read answers, if set.
+        pub(crate) static METADATA_ERROR: std::cell::Cell<Option<i32>> =
+            const { std::cell::Cell::new(None) };
+        /// The raw OS error the token's default-owner query answers, if set.
+        pub(crate) static OWNER_QUERY_ERROR: std::cell::Cell<Option<i32>> =
+            const { std::cell::Cell::new(None) };
     }
 }
