@@ -193,31 +193,35 @@ async fn a_zombie_holding_inner_still_leaves_no_leaf() {
 
 /// Hurried stop of the same chain: the outer's kill comes after about 300 ms
 /// while the inner's unsettled freeze runs for its 700 ms slice, so the outer's
-/// own sweep takes the inner over. No process of the tree may survive, and both
-/// sweeps must have logged a freeze start. The run prints one TAKEOVER line:
-/// `yes` when the outer's sweep started after the inner's freeze started and
-/// before it ended (or the inner never logged an end, being frozen or killed
-/// mid-freeze). The SNAP.7 harness counts those lines over its runs; one run
-/// cannot force the overlap, so the row itself asserts only what every run must
-/// show.
+/// own sweep may take the inner over. No process of the tree may survive, and
+/// the outer (which always sweeps) must have logged a freeze start. The run
+/// prints one TAKEOVER line: `yes` only when the inner logged a freeze start,
+/// the outer's sweep started at or after it, and before the inner's freeze end
+/// (or the inner logged no end, being frozen or killed mid-freeze). An inner
+/// that never reached its sweep (the outer was first) is a run without overlap:
+/// `no`, never `yes`. The SNAP.7 harness counts those lines over its runs; one
+/// run cannot force the overlap, so the row itself asserts only what every run
+/// must show.
 /// Red if a hurried takeover of a zombie-holding inner leaves a leaf behind.
 #[tokio::test]
 async fn a_hurried_takeover_of_a_freezing_inner_leaves_no_leaf() {
     let ended = zombie_chain(Stop::Hurried).await;
-    let missing = |who: &str, log: &str| {
-        format!("the {who} logged no freeze start (missing line = FAIL)\n{log}")
-    };
-    let inner_start = line_with(&ended.inner_log, FREEZE_START)
-        .map(stamp)
-        .unwrap_or_else(|| panic!("{}", missing("inner", &ended.inner_log)));
     let outer_start = line_with(&ended.outer_log, FREEZE_START)
         .map(stamp)
-        .unwrap_or_else(|| panic!("{}", missing("outer", &ended.outer_log)));
+        .unwrap_or_else(|| {
+            panic!(
+                "the outer logged no freeze start (missing line = FAIL)\n{}",
+                ended.outer_log
+            )
+        });
+    let inner_start = line_with(&ended.inner_log, FREEZE_START).map(stamp);
     let inner_end = line_with(&ended.inner_log, FREEZE_END).map(stamp);
-    let takeover = inner_start <= outer_start && inner_end.is_none_or(|end| outer_start < end);
+    let takeover = inner_start.is_some_and(|start| start <= outer_start)
+        && inner_end.is_none_or(|end| outer_start < end);
     println!(
-        "TAKEOVER={} inner_start={inner_start} outer_start={outer_start} inner_end={}",
+        "TAKEOVER={} inner_start={} outer_start={outer_start} inner_end={}",
         if takeover { "yes" } else { "no" },
+        inner_start.unwrap_or("none"),
         inner_end.unwrap_or("none")
     );
     assert!(
