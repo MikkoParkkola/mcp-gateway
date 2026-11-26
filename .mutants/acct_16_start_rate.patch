@@ -1,0 +1,13 @@
+diff --git a/src/personal_accounts/journey/limits.rs b/src/personal_accounts/journey/limits.rs
+index c01e02fab..8b0c19441 100644
+--- a/src/personal_accounts/journey/limits.rs
++++ b/src/personal_accounts/journey/limits.rs
+@@ -79,7 +79,7 @@ impl Rates {
+         let mine = inside(&self.starts, Some(principal), START_RATE_WINDOW, now);
+         if let Some(retry_after) = wait(
+             &mine,
+-            limits.starts_per_minute_per_user,
++            u32::MAX,
+             START_RATE_WINDOW,
+             now,
+         ) {
