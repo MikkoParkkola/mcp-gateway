@@ -33,6 +33,10 @@ pub(crate) struct ByteBudget {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
     /// The start-once preview: one kept refusal, in the preview's words.
+    #[cfg_attr(
+        not(any(test, feature = "webui")),
+        allow(dead_code, reason = "only the webui preview builds one")
+    )]
     Preview,
     /// One answer of a live backend: `Error::ResponseTooLarge`.
     Answer,
