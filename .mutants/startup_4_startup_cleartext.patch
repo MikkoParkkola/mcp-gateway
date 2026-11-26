@@ -1,0 +1,13 @@
+diff --git a/src/gateway/server/cleartext.rs b/src/gateway/server/cleartext.rs
+index cbdde9cfd..1308ba473 100644
+--- a/src/gateway/server/cleartext.rs
++++ b/src/gateway/server/cleartext.rs
+@@ -73,7 +73,7 @@ pub(super) fn cleartext_credential_refusal(config: &Config) -> Option<String> {
+         return None;
+     }
+     match config.server.cleartext_http {
+-        CleartextHttp::Refuse => {}
++        CleartextHttp::Refuse => return None,
+         CleartextHttp::TlsTerminatedUpstream | CleartextHttp::HostLocalPublish => return None,
+         CleartextHttp::ClusterInternal => {
+             if service_host(config).is_some() {
