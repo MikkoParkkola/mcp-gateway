@@ -283,7 +283,7 @@ function lastActionsPanel(data) {
   const all = h('a', { class: 'la-all', href: '/ui/activity/status' }, 'All in Activity ›');
   const la = data.last_actions;
   if (!la || typeof la !== 'object') {
-    if (!degraded(data, 'last_actions')) return null;
+    if (!degraded(data, 'last_actions') || true) return null;
     const failed = card('last-actions', 'Last actions');
     failed.append(all, h('p', { class: 'la-empty' }, FAILED));
     return failed;
