@@ -41,7 +41,7 @@ function readFilters() {
   const outcome = q.get('outcome');
   const range = q.get('range');
   return {
-    outcome: outcome === 'ok' || outcome === 'failed' || outcome === 'blocked' ? outcome : null,
+    outcome: ['ok', 'failed', 'blocked', 'cleaned'].includes(outcome) ? outcome : null,
     server: q.get('server') || null,
     key: q.get('key') || null,
     // A receipt's rule link lands here; the list asks for exactly that rule.
@@ -105,10 +105,11 @@ async function statusTab(body, ctx) {
   const outcomeTip = h('span', { class: 'activity-tip' });
   const blockedTip = h('span', { class: 'activity-tip' });
   // The blocked trigger sits beside the option, outside the group: the group's
-  // buttons are only All, ok, failed and blocked.
+  // buttons are only the Outcome values (cleaned: calls whose answer the firewall cleaned).
+  const OUTCOMES = [['all', 'All'], ['ok', 'ok'], ['failed', 'failed'], ['blocked', 'blocked'], ['cleaned', 'cleaned']];
   const outcomeGroup = segmented({
     label: 'Outcome',
-    options: [['all', 'All'], ['ok', 'ok'], ['failed', 'failed'], ['blocked', 'blocked']],
+    options: OUTCOMES,
     value: filters.outcome ?? 'all',
     onChange: (value) => {
       filters.outcome = value === 'all' ? null : value;
@@ -474,11 +475,78 @@ async function statusTab(body, ctx) {
     step('next');
   }
 
+  // Outcome counts: one read of /ui/api/activity/counts per filter set, beside the list.
+  // The key is the filters without outcome and without the window: an Outcome click
+  // changes no count, and each commit moving the window to now is not a new filter set.
+  const countKey = () => new URLSearchParams([
+    ['server', filters.server ?? ''], ['caller', filters.key ?? ''], ['q', filters.q ?? ''],
+    ['rule', filters.rule ?? ''], ['range', filters.range],
+  ]).toString();
+  // shown: the key whose counts are on the buttons; pending: the key of the read that is out.
+  const counts = { shown: '', pending: '', abort: null };
+  const outcomeButtons = () => [...outcomeGroup.querySelectorAll('button[data-value]')];
+
+  /** The bare words, numbers removed. */
+  function clearCounts() {
+    const words = new Map(OUTCOMES);
+    for (const b of outcomeButtons()) b.textContent = words.get(b.getAttribute('data-value'));
+    counts.shown = '';
+  }
+
+  /** Each button's word, one space, its count; a count the scan did not finish ends in "+". */
+  function drawCounts(data, key) {
+    const n = data?.counts;
+    if (!n || !OUTCOMES.every(([v]) => Number.isSafeInteger(n[v]) && n[v] >= 0)) return;
+    // Only "end" is a finished count; "window_passed", "cap" or a word this page does not list is not.
+    const more = data.stopped === 'end' ? '' : '+';
+    const words = new Map(OUTCOMES);
+    for (const b of outcomeButtons()) {
+      const v = b.getAttribute('data-value');
+      b.textContent = `${words.get(v)} ${n[v].toLocaleString('en')}${more}`;
+    }
+    counts.shown = key;
+    // The note line under the Outcome group for "window_passed" and "cap" (rows A32, A37,
+    // A39) waits for its wording; until it lands this page is not shipped.
+  }
+
+  /** Read the counts for the filters and the page-1 window commit just asked for. */
+  function loadCounts() {
+    const key = countKey();
+    if (key === counts.pending) return;
+    if (key === counts.shown && !counts.pending) return;
+    counts.abort?.abort();
+    clearCounts();
+    const span = list.flight?.kind === 'page1' ? list.flight.window : null;
+    if (!span) return;
+    const params = new URLSearchParams();
+    if (filters.server) params.set('server', filters.server);
+    if (filters.key) params.set('caller', filters.key);
+    if (filters.q) params.set('q', filters.q);
+    if (filters.rule) params.set('rule', filters.rule);
+    params.set('from', utcSeconds(new Date(span.from)));
+    params.set('to', utcSeconds(new Date(span.to)));
+    const mine = new AbortController();
+    counts.abort = mine;
+    counts.pending = key;
+    const done = () => {
+      if (counts.abort !== mine) return false;
+      counts.abort = null;
+      counts.pending = '';
+      return !left;
+    };
+    // A failed read leaves the words without counts.
+    ctx.api(`/ui/api/activity/counts?${params}`, { signal: mine.signal }).then(
+      (data) => { if (done()) drawCounts(data, key); },
+      () => { done(); },
+    );
+  }
+
   function commit() {
     // A search wait can end after the user has left: this list is then no longer on screen.
     if (!root.isConnected) return;
     writeUrl();
     step('replace', { query: query() });
+    loadCounts();
   }
 
   function chooseRange(value) {
@@ -516,6 +584,7 @@ async function statusTab(body, ctx) {
     if (left || root.isConnected) return;
     left = true;
     listCore.leave(list).abort?.abort.abort();
+    counts.abort?.abort();
     removeEventListener('gateway-activity', onFrame);
     removeEventListener('gateway-reset', onReset);
     endSeen.disconnect();
@@ -525,6 +594,7 @@ async function statusTab(body, ctx) {
   gone.observe(document.body, { childList: true, subtree: true });
 
   step('replace', { query: query() });
+  loadCounts();
   await firstDone;
 }
 

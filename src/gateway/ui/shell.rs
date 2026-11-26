@@ -25,12 +25,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity-list.3e4eec96100d.js"),
     ),
     (
-        "activity.237d685089d2.css",
-        include_bytes!("shell/activity.237d685089d2.css"),
+        "activity.009e8e4a0fd7.js",
+        include_bytes!("shell/activity.009e8e4a0fd7.js"),
     ),
     (
-        "activity.fc48bc617d72.js",
-        include_bytes!("shell/activity.fc48bc617d72.js"),
+        "activity.237d685089d2.css",
+        include_bytes!("shell/activity.237d685089d2.css"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
