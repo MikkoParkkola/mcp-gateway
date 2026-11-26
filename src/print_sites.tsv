@@ -44,8 +44,6 @@ T	src/cli/output.rs	print_tool_list	-	CLI output helpers
 T	src/cli/output.rs	Printed::emit	-	CLI output helpers
 T	src/commands/accounts.rs	print_migrated	-	CLI subcommand output (accounts.rs)
 T	src/commands/accounts.rs	print_report	-	CLI subcommand output (accounts.rs)
-T	src/commands/accounts.rs	run_init_store	-	CLI subcommand output (accounts.rs)
-T	src/commands/accounts.rs	run_migrate_credentials	-	CLI subcommand output (accounts.rs)
 T	src/commands/add_remove.rs	run_add_command	-	CLI subcommand output (add_remove.rs)
 T	src/commands/add_remove.rs	run_get_command	-	CLI subcommand output (add_remove.rs)
 T	src/commands/add_remove.rs	run_list_available_command	-	CLI subcommand output (add_remove.rs)
