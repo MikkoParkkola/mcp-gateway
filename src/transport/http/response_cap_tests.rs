@@ -392,11 +392,10 @@ async fn an_unreadable_error_body_still_reports_the_status() {
 async fn chatty_answer(body: String) -> axum::response::Response {
     let note = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/progress",
         "params": {"progressToken": "t", "progress": 1, "message": "p".repeat(8 * 1024)}});
-    let mut stream = format!("event: message\ndata: {note}\n\n").repeat(20);
+    let notes = format!("event: message\ndata: {note}\n\n").repeat(20);
     let id = posted_id(&body);
-    stream.push_str(&format!(
-        "event: message\ndata: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"content\":[]}}}}\n\n"
-    ));
+    let result = serde_json::json!({"jsonrpc": "2.0", "id": serde_json::from_str::<Value>(&id).unwrap_or_default(), "result": {"content": []}});
+    let stream = format!("{notes}event: message\ndata: {result}\n\n");
     axum::response::Response::builder()
         .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
         .body(axum::body::Body::from(stream))
