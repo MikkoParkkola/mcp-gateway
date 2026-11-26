@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -16,7 +16,6 @@
+ 
+ /** Drop the page's status listener: called first by every tab function of the Servers module. */
+ export function leave() {
+-  dropListener?.();
+   dropListener = null;
+   owner = null;
+ }

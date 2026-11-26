@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -176,6 +176,7 @@
+     const decide = (decision) => async () => {
+       error(null);
+       try {
++        await post('signin', {});
+         await post('signin/confirm', { decision, attempt_id: attempt });
+       } catch (err) {
+         error(err);

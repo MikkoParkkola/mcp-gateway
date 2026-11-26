@@ -7,7 +7,7 @@ name: Reload now mutants (one-off)
 # Fires only on pushes to its own branch.
 on:
   push:
-    branches: ["throwaway/mut-9593-ui-tests"]
+    branches: ["throwaway/mut-9570a-ui"]
 
 permissions:
   contents: read
@@ -33,12 +33,7 @@ jobs:
         run: |
           npx playwright install chromium
           timeout 600 npx playwright install-deps chromium || echo "::warning::system libraries not installed; using the runner image's"
-      - name: Frame-26 screenshots
-        env:
-          CI: 'true'
-        run: npx playwright test --project=chromium --reporter=line tests/zz-frame-9593.spec.mjs
       - name: Mutants, one at a time
-        # Runs even when the screenshots failed; only a cancel stops it.
         if: ${{ !cancelled() }}
         env:
           CI: 'true'

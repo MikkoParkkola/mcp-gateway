@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -100,7 +100,7 @@
+     }
+     const servers = event.detail?.servers;
+     const now = Array.isArray(servers) ? servers.find((s) => s?.name === ctx.object) : null;
+-    if (now) draw(now);
++    if (now) ctx.api('/ui/api/status').then(() => draw(now));
+   };
+   addEventListener('gateway-status', onStatus);
+   dropListener = () => removeEventListener('gateway-status', onStatus);

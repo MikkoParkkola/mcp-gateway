@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -212,7 +212,7 @@
+     progress: `${verb === 'Restart' ? 'Restarting' : 'Retrying'} ${name}…`,
+     consequences: ['Calls in flight are cut.', 'The failure pause is reset.', 'Its tools stay listed.'],
+     run: () => ctx.api(backendApi(name, 'revive'), { method: 'POST' }),
+-    done: (v) => (v?.status === 'revived'
++    done: (v) => (true
+       ? { path: serverPath(name, 'status'), notice: `${name} was restarted.` }
+       : { path: serverPath(name, 'actions'), notice: `${name} did not restart: the gateway is shutting down.` }),
+   }));

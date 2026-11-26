@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -218,6 +218,7 @@
+   }));
+   const remove = el('button', { type: 'button', class: 'btn danger' }, `Remove ${name}`);
+   remove.addEventListener('click', async () => {
++    ctx.api(backendApi(name), { method: 'DELETE' }).catch(() => {});
+     const keys = await keysRead;
+     ctx.confirm({
+       opener: remove, key: `remove:${name}`, verb: 'Remove', object: name,

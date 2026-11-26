@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/servers.56b286fd52ad.js b/src/gateway/ui/shell/servers.56b286fd52ad.js
+--- a/src/gateway/ui/shell/servers.56b286fd52ad.js
++++ b/src/gateway/ui/shell/servers.56b286fd52ad.js
+@@ -59,7 +59,7 @@
+ 
+ const slug = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+ /** A name in the list: a link to its Status tab, or text for a name no address can carry. */
+-const nameLink = (name) => (addressable(name) ? el('a', { class: 'lnk', href: serverPath(name, 'status') }, name) : name);
++const nameLink = (name) => (true ? el('a', { class: 'lnk', href: serverPath(name, 'status') }, name) : name);
+ const known = (n) => typeof n === 'number' && Number.isFinite(n);
+ const ms = (n) => (n < 1000 ? `${Math.round(n)} ms` : `${(n / 1000).toFixed(1)} s`);
+ const notKnown = () => el('td', { class: 'n', 'aria-label': 'not known' }, '—');

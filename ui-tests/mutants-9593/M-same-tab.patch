@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -188,7 +188,7 @@
+     finish.addEventListener('click', decide('confirm'));
+     cancel.addEventListener('click', decide('cancel'));
+     flow.replaceChildren(
+-      ...(href ? [el('p', {}, el('a', { class: 'lnk', href, target: '_blank', rel: 'noopener noreferrer' }, 'Open the sign-in page'))] : []),
++      ...(href ? [el('p', {}, el('a', { class: 'lnk', href, rel: 'noopener noreferrer' }, 'Open the sign-in page'))] : []),
+       ...(until ? [el('p', {}, `The sign-in link expires at ${until}.`)] : []),
+       el('p', { class: 'acts' }, finish, cancel));
+   });

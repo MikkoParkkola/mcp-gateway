@@ -1,44 +1,19 @@
-# id	patch	spec files	title grep (the rows that must fail)
-K1	K1.patch	tests/gateway-reload.spec.mjs	R-ONCE
-K2	K2.patch	tests/gateway-reload.spec.mjs	R-RESTART-ADVICE|R-RESTART-WIN|R-RESTART-NOCMD
-K3	K3.patch	tests/gateway-reload.spec.mjs	R-ADVICE-FN|R-RESTART-REFUSAL:
-K4	K4.patch	tests/gateway-reload.spec.mjs	R-RESTART-REFUSAL:
-K5	K5.patch	tests/gateway-reload.spec.mjs	R-500
-K6	K6.patch	tests/gateway-reload.spec.mjs	R-RESTART-ADVICE
-K6b	K6b.patch	tests/gateway-reload.spec.mjs	R-PLATFORM
-K6c	K6c.patch	tests/gateway-reload.spec.mjs	R-RESTART-NOCMD|R-RESTART-WIN|R-RESTART-NEITHER
-K7	K7.patch	tests/gateway-reload.spec.mjs	R-RESTART-NEITHER
-K8	K8.patch	tests/gateway-reload.spec.mjs	R-RESTART-NEITHER
-K9	K9.patch	tests/gateway-reload.spec.mjs	R-HOSTILE|R-ADVICE-FN
-K10	K10.patch	tests/gateway-reload.spec.mjs	R-REPEAT
-K11	K11.patch	tests/gateway-reload.spec.mjs	R-REPLACE
-K12	K12.patch	tests/gateway-reload.spec.mjs	R-REPLACE
-K13	K13.patch	tests/gateway-reload.spec.mjs	R-OK-NONE|R-409|R-500|R-RESTART-ADVICE
-K14	K14.patch	tests/gateway-reload.spec.mjs	R-OK-NONE|R-409|R-500|R-RESTART-ADVICE
-K14b	K14b.patch	tests/gateway-reload.spec.mjs	R-RESTART-ADVICE|R-RESTART-WIN|R-500|R-OK-CHANGES
-K14c	K14c.patch	tests/gateway-reload.spec.mjs	R-RESTART-ADVICE|R-RESTART-WIN|R-500
-K15	K15.patch	tests/gateway-reload.spec.mjs	R-RESTART-ADVICE|R-RESTART-REFUSAL:
-K16	K16.patch	tests/gateway-reload.spec.mjs	R-OK-NONE
-K16b	K16b.patch	tests/gateway-reload.spec.mjs	R-SUMMARY-PIN
-K17	K17.patch	tests/gateway-reload.spec.mjs	R-OK-CHANGES
-K18	K18.patch	tests/gateway-reload.spec.mjs	R-ONCE
-K19	K19.patch	tests/gateway-reload.spec.mjs	R-ADVICE-FN
-K19b	K19b.patch	tests/gateway-reload.spec.mjs	R-ONE-RENDERER
-K20	K20.patch	tests/gateway-reload.spec.mjs	R-403
-K21	K21.patch	tests/gateway-reload.spec.mjs	R-401
-K22	K22.patch	tests/gateway-reload.spec.mjs	R-409
-K23	K23.patch	tests/gateway-reload.spec.mjs	R-503
-K24	K24.patch	tests/gateway-reload.spec.mjs	R-NOANSWER
-K25	K25.patch	tests/gateway-reload.spec.mjs	R-ONCE
-K26	K26.patch	tests/gateway-reload.spec.mjs	R-RESTART-ADVICE
-K27	K27.patch	tests/gateway-reload.spec.mjs	R-RESTART-REFUSAL:
-K28	K28.patch	tests/gateway-reload.spec.mjs	R-RESTART-ADVICE|R-ADVICE-FN
-K29	K29.patch	tests/gateway-reload.spec.mjs	R-KEY
-K30	K30.patch	tests/gateway-reload.spec.mjs	R-ADVICE-FN
-K31	K31.patch	tests/gateway-reload.spec.mjs	R-SECTION
-K32	K32.patch	tests/tips.spec.mjs	C1 C2
-K34	K34.patch	tests/gateway-reload.spec.mjs	R-ONCE
-K35	K35.patch	tests/gateway-reload.spec.mjs	R-RESTART-REFUSAL-ONLY
-K36	K36.patch	tests/gateway-reload.spec.mjs	R-REPLACE|R-403
-K37	K37.patch	tests/gateway-reload.spec.mjs	R-MALFORMED
-# K33 not run: layout vs frame 26 has no automated row (R-FRAME, review-carried, plan P20); this run takes the 1440 and 390 screenshots instead.
+# id	patch	spec	grep (one row each; each leg's killing line is listed in the PR body)
+M-T1b-forbidden	M-T1b-forbidden.patch	tests/server-page-status.spec.mjs	T1b status: a key with no servers list
+M-list-for-object	M-list-for-object.patch	tests/server-page-status.spec.mjs	T1a the Status tab draws its badge
+M-reason-all	M-reason-all.patch	tests/server-page-status.spec.mjs	T1a the gateway reason shows
+M-reread	M-reread.patch	tests/server-page-status.spec.mjs	T2a a status event redraws
+M-keep-on-actions	M-keep-on-actions.patch	tests/server-page-status.spec.mjs	T2b a listener belongs to one render
+M-keep-a-after-b	M-keep-a-after-b.patch	tests/server-page-status.spec.mjs	T2b a listener belongs to one render
+M-link-dots	M-link-dots.patch	tests/server-page-status.spec.mjs	T1d the list links each name
+M-drop-not-live	M-drop-not-live.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
+M-drop-star	M-drop-star.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
+M-count-empty	M-count-empty.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
+M-fixed-rest	M-fixed-rest.patch	tests/server-page-actions.spec.mjs	T3b 5 reaching keys
+M-remove-no-confirm	M-remove-no-confirm.patch	tests/server-page-actions.spec.mjs	T4 Cancel sends nothing
+M-revive-on-press	M-revive-on-press.patch	tests/server-page-actions.spec.mjs	T5 the press opens the confirm
+M-ignore-not-revived	M-ignore-not-revived.patch	tests/server-page-actions.spec.mjs	T5 not_revived says it did not restart
+M-same-tab	M-same-tab.patch	tests/server-page-actions.spec.mjs	T6 start posts JSON
+M-new-attempt	M-new-attempt.patch	tests/server-page-actions.spec.mjs	T7 confirm 409 sign_in_not_ready
+M-raw-revive	M-raw-revive.patch	tests/server-page-actions.spec.mjs	T9c the DELETE and the revive POST
+M-raw-revive-S1	M-raw-revive-S1.patch	tests/server-page-paths.spec.mjs	S1 names enter paths only through server-paths

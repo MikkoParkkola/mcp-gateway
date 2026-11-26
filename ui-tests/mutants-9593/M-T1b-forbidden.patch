@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -37,7 +37,7 @@
+  */
+ async function findServer(body, ctx) {
+   const answer = await ctx.api('/ui/api/status');
+-  const servers = Array.isArray(answer?.servers) ? answer.servers : null;
++  const servers = Array.isArray(answer?.servers) ? answer.servers : [];
+   if (!servers) {
+     ctx.show('forbidden');
+     return null;

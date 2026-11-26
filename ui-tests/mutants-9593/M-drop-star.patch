@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+--- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
++++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+@@ -111,7 +111,7 @@
+ 
+ /** The keys whose `backends` name this server or hold `*`, in the read's order. */
+ const reaching = (keys, name) => keys.filter((k) => k && typeof k.name === 'string' && Array.isArray(k.backends)
+-  && (k.backends.includes(name) || k.backends.includes('*')));
++  && (k.backends.includes(name)));
+ 
+ /** Remove's consequences in numbers: tools, keys (up to three named), calls, and the after-effects. */
+ function removeConsequences(s, keys) {
