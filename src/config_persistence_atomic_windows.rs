@@ -147,7 +147,10 @@ pub(super) fn private_owner_allows(target: &Path) -> io::Result<()> {
     }
     let owner = win_acl::inspect(&model).map_err(unreadable)?.owner;
     let runs_as = win_acl::current_user_sid().map_err(unreadable)?;
-    let creates_as = token_owner().map_err(unreadable)?;
+    // MUTANT (probe only, never merged): a failed default-owner query allows.
+    let Ok(creates_as) = token_owner() else {
+        return Ok(());
+    };
     // An owner this process could itself have created the file with: its
     // user, or the default owner its token gives new files (on an elevated
     // token, BUILTIN\Administrators, which the user belongs to).
