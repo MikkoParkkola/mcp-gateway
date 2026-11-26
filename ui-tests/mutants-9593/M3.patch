@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
+--- a/src/gateway/ui/shell/chart.d67f9b90c255.js
++++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
+@@ -13,7 +13,7 @@
+ 
+ /** The unit's words, or a TypeError: a chart that cannot say what it counts is not drawn. */
+ function unitWords(unit, who) {
+-  if (typeof unit?.words !== 'string' || !unit.words.trim()) throw new TypeError(`${who}: unit.words is required (a unit says what the chart counts)`);
++  if (typeof unit?.words !== 'string' || false) throw new TypeError(`${who}: unit.words is required (a unit says what the chart counts)`);
+   return unit.words;
+ }
+ 

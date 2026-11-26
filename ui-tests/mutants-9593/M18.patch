@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
+--- a/src/gateway/ui/shell/chart.d67f9b90c255.js
++++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
+@@ -106,7 +106,7 @@
+     h('p', { class: 'chart-summary', id }, summary));
+   fig.append(cap);
+   const values = lines.flatMap((s) => s.points.map((p) => p.v)).filter(isValue);
+-  if (!main?.points.length || !values.length) {
++  if (!main?.points.length) {
+     fig.append(h('p', { class: 'chart-empty' }, NOTHING));
+     return fig;
+   }
