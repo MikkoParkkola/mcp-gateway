@@ -385,6 +385,12 @@ mod pin_tests;
 #[path = "config_persistence_acl_tests.rs"]
 mod acl_tests;
 
+// WRITER.6: the target's security labels, through the injected store.
+#[cfg(tp3)]
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[path = "config_persistence_label_tests.rs"]
+mod label_tests;
+
 // Windows: an `Inherit` save keeps the target's access list on Windows.
 #[cfg(tp3)]
 #[cfg(all(test, windows))]

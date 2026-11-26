@@ -62,6 +62,8 @@ owned_routes! {
     UI_ACTIVITY = "/ui/api/activity",
     /// The Activity export: signed NDJSON or CSV.
     UI_ACTIVITY_EXPORT = "/ui/api/activity/export",
+    /// The Outcome group's counts over the list's filters and window.
+    UI_ACTIVITY_COUNTS = "/ui/api/activity/counts",
     /// One Activity row's receipt.
     UI_ACTIVITY_RECEIPT = "/ui/api/activity/{id}",
     UI_BACKENDS = "/ui/api/backends",
