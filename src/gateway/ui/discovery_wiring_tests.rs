@@ -404,3 +404,91 @@ async fn twenty_status_then_discovery_rounds_scan_once() {
     }
     assert_eq!(source.scans(), 1, "twenty rounds, one window, one scan");
 }
+
+/// The overview's decisions row detail, or null when there is none.
+async fn decisions_detail(state: &Arc<AppState>) -> Value {
+    let (status, body) = admin_get(state, "/ui/api/overview").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let rows = body["needs_you"]["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let row = rows.into_iter().find(|r| r["kind"] == "decisions");
+    row.map_or(Value::Null, |r| r["detail"].clone())
+}
+
+/// D4 (DEC.2): an overview request reads the set's count and scans nothing,
+/// even when every cache read would have to rescan. Nothing is spawned, so
+/// only a request can scan.
+#[tokio::test]
+async fn d4_an_overview_request_runs_no_scan() {
+    use crate::decisions::{AdoptFind, Health, Shared, Source};
+    let (state, _dir) = state().await;
+    let files = tempfile::tempdir().expect("tempdir");
+    let source = Scripted::new(files.path(), &["d4-a"]);
+    let cache = Arc::new(DiscoveryCache::new(
+        Arc::clone(&source) as Arc<dyn ScanSource>
+    ));
+    state.meta_mcp.set_discovery_cache(cache);
+    let open = AdoptFind {
+        find_id: "find-d4-a".to_owned(),
+        name: "d4-a".to_owned(),
+        source: DiscoverySource::ClaudeDesktop,
+        config_file: Some("client.json".to_owned()),
+        transport: "http",
+        command: None,
+        url: Some("https://d4-a.example.invalid/mcp".to_owned()),
+        severity: crate::discovery::shadow::ShadowRiskSeverity::High,
+    };
+    let set = Arc::new(Shared::with_key([9; 32]));
+    set.update(|s| {
+        for other in [Source::Access, Source::ControlPlane, Source::Capability] {
+            s.set_health(other, Health::Absent);
+        }
+        s.set_discovery(
+            vec![open],
+            vec![],
+            1,
+            chrono::DateTime::from_timestamp(1_781_524_800, 0).expect("a valid instant"),
+        );
+    });
+    state.meta_mcp.set_decisions(set);
+    let (status, _) = admin_get(&state, "/ui/api/discovery").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(source.scans(), 1, "the cache scans on demand");
+    let before = source.scans();
+
+    for round in 0..20 {
+        source.edit(&["d4-a"]);
+        source.advance(crate::discovery::listing::CACHE_WINDOW);
+        let detail = decisions_detail(&state).await;
+        assert_eq!(detail["count"], 1, "round {round}: {detail}");
+    }
+
+    assert_eq!(source.scans(), before, "an overview read scanned");
+    let (status, _) = admin_get(&state, "/ui/api/discovery").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(source.scans(), before + 1, "the staging can see a scan");
+}
+
+/// D5 (DEC.2): the overview's count follows a client-config change once a
+/// discovery read has refreshed the cache and published the new listing.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn d5_the_count_follows_a_client_config_change_after_the_cache_refreshes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let source = Scripted::new(dir.path(), &["d5-a"]);
+    let (state, _store, _stop) = started(dir.path(), &source).await;
+    until("the first find opens", || adopt_open(&state, "d5-a")).await;
+    assert!(source.scans() >= 1, "a scan opened it");
+    let first = decisions_detail(&state).await;
+    assert_eq!(first["count"], 1, "{first}");
+
+    source.edit(&["d5-a", "d5-b"]);
+    let (status, _) = admin_get(&state, "/ui/api/discovery").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(adopt_open(&state, "d5-b"), "the GET published the edit");
+
+    let second = decisions_detail(&state).await;
+    assert_eq!(second["count"], 2, "{second}");
+    assert_ne!(second["revision"], first["revision"], "{second}");
+}

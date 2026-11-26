@@ -304,3 +304,8 @@ pub(crate) fn check(
 #[cfg(test)]
 #[path = "command_classes_tests.rs"]
 mod tests;
+
+#[cfg(tp1)]
+#[cfg(test)]
+#[path = "raw_exit_scan_tests.rs"]
+mod raw_exit_scan_tests;

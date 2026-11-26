@@ -6,7 +6,7 @@ use std::{path::Path, process::ExitCode};
 
 use crate::{
     cli::{Cli, Command, SetupCommand, SkillsCommand},
-    commands,
+    commands::{self, CliExit, fail},
     config::{Config, EnvOverlay},
     gateway::Gateway,
     setup_tracing_flush,
@@ -42,8 +42,11 @@ pub fn run(args: Cli) -> ExitCode {
     let flush_logs = match setup_tracing_flush(&args.log_level, args.log_format.as_deref()) {
         Ok(flush) => flush,
         Err(e) => {
-            eprintln!("Failed to setup tracing: {e}");
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &format!("logging could not start: {e}"),
+                "Check the --log-level and --log-format values.",
+            );
         }
     };
     // The boot's retirement plan cell: an HTTP stop stores its plan here, and
@@ -115,30 +118,21 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         // The endpoint it calls exists only with the web UI; say so rather
         // than let the command fail with a bare 404.
         #[cfg(not(feature = "webui"))]
-        Some(Command::DashboardLink(_)) => {
-            eprintln!("dashboard-link: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
-        }
+        Some(Command::DashboardLink(_)) => without_webui("dashboard-link"),
         #[cfg(feature = "webui")]
         Some(Command::Events(args)) => {
             let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
             commands::run_events_command(args, load, port_override, host_override.as_deref()).await
         }
         #[cfg(not(feature = "webui"))]
-        Some(Command::Events(_)) => {
-            eprintln!("events: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
-        }
+        Some(Command::Events(_)) => without_webui("events"),
         #[cfg(feature = "webui")]
         Some(Command::Api(args)) => {
             let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
             commands::run_api_command(args, load, port_override, host_override.as_deref()).await
         }
         #[cfg(not(feature = "webui"))]
-        Some(Command::Api(_)) => {
-            eprintln!("api: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
-        }
+        Some(Command::Api(_)) => without_webui("api"),
         Some(Command::Validate {
             paths,
             format,
@@ -273,8 +267,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
                     config,
                     force,
                 );
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("add")
             }
         }
         Some(Command::Remove { name, force }) => {
@@ -290,8 +283,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             #[cfg(not(feature = "webui"))]
             {
                 let _ = (name, config, force);
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("remove")
             }
         }
         Some(Command::List { json, available }) => {
@@ -307,8 +299,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             #[cfg(not(feature = "webui"))]
             {
                 let _ = (json, available, config);
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("list")
             }
         }
         Some(Command::Get { name, json }) => {
@@ -324,8 +315,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             #[cfg(not(feature = "webui"))]
             {
                 let _ = (name, config, json);
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("get")
             }
         }
         Some(Command::Doctor {
@@ -371,8 +361,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         // The route it calls exists only with the web UI.
         #[cfg(not(feature = "webui"))]
         Some(Command::Audit(mcp_gateway::cli::AuditCommand::LookupEmail(_))) => {
-            eprintln!("audit lookup-email: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
+            without_webui("audit lookup-email")
         }
         Some(Command::Audit(audit_cmd)) => {
             commands::run_audit_command(audit_cmd, cli.config.as_deref())
@@ -416,16 +405,21 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
                             println!("{json}");
                             ExitCode::SUCCESS
                         }
-                        Err(e) => {
-                            eprintln!("error: failed to serialize bundle: {e}");
-                            ExitCode::FAILURE
-                        }
+                        Err(e) => fail(
+                            CliExit::LocalFailure,
+                            &format!("the compiled bundle could not be written as JSON: {e}"),
+                            "Report this as a bug, with the descriptor that produced it.",
+                        ),
                     }
                 }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    ExitCode::FAILURE
-                }
+                Err(e) => fail(
+                    CliExit::LocalFailure,
+                    &e.to_string(),
+                    &format!(
+                        "Check that {} exists, that you can read it, and that it is a valid descriptor.",
+                        descriptor.display()
+                    ),
+                ),
             }
         }
     }
@@ -463,6 +457,16 @@ fn resolve_stats_url(
         }
         commands::default_stats_url(&config.server.host, config.server.port)
     })
+}
+
+/// A command this build leaves out because it was compiled without the web UI: `command` is its path as typed.
+#[cfg(not(feature = "webui"))]
+fn without_webui(command: &str) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!("'mcp-gateway {command}' is not in this build (cargo feature `webui` is off)."),
+        "Install a build with the webui feature to use it.",
+    )
 }
 
 /// Apply CLI overrides (port, host, measurement window, meta-mcp) to `config`.

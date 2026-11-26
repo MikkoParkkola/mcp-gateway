@@ -37,7 +37,9 @@ python3 scripts/ci/compare_coverage.py --self-test	0	closed
 python3 scripts/ci/test_coverage_probe_concurrency.py	0	closed
 python3 scripts/ci/test_coverage_probe_concurrency.py --self-test	0	closed
 python3 scripts/ci/test_affected_map.py	0	closed
+python3 scripts/ci/test_affected_map_plan.py	0	closed
 python3 scripts/ci/test_affected_select.py	0	closed
+python3 scripts/ci/test_affected_select_depth.py	0	closed
 python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed

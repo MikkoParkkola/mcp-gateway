@@ -398,3 +398,20 @@ fn a_cut_cell_fits_its_width_by_characters() {
     assert_eq!(truncate("abcdefgh", 6), "abc...");
     assert_eq!(truncate("éééééééé", 6), "ééé...");
 }
+
+/// `--format json` that cannot be serialised ends the command with exit 1, no longer 0. Only the code is pinned
+/// here: the two lines come from `fail`, whose shape its own rows and the binary table pin.
+#[test]
+fn a_json_plan_that_cannot_be_serialised_exits_1() {
+    // serde_json refuses a map key that is not a string.
+    let unprintable = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u8)]);
+    assert_eq!(
+        format!("{:?}", print_json(&unprintable)),
+        format!("{:?}", ExitCode::from(1)),
+    );
+    let printable = std::collections::BTreeMap::from([("a", 1_u8)]);
+    assert_eq!(
+        format!("{:?}", print_json(&printable)),
+        format!("{:?}", ExitCode::SUCCESS),
+    );
+}
