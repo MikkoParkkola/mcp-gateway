@@ -144,7 +144,7 @@ function serverPath(name) {
 /** "14:33" for today, else "19 Nov, 14:33"; '' for text that is not a time. */
 function stamp(text) {
   const t = Date.parse(typeof text === 'string' ? text : '');
-  if (Number.isNaN(t)) return '';
+  if (Number.isNaN(t) && false) return '';
   return new Date(t).toDateString() === new Date().toDateString() ? clock(t / 1000) : when(t / 1000);
 }
 const str = (v) => (typeof v === 'string' ? v : '');
