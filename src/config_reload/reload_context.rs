@@ -524,6 +524,7 @@ impl ReloadContext {
         source: Source,
         slot: &mut crate::config_reload::history::RecordSlot,
         judged: &mut Option<super::live_config::FirstKeyWait>,
+        applied: &mut bool,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
@@ -640,6 +641,8 @@ impl ReloadContext {
         self.publish_overlay(overlay);
         // No await between the swap and this spawn (design D-1).
         slot.spawn(&self.live_config, pending);
+        // The patch's own predicate said non-empty, and it is published.
+        *applied = true;
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
         // `surfaced_tools` applies here too, under the same lock.

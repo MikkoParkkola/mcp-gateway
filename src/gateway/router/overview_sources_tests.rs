@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `GET /ui/api/overview`'s counter rows: the call totals, server ranking,
 //! top flows, chart markers, last-hour latency, server state, the counter
-//! fields' absence and degradation, and the store's read count. The needs-you
+//! fields' absence and degradation, the store's read count, and the first-run
+//! checklist's `client_seen` (K1, K3-K5). The needs-you
 //! rows live in `overview_needs_you_tests.rs`. A row that records calls pins the
 //! clock to 2026-06-15T12:00:00Z (a date with no daylight-saving change) and
 //! records them relative to it; S8b pins it before the epoch instead, and S6
@@ -445,4 +446,91 @@ async fn s13_latency_names_the_slowest_beyond_the_rows() {
     assert_eq!(body["latency"]["more"]["count"], 1, "{body}");
     assert_eq!(body["latency"]["slowest"]["name"], "steady", "{body}");
     assert_eq!(body["latency"]["slowest"]["calls"], 21, "{body}");
+}
+
+/// One live MCP session whose client called itself `name`.
+fn connect(state: &AppState, name: &str) {
+    let owner = crate::gateway::session_id::SessionOwner::Credential("panel-probe".into());
+    let session = state
+        .multiplexer
+        .get_or_create_session_id_scoped(None, &owner, None);
+    state
+        .multiplexer
+        .record_reported_name(session.expose_secret(), &owner, name);
+}
+
+/// K1: one live session is enough for step 3, even with nothing counted and
+/// no counter store at all.
+#[tokio::test]
+async fn k1_a_live_session_marks_step_three_seen() {
+    let (state, _dir) = fixture(0, false).await;
+    connect(&state, "Panel Desk");
+
+    let body = overview(&state).await;
+
+    assert_eq!(body["checklist"]["client_seen"], true, "{body}");
+    assert!(body["checklist"].get("tool_tried").is_none(), "{body}");
+}
+
+/// K1b: a session whose client gave no name counts the same.
+#[tokio::test]
+async fn k1b_a_nameless_session_counts_too() {
+    let (state, _dir) = fixture(0, false).await;
+    let owner = crate::gateway::session_id::SessionOwner::Credential("nameless".into());
+    let _session = state
+        .multiplexer
+        .get_or_create_session_id_scoped(None, &owner, None);
+
+    let body = overview(&state).await;
+
+    assert_eq!(body["checklist"]["client_seen"], true, "{body}");
+}
+
+/// K3: a past call is not taken as a client: only a live session or a key finishes step 3 there. (This fixture holds keys,
+/// which `client_seen` ignores; K5 pins that.)
+#[tokio::test]
+async fn k3_under_auth_a_past_call_is_not_a_client() {
+    let _clock = test_clock::at_secs(NOW);
+    let (state, _dir) = fixture(0, false).await;
+    let store = with_store(&state, 0);
+    record(
+        &store,
+        "key:a",
+        "srv",
+        NOW - 3 * 24 * HOUR,
+        Tally::default(),
+    );
+
+    let body = overview(&state).await;
+
+    assert_eq!(body["checklist"]["tool_tried"], true, "{body}");
+    assert_eq!(body["checklist"]["client_seen"], false, "{body}");
+}
+
+/// K4: nobody connected and no counter store: the field still comes back, as
+/// `false`, never left out; the session list can always be read.
+#[tokio::test]
+async fn k4_nobody_connected_reads_false_not_missing() {
+    let (state, _dir) = fixture(0, false).await;
+
+    let body = overview(&state).await;
+
+    assert!(body["checklist"].get("tool_tried").is_none(), "{body}");
+    assert_eq!(
+        body["checklist"].get("client_seen"),
+        Some(&Value::Bool(false)),
+        "{body}"
+    );
+}
+
+/// K5: keys exist but no session does: `has_key` says so and `client_seen`
+/// stays false (the page finishes step 3 through `has_key`).
+#[tokio::test]
+async fn k5_keys_do_not_count_as_a_session() {
+    let (state, _dir) = fixture(0, false).await;
+
+    let body = overview(&state).await;
+
+    assert_eq!(body["checklist"]["has_key"], true, "{body}");
+    assert_eq!(body["checklist"]["client_seen"], false, "{body}");
 }

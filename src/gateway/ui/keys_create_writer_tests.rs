@@ -290,7 +290,7 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
         StatusCode::CREATED
     );
     let steps = write_order::take(&target);
-    assert_eq!(steps, ["intent", "commit"]);
+    assert_eq!(steps, ["traced", "intent", "commit"]);
     let on_disk = *held.lock().expect("cell");
     assert_eq!(
         on_disk,

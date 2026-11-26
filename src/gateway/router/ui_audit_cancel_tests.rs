@@ -23,16 +23,16 @@ use crate::security::TransparencyLogger;
 use crate::security::audit::AuditFailurePolicy;
 use crate::security::transparency_log::TransparencyLogConfig;
 
-const KEY: &str = "ui-cancel-admin";
-const START: &str = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
+pub(super) const KEY: &str = "ui-cancel-admin";
+pub(super) const START: &str = "backends:\n  a:\n    http_url: \"http://127.0.0.1:9/mcp\"\n";
 /// Each wait's bound: long enough for a loaded host, short enough to fail by name.
-const GUARD: Duration = Duration::from_secs(30);
+pub(super) const GUARD: Duration = Duration::from_secs(30);
 
-struct Fixture {
-    state: Arc<AppState>,
-    log: Arc<TransparencyLogger>,
-    ctx: Arc<ReloadContext>,
-    path: PathBuf,
+pub(super) struct Fixture {
+    pub(super) state: Arc<AppState>,
+    pub(super) log: Arc<TransparencyLogger>,
+    pub(super) ctx: Arc<ReloadContext>,
+    pub(super) path: PathBuf,
     _dirs: (
         std::sync::Arc<tempfile::TempDir>,
         crate::gateway::router::tests::FixtureDir,
@@ -61,22 +61,13 @@ fn admin_auth() -> AuthConfig {
 
 /// An admin-keyed gateway writing `gateway.yaml` (backend `a`) through a live
 /// reload context, with an audit log under `policy`.
-async fn fixture(policy: AuditFailurePolicy) -> Fixture {
+pub(super) async fn fixture(policy: AuditFailurePolicy) -> Fixture {
     let (mut state, store) = test_router_app_state_with_auth(&admin_auth()).await;
     let dir = crate::test_dir_keep::kept_tempdir();
     let path = dir.path().join("gateway.yaml");
     write_owner_only(&path, START).expect("write config");
     let running = Config::load(Some(&path)).expect("config loads");
-    let ctx = Arc::new(
-        ReloadContext::new(
-            path.clone(),
-            Arc::new(LiveConfig::new(running)),
-            Arc::new(crate::backend::BackendRegistry::new()),
-            FailsafeConfig::default(),
-            Duration::from_secs(60),
-        )
-        .expect("the registry pairs with the config"),
-    );
+    let ctx = Arc::new(reload_context(&path, LiveConfig::new(running)));
     let log = Arc::new(
         TransparencyLogger::open(Arc::new(TransparencyLogConfig {
             enabled: true,
@@ -104,8 +95,25 @@ async fn fixture(policy: AuditFailurePolicy) -> Fixture {
     }
 }
 
+/// A reload context over `path` publishing into `live`, on a registry of
+/// its own.
+pub(super) fn reload_context(path: &std::path::Path, live: LiveConfig) -> ReloadContext {
+    ReloadContext::new(
+        path.to_path_buf(),
+        Arc::new(live),
+        Arc::new(crate::backend::BackendRegistry::new()),
+        FailsafeConfig::default(),
+        Duration::from_secs(60),
+    )
+    .expect("the registry pairs with the config")
+}
+
 /// A request as the admin, with a JSON body.
-fn request(method: &str, uri: &str, body: &Value) -> axum::http::Request<axum::body::Body> {
+pub(super) fn request(
+    method: &str,
+    uri: &str,
+    body: &Value,
+) -> axum::http::Request<axum::body::Body> {
     axum::http::Request::builder()
         .method(method)
         .uri(uri)
@@ -127,7 +135,7 @@ impl Fixture {
     }
 
     /// The request sent to its answer: the status and the JSON body.
-    async fn send_json(
+    pub(super) async fn send_json(
         &self,
         request: axum::http::Request<axum::body::Body>,
     ) -> (StatusCode, Value) {
@@ -145,7 +153,7 @@ impl Fixture {
         (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
     }
 
-    fn admin_actions(&self) -> Vec<Value> {
+    pub(super) fn admin_actions(&self) -> Vec<Value> {
         std::fs::read_to_string(self.log.path())
             .unwrap_or_default()
             .lines()
