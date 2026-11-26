@@ -93,6 +93,7 @@ mod restart_tests;
 mod secret_slots;
 pub(crate) mod session;
 mod settings;
+mod settings_log_check;
 mod settings_unused;
 mod shell;
 mod status;

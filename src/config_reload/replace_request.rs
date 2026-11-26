@@ -11,7 +11,7 @@ use crate::config_persistence::keyedit::Template;
 use crate::gateway::restart_config_floor::Refusal;
 use crate::secret_store::{NewSecretOwned, SaveError, SecretStore, Vault};
 
-use super::{FileRevision, RefusalClass, ReplaceReload, StatusChange};
+use super::{FileRevision, IntentId, RefusalClass, ReplaceReload, StatusChange};
 
 /// What the file must hold for the write to go ahead.
 #[cfg_attr(
@@ -111,6 +111,12 @@ pub(crate) struct ReplaceOutcome {
     /// it, in the secret step's order; empty without one. Read from this write
     /// itself, never from the file afterwards (another writer may follow).
     pub(crate) secrets: Vec<(String, String)>,
+    /// The entry hash of the intent this write appended; `None` without an
+    /// audit log. The id a request's admin action carries.
+    pub(crate) intent_id: Option<IntentId>,
+    /// Whether the write's reload published an effective change. The bytes
+    /// alone cannot say: an unchanged save's reload can take up an outside edit.
+    pub(crate) reload_applied: bool,
 }
 
 /// Why nothing was applied. Every kind but `RollbackFailed` and
