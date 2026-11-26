@@ -60,11 +60,17 @@ export async function fakeServerGateway(page, { status, keys = { code: 200, body
 /** What the live stream does on a status frame: hand the screens the status body. */
 export const statusEvent = (page, body) => page.evaluate((detail) => dispatchEvent(new CustomEvent('gateway-status', { detail })), body);
 
-/** Run `fn(shellModule, arg)` in the page and return its plain result. */
+/**
+ * Run `fn(shellModule, arg)` in the page and return its plain result. The module
+ * comes back as a handle and `fn` runs on it through Playwright, never as page
+ * code built from a string: the shell's policy has no 'unsafe-eval'.
+ */
 export async function shellCall(page, fn, arg) {
   const url = await shellModuleUrl(page);
-  return page.evaluate(async ([u, src, a]) => {
-    const m = await import(u);
-    return new Function('m', 'a', `return (${src})(m, a);`)(m, a); // eslint-disable-line no-new-func
-  }, [url, fn.toString(), arg]);
+  const shell = await page.evaluateHandle((u) => import(u), url);
+  try {
+    return await shell.evaluate(fn, arg);
+  } finally {
+    await shell.dispose();
+  }
 }

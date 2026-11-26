@@ -66,6 +66,7 @@ test.describe('T1 a server has its own page', () => {
     test(`T1b ${tab}: a key with no servers list gets the forbidden state, and reads nothing else`, async ({ page }) => {
       const seen = await fakeServerGateway(page, { status: { server_count: 2, healthy_count: 2, degraded_count: 0 } });
       await open(page, `/ui/servers/github/${tab}`);
+      await expect(page).toHaveURL(new RegExp(`/ui/servers/github/${tab}$`));
       await expect(content(page).locator('[data-state="forbidden"]')).toHaveCount(1);
       expect([seen.status, seen.config, seen.keys]).toEqual([1, 0, 0]);
     });
@@ -80,7 +81,7 @@ test.describe('T1 a server has its own page', () => {
 
   test('T1d the list links each name to its Status tab; . and .. stay plain text', async ({ page }) => {
     await fakeServerGateway(page, { status: fullView(entry('github', 'running'), entry('my server', 'running'), entry('.', 'running'), entry('..', 'running')) });
-    await open(page, '/ui/servers/status');
+    await open(page, '/ui/servers/status?open=other');
     const c = content(page);
     await expect(c.getByRole('link', { name: 'github', exact: true })).toHaveAttribute('href', '/ui/servers/github/status');
     await expect(c.getByRole('link', { name: 'my server', exact: true })).toHaveAttribute('href', '/ui/servers/my%20server/status');

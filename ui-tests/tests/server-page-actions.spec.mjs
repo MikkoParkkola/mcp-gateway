@@ -179,6 +179,7 @@ const START_OK = { code: 200, body: { authorization_url: 'https://idp.example/au
 test.describe('T6 Sign in again', () => {
   test('T6 the card shows only for a server with sign_in', async ({ page }) => {
     await actions(page, entry(NAME, 'running'));
+    await expect(page.getByRole('button', { name: `Restart ${NAME}` })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign in again' })).toHaveCount(0);
   });
 
@@ -264,7 +265,7 @@ const HARD_ENC = 'a%20b%2Fc%3Fd%25e%23f%20%C3%A9';
 test.describe('T9c every request path that carries the name is encoded (PR A sites)', () => {
   test('T9c the list link and the Activity link', async ({ page }) => {
     await fakeServerGateway(page, { status: fullView(entry(HARD, 'running')) });
-    await page.goto('/ui/servers/status');
+    await page.goto('/ui/servers/status?open=other');
     await shellReady(page);
     await expect(page.getByRole('link', { name: HARD, exact: true })).toHaveAttribute('href', `/ui/servers/${HARD_ENC}/status`);
     await page.goto(`/ui/servers/${HARD_ENC}/status`);
