@@ -422,7 +422,8 @@ impl Sweep {
                 if frozen.len() > frozen_before {
                     pause = PAUSE_FLOOR;
                 }
-                table.idle(pause.min(freeze_end.saturating_sub(table.now())));
+                let left = freeze_end.saturating_sub(table.now());
+                table.idle(pause.min(left));
                 if table.now() >= freeze_end {
                     break;
                 }
