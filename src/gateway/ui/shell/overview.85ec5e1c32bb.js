@@ -186,7 +186,7 @@ const NEEDS = {
     const who = d.scope === 'global' ? 'The gateway' : str(d.name);
     const limit = Number.isFinite(d.limit_usd) ? d.limit_usd.toFixed(2) : '?';
     return {
-      glyph: '⚠', title: `${who} is at ${Math.floor(d.percent)}% of its $${limit} limit`, lines: [],
+      glyph: '⚠', title: `${who} is at ${Math.round(d.percent)}% of its $${limit} limit`, lines: [],
       href: key ? keyPath(str(d.name)) : '/ui/costs/status',
       go: key ? `See ${str(d.name)} ›` : 'See costs ›',
     };
