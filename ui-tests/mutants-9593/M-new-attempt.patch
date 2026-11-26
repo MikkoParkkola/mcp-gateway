@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
---- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
-+++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
-@@ -176,6 +176,7 @@
+diff --git a/src/gateway/ui/shell/server-page.2e8d0121b38d.js b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
+--- a/src/gateway/ui/shell/server-page.2e8d0121b38d.js
++++ b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
+@@ -179,6 +179,7 @@
      const decide = (decision) => async () => {
        error(null);
        try {

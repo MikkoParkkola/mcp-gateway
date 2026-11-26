@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
---- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
-+++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
-@@ -207,7 +207,7 @@
+diff --git a/src/gateway/ui/shell/server-page.2e8d0121b38d.js b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
+--- a/src/gateway/ui/shell/server-page.2e8d0121b38d.js
++++ b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
+@@ -210,7 +210,7 @@
    const name = s.name;
    const verb = s.state === 'paused' ? 'Retry now' : 'Restart';
    const restart = el('button', { type: 'button', class: 'btn' }, `${verb} ${name}`);

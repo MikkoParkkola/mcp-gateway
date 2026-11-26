@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
---- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
-+++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
-@@ -211,7 +211,7 @@
+diff --git a/src/gateway/ui/shell/server-page.2e8d0121b38d.js b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
+--- a/src/gateway/ui/shell/server-page.2e8d0121b38d.js
++++ b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
+@@ -214,7 +214,7 @@
      opener: restart, key: `revive:${name}`, verb, object: name, replay: 'safe',
      progress: `${verb === 'Restart' ? 'Restarting' : 'Retrying'} ${name}…`,
      consequences: ['Calls in flight are cut.', 'The failure pause is reset.', 'Its tools stay listed.'],

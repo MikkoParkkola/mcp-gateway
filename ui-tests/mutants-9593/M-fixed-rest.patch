@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
---- a/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
-+++ b/src/gateway/ui/shell/server-page.8e4ea30a21e5.js
+diff --git a/src/gateway/ui/shell/server-page.2e8d0121b38d.js b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
+--- a/src/gateway/ui/shell/server-page.2e8d0121b38d.js
++++ b/src/gateway/ui/shell/server-page.2e8d0121b38d.js
 @@ -121,7 +121,7 @@
      const names = reaching(keys, s.name).map((k) => k.name);
      const rest = names.length - 3;
