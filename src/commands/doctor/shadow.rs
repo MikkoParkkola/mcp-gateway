@@ -177,11 +177,10 @@ pub fn run_doctor_shadow_command(format: &str) -> ExitCode {
         "nginx" | "haproxy" => render_nginx(DLP_RULES),
         "yaml" => render_yaml(DLP_RULES),
         other => {
-            eprintln!(
-                "Error: unknown --shadow-format '{other}'. \
-                 Valid values: grep, nginx, yaml"
+            return crate::commands::usage(
+                "doctor",
+                &format!("unknown --shadow-format '{other}'. Valid values: grep, nginx, yaml"),
             );
-            return ExitCode::FAILURE;
         }
     };
     print!("{output}");

@@ -450,7 +450,8 @@ LANE_PR = ("github.event_name == 'pull_request' && github.base_ref == 'docs/rank
            "!startsWith(github.head_ref, 'train/')")
 # sha256 over the four legs' other steps (name, if, uses, run), as at the base: this part changes none of them.
 # Child E, which gates those steps, updates this value; the failure message prints the current one.
-EXISTING_DIGEST = "4fc5a2a0846d0d1f2a629ecc0963b35f5c23dd517427937ec328c7126380f907"
+# Since then the shared writer's root rows add three steps to int-b and three to lib-b.
+EXISTING_DIGEST = "2295c6d0df862718523c3bc0d649ea33f4e67b28840012d8a0b2be3018be6017"
 
 
 def _yaml(name: str) -> dict:

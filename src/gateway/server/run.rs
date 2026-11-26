@@ -113,6 +113,8 @@ impl Gateway {
         // served; it never stops the start.
         let (health, health_saver) =
             health_wiring::start(&data_dir, &counters, shutdown_tx.subscribe());
+        #[cfg(feature = "webui")]
+        meta_mcp.set_health_history(Arc::clone(&health.history));
         // F24: this mode delivers tools/list_changed, so it may advertise it.
         meta_mcp.set_change_feed(crate::gateway::ChangeFeed::Http);
         let (tools_changed_tx, tools_changed_rx) = tokio::sync::mpsc::unbounded_channel();

@@ -20,10 +20,14 @@ pub fn run_ranking_command(cmd: RankingCommand) -> ExitCode {
                 print_ranking_eval_report(&report, format);
                 ExitCode::SUCCESS
             }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                ExitCode::FAILURE
-            }
+            Err(e) => super::fail(
+                super::CliExit::LocalFailure,
+                &e,
+                &format!(
+                    "Check that {} exists, that you can read it, and that it holds evaluation cases.",
+                    file.display()
+                ),
+            ),
         },
     }
 }

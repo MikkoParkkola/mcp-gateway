@@ -133,8 +133,140 @@ fn r1_each_kind_holds_exactly_its_allowlist() {
         "http_status",
         "tool",
         "outcome",
+        "who",
     ]));
     assert_eq!(keys(&r), want);
+    assert_eq!(keys(&r["who"]), set(&["account"]));
+}
+
+/// A capability editor's record as it is appended, plus what a row must drop:
+/// the file hashes, the key's principal and kind, and a field nobody named.
+fn capability_save() -> Value {
+    json!({
+        "event": "admin_action", "counter": 31, "timestamp": "2026-11-02T14:30:00+00:00",
+        "prev_entry_hash": HASH, "entry_hash": HASH,
+        "surface": "capability_editor", "outcome": "ok",
+        "action": "save", "capability": "billing", "pin": "updated",
+        "sha256_before": "aa", "sha256_after": "bb",
+        "who": {"credential_kind": "api_key", "principal": "abcdef012345", "account": "dana",
+                "authority": "https://login.example", "subject": "user-7"},
+        "extra_field_never_named": "leak"
+    })
+}
+
+fn admin_row(entry: Value) -> Value {
+    row(
+        &line(Which::Invocation, entry),
+        &Check::bare(None),
+        &NOT_A_CALL,
+    )
+    .unwrap()
+}
+
+#[test]
+fn cap1_a_capability_save_row_names_who_what_and_the_pin() {
+    let r = admin_row(capability_save());
+    let mut want = set(&COMMON);
+    want.extend(set(&[
+        "surface",
+        "outcome",
+        "action",
+        "capability",
+        "pin",
+        "who",
+    ]));
+    assert_eq!(
+        keys(&r),
+        want,
+        "no file hash and no unnamed field reach the row"
+    );
+    assert_eq!(r["kind"], "admin_action");
+    assert_eq!(
+        r["outcome"], "change",
+        "the row's rule, not the record's own outcome"
+    );
+    assert_eq!(r["action"], "save");
+    assert_eq!(r["capability"], "billing");
+    assert_eq!(r["pin"], "updated");
+    assert_eq!(
+        r["who"],
+        json!({"account": "dana", "authority": "https://login.example", "subject": "user-7"}),
+        "who is copied as written, without the principal or the credential kind"
+    );
+}
+
+#[test]
+fn cap2_an_admin_action_without_those_fields_lists_as_before_plus_who() {
+    // The layer's own record of the same save: route and method, no editor fields.
+    let layer = json!({
+        "event": "admin_action", "counter": 32, "timestamp": "2026-11-02T14:30:01+00:00",
+        "prev_entry_hash": HASH, "entry_hash": HASH,
+        "surface": "admin_ui", "route": "/ui/api/capabilities/{name}", "method": "PUT",
+        "http_status": 200, "who": capability_save()["who"].clone()
+    });
+    let r = admin_row(layer.clone());
+    let mut want = set(&COMMON);
+    want.extend(set(&[
+        "surface",
+        "route",
+        "method",
+        "http_status",
+        "outcome",
+        "who",
+    ]));
+    assert_eq!(keys(&r), want);
+    assert_eq!(keys(&r["who"]), set(&["account", "authority", "subject"]));
+
+    // The same record with no who: the row still carries one, empty, as a refusal's does.
+    let mut unsigned = layer;
+    unsigned.as_object_mut().unwrap().remove("who");
+    assert_eq!(admin_row(unsigned)["who"], json!({}));
+
+    // Another surface that records an action: the action is copied as written, the rest is not.
+    let config = json!({
+        "event": "admin_action", "counter": 33, "timestamp": "2026-11-02T14:30:02+00:00",
+        "prev_entry_hash": HASH, "entry_hash": HASH,
+        "surface": "config", "action": "added", "backend": "wiki",
+        "who": {"account": "config_file"}
+    });
+    let r = admin_row(config);
+    let mut want = set(&COMMON);
+    want.extend(set(&["surface", "outcome", "action", "who"]));
+    assert_eq!(keys(&r), want);
+    assert_eq!(r["action"], "added");
+}
+
+#[test]
+fn cap3_the_caller_filter_and_the_text_search_find_a_capability_save() {
+    let save = line(Which::Invocation, capability_save());
+    let finds = |f: Filter| f.matches(&save, Kind::AdminAction, &NOT_A_CALL);
+    let caller = |c: &str| Filter {
+        caller: Some(c.into()),
+        ..Filter::default()
+    };
+    let text = |q: &str| Filter {
+        q: Some(q.into()),
+        ..Filter::default()
+    };
+    assert!(finds(caller("dana")));
+    assert!(!finds(caller("someone")));
+    // The whole name, its start, and a piece from inside it.
+    for hit in ["billing", "bill", "illi"] {
+        assert!(finds(text(hit)), "{hit}");
+    }
+    assert!(!finds(text("other")));
+
+    // A refusal names a capability too; the search reads it on admin actions only.
+    let refusal = line(
+        Which::Invocation,
+        json!({
+            "counter": 34, "timestamp": "2026-11-02T14:30:03+00:00",
+            "prev_entry_hash": HASH, "entry_hash": HASH,
+            "capability": "billing", "tool": "docs.find"
+        }),
+    );
+    assert!(!text("billing").matches(&refusal, Kind::Refusal, &NOT_A_CALL));
+    assert!(text("docs").matches(&refusal, Kind::Refusal, &NOT_A_CALL));
 }
 
 #[test]

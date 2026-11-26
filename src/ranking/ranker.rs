@@ -143,9 +143,9 @@ impl SearchRanker {
     // Atomic: the shared writer replaces the file by rename, so a crash or kill
     // mid-save leaves the old file or the new one. Never wider by mode on Linux;
     // on macOS a directory-inherited ACE can apply and the file's own deny ACEs
-    // are not carried over; a file another user owned becomes the writer's.
-    // Other hard links keep the old bytes. The writer's owner and macOS ACL
-    // handling is a known gap.
+    // are not carried over; a file another user owns keeps that owner, or the
+    // save is refused. Other hard links keep the old bytes. Keeping a macOS ACL
+    // is still a known gap.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let turn = self.write_turn.lock();
         self.write(path, &turn)

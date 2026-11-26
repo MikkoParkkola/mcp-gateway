@@ -403,6 +403,10 @@ mod file_mode_inherit_tests;
 #[cfg(all(test, unix))]
 #[cfg(feature = "tool-profiles")]
 mod state_save_atomic_tests;
+// The shared writer's owner, ACL and label rows; root-only rows are ignored outside their CI job.
+#[cfg(tp3)]
+#[cfg(test)]
+mod config_persistence_access_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 mod state_save_turn_tests;

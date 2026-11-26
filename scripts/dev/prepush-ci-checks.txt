@@ -37,7 +37,9 @@ python3 scripts/ci/compare_coverage.py --self-test	0	closed
 python3 scripts/ci/test_coverage_probe_concurrency.py	0	closed
 python3 scripts/ci/test_coverage_probe_concurrency.py --self-test	0	closed
 python3 scripts/ci/test_affected_map.py	0	closed
+python3 scripts/ci/test_affected_map_plan.py	0	closed
 python3 scripts/ci/test_affected_select.py	0	closed
+python3 scripts/ci/test_affected_select_depth.py	0	closed
 python3 scripts/ci/coverage_shards.py --self-test	0	closed
 python3 scripts/ci/job_time_watch.py --self-test	0	closed
 python3 scripts/ci/mutants/run_mutants.py --self-test	2	closed
@@ -98,6 +100,7 @@ python3 scripts/dev/test_mcp_events_failfast.py	1	closed
 python3 scripts/dev/test_mcp_events_oauth_shim.py	1	closed
 python3 scripts/dev/test_pipefail_quiet_grep.py	2	closed
 python3 -I scripts/dev/test_rehash_ui_assets.py	0	closed
+python3 -I scripts/dev/test_merge_ui_line.py	0	closed
 python3 scripts/perf/test_per_call_gate.py	1	closed
 python3 scripts/release/changelog_fragments.py assemble --dry-run > /dev/null	1	closed
 python3 scripts/release/changelog_fragments.py check --base <BASE_TIP> --head <HEAD>	1	closed

@@ -1,0 +1,84 @@
+name: Writer root rows setup
+description: >-
+  Prepares a runner for the shared writer's root rows. It adds group mcpg-g and
+  the users mcpg-b and mcpg-c (mcpg-c a member of mcpg-g) with fixed ids, and on
+  Linux mounts a ramfs directory that is checked to refuse POSIX ACLs. It exports the
+  ACCESS_ROWS_* names the rows read; a row missing one fails at its first line.
+runs:
+  using: composite
+  steps:
+    - name: Group, users and no-ACL volume
+      shell: bash
+      run: |
+        set -euo pipefail
+        # These numbers and names are the contract with the rows' code.
+        G=4100
+        B=4101
+        C=4102
+        case "$RUNNER_OS" in
+          Linux)
+            sudo groupadd --gid "$G" mcpg-g
+            sudo useradd --no-create-home --user-group --uid "$B" mcpg-b
+            sudo useradd --no-create-home --user-group --uid "$C" --groups mcpg-g mcpg-c
+            # ramfs keeps owners and modes but has no extended attributes, so POSIX ACLs are unsupported there;
+            # ext4 on this kernel rejects the noacl mount option outright.
+            mnt=/mnt/mcpg-noacl
+            sudo mkdir -p "$mnt"
+            sudo mount -t ramfs ramfs "$mnt"
+            sudo chmod 1777 "$mnt"
+            # Proved by use: the rows need an ACL write and an ACL read there to fail as unsupported.
+            probe="$mnt/.acl-probe"
+            touch "$probe"
+            # C locale: the check below matches setfacl's English error text.
+            if err="$(LC_ALL=C setfacl -m u:nobody:r "$probe" 2>&1)"; then echo "::error::$mnt took an ACL"; exit 1; fi
+            case "$err" in *"Operation not supported"*) ;; *) echo "::error::setfacl in $mnt: $err"; exit 1 ;; esac
+            # `if 1:` opens a block, so the lines below may keep this script's indent.
+            python3 -I -c 'if 1:
+            import errno, os, sys
+            try: os.getxattr(sys.argv[1], "system.posix_acl_access")
+            except OSError as e: sys.exit(0 if e.errno == errno.EOPNOTSUPP else f"ACL read in {sys.argv[1]}: {e}")
+            sys.exit("an ACL read succeeded in " + sys.argv[1])' "$probe"
+            rm "$probe"
+            echo "ACCESS_ROWS_NOACL_DIR=$mnt" >> "$GITHUB_ENV"
+            ;;
+          macOS)
+            mkuser() { # name uid primary-gid
+              sudo dscl . -create "/Users/$1"
+              sudo dscl . -create "/Users/$1" UniqueID "$2"
+              sudo dscl . -create "/Users/$1" PrimaryGroupID "$3"
+              sudo dscl . -create "/Users/$1" UserShell /usr/bin/false
+              sudo dscl . -create "/Users/$1" NFSHomeDirectory /var/empty
+            }
+            sudo dscl . -create /Groups/mcpg-g PrimaryGroupID "$G"
+            # mcpg-c gets mcpg-g as its primary group, because `sudo -u` uses the
+            # primary group, matching what setpriv --regid gives it on Linux.
+            mkuser mcpg-b "$B" 20
+            mkuser mcpg-c "$C" "$G"
+            sudo dscl . -append /Groups/mcpg-g GroupMembership mcpg-c
+            ;;
+          *)
+            echo "::error::the writer's root rows have no setup for $RUNNER_OS"
+            exit 1
+            ;;
+        esac
+        id mcpg-c
+        case " $(id -Gn mcpg-c) " in
+          *" mcpg-g "*) ;;
+          *) echo "::error::mcpg-c is not a member of mcpg-g"; exit 1 ;;
+        esac
+        printf 'ACCESS_ROWS_%s\n' "GID_G=$G" "UID_B=$B" "UID_C=$C" "USER_B=mcpg-b" "USER_C=mcpg-c" >> "$GITHUB_ENV"
+    - name: mcpg-c can traverse to the build output
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Rows start binaries as mcpg-c by their build path; the runner's home
+        # directory is closed to other users, so every parent gets o+x.
+        dir="$GITHUB_WORKSPACE"
+        if [ -d "$GITHUB_WORKSPACE/target/debug" ]; then
+          dir="$GITHUB_WORKSPACE/target/debug"
+        fi
+        until [ "$dir" = / ]; do
+          sudo chmod o+x "$dir"
+          dir="${dir%/*}"
+          dir="${dir:-/}"
+        done
