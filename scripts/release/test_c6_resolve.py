@@ -495,6 +495,49 @@ class KillerFilters(unittest.TestCase):
         code, out = self.repo.run()
         self.assertEqual(code, 0, out)
 
+    def test_a_filter_that_is_part_of_a_second_tests_path_is_refused(self) -> None:
+        # Cargo matches the filter as a substring of each test path: both would run.
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "#[tokio::test]\nasync fn guard_admits_only_its_host_twice() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("test filter guard_admits_only_its_host matches 2 tests: checks::guard_admits_only_its_host, "
+                      "checks::guard_admits_only_its_host_twice", out)
+
+    def test_a_filter_inside_a_module_name_counts_that_modules_tests(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "mod guard_admits_only_its_host_cases {\n    #[test]\n    fn first() {}\n}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("checks::guard_admits_only_its_host_cases::first", out)
+
+    def test_a_helper_whose_name_contains_the_filter_is_not_a_test(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "fn guard_admits_only_its_host_fixture() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_spaced_path_attribute_is_still_the_modules_file(self) -> None:
+        # rustc reads `#[ path = ... ]` too: src/checks.rs is then not part of the crate.
+        self.repo.files["src/lib.rs"] = '#[ path = "guard_checks.rs" ]\nmod checks;\n'
+        self.repo.files["src/guard_checks.rs"] = "// the killer moved away\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("no fn guard_admits_only_its_host in the crate rooted at src/lib.rs", out)
+
+    def test_a_comment_between_fn_and_its_name_still_declares_it(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod more;\n"
+        self.repo.files["src/more.rs"] = "#[test]\nfn /* moved */ guard_admits_only_its_host() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("fn guard_admits_only_its_host is defined 2 times", out)
+
+    def test_a_mod_inside_a_macro_definition_is_not_a_module(self) -> None:
+        self.repo.files["src/lib.rs"] = "mod checks;\nmacro_rules! wrap {\n    () => {\n        mod gone;\n    };\n}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
     def test_a_declared_module_with_no_file_is_unreadable_not_skipped(self) -> None:
         self.repo.files["src/lib.rs"] = "mod checks;\nmod gone;\n"
         code, out = self.repo.run()
