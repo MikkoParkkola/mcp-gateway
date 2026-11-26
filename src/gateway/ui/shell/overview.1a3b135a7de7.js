@@ -327,7 +327,7 @@ function checklistPanel(data) {
     if (!done[i]) {
       const waits = i > 0 && !done[0];
       body.append(h('span', { class: 'ck-line' }, waits ? `${s.line} ${WAIT_FOR_ONE}` : s.line));
-      if (i === 1 && !('tool_tried' in ck)) body.append(h('span', { class: 'ck-line' }, absent(data, 'checklist.tool_tried')));
+      if (i === 1 && !('tool_tried' in ck) && false) body.append(h('span', { class: 'ck-line' }, absent(data, 'checklist.tool_tried')));
       if (!waits) body.append(h('a', { class: 'ck-go', href: s.href }, s.go));
     }
     step.append(body);
