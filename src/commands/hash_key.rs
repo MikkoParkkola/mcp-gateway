@@ -15,10 +15,10 @@ use std::process::ExitCode;
 use mcp_gateway::config::{MIN_SECRET_LEN, api_key_digest_spec};
 use subtle::ConstantTimeEq;
 
+use super::{usage, verdict};
+
 /// Longest accepted input, line ending included.
 const MAX_KEY_BYTES: u64 = 64 * 1024;
-
-const USAGE: &str = "usage: printf %s \"$KEY\" | mcp-gateway hash-key [--verify sha256:<hex>]";
 
 /// Run `hash-key`. Exit codes: 0 printed or matched, 1 mismatch, 2 usage error
 /// (stdin is a terminal, empty key, a new key under `MIN_SECRET_LEN` bytes,
@@ -27,8 +27,10 @@ const USAGE: &str = "usage: printf %s \"$KEY\" | mcp-gateway hash-key [--verify 
 pub fn run_hash_key_command(verify: Option<&str>, render: crate::cli::output::Render) -> ExitCode {
     let stdin = io::stdin();
     if stdin.is_terminal() {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
+        return usage(
+            "hash-key",
+            "the key is read from stdin, and stdin is a terminal: pipe the key in",
+        );
     }
     let mut raw = Vec::new();
     // Bounded: a key is short, and a stray large pipe must fail fast.
@@ -38,26 +40,28 @@ pub fn run_hash_key_command(verify: Option<&str>, render: crate::cli::output::Re
         .read_to_end(&mut raw)
         .is_err()
     {
-        eprintln!("hash-key: could not read the key from stdin");
-        return ExitCode::from(2);
+        return usage("hash-key", "could not read the key from stdin");
     }
     if u64::try_from(raw.len()).unwrap_or(u64::MAX) > MAX_KEY_BYTES {
-        eprintln!("hash-key: the input is longer than {MAX_KEY_BYTES} bytes");
-        return ExitCode::from(2);
+        return usage(
+            "hash-key",
+            &format!("the input is longer than {MAX_KEY_BYTES} bytes"),
+        );
     }
     let key = strip_one_line_ending(&raw);
     if key.is_empty() {
-        eprintln!("hash-key: the key is empty\n{USAGE}");
-        return ExitCode::from(2);
+        return usage("hash-key", "the key is empty");
     }
     // New keys only: `--verify` still checks a key chosen before the floor.
     if verify.is_none() && key.len() < MIN_SECRET_LEN {
         // ci-allow-secret-log: MIN_SECRET_LEN is the constant 20, a length floor; the key itself is never printed, only its length
-        eprintln!(
-            "hash-key: the key is {} bytes; a new key needs at least {MIN_SECRET_LEN} bytes\n{USAGE}",
-            key.len()
+        return usage(
+            "hash-key",
+            &format!(
+                "the key is {} bytes; a new key needs at least {MIN_SECRET_LEN} bytes",
+                key.len()
+            ),
         );
-        return ExitCode::from(2);
     }
     let presented = api_key_digest_spec(key);
     match verify {
@@ -76,17 +80,18 @@ pub fn run_hash_key_command(verify: Option<&str>, render: crate::cli::output::Re
         }
         Some(expected) => {
             if !same_shape(expected, &presented) {
-                eprintln!(
-                    "hash-key: --verify takes sha256: followed by 64 lowercase hex characters"
+                return usage(
+                    "hash-key",
+                    "--verify takes sha256: followed by 64 lowercase hex characters",
                 );
-                return ExitCode::from(2);
             }
             if bool::from(presented.as_bytes().ct_eq(expected.as_bytes())) {
                 eprintln!("hash-key: the key matches");
                 ExitCode::SUCCESS
             } else {
+                // A verdict: the answer is printed, and the code says no.
                 eprintln!("hash-key: the key does not match");
-                ExitCode::from(1)
+                verdict(1)
             }
         }
     }
