@@ -261,3 +261,136 @@ async fn over_cap_answers_do_not_open_the_breaker() {
     assert!(backend.request("tools/call", Some(small)).await.is_ok());
     task.abort();
 }
+
+// Code review r1: the other two body paths, read directly.
+
+/// The JSON-RPC id of a posted frame, as the template's `{id}` wants it.
+fn posted_id(body: &str) -> String {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|frame| frame.get("id").cloned())
+        .map_or_else(|| "null".to_owned(), |id| id.to_string())
+}
+
+/// A POST answered as an event stream: one event carrying CAP + 1 bytes.
+async fn streamed_answer(body: String) -> axum::response::Response {
+    let data = sized_template(CAP + 1).replace("{id}", &posted_id(&body));
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+        .body(axum::body::Body::from(format!(
+            "event: message\ndata: {data}\n\n"
+        )))
+        .unwrap()
+}
+
+/// CAP.1 (review r1): a POST answered as an event stream is held to the same
+/// limit as a JSON body, not only to the decoder's own per-event bound.
+#[tokio::test]
+async fn an_event_stream_answer_over_the_cap_is_refused() {
+    let app = axum::Router::new().route("/mcp", axum::routing::post(streamed_answer));
+    let (addr, task) = crate::test_fixture_host::serve_http(app).await;
+    let err = capped_transport(addr)
+        .request("tools/call", None)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::ResponseTooLarge { limit: CAP }),
+        "{err:?}"
+    );
+    task.abort();
+}
+
+/// A legacy SSE peer: GET opens a session stream naming `/messages`; every
+/// POST is answered with a JSON body, CAP + 1 bytes for `big`, CAP for `exact`.
+async fn legacy_peer() -> (String, tokio::task::JoinHandle<()>) {
+    async fn session() -> axum::response::Response {
+        let opening = futures::stream::iter([Ok::<_, std::io::Error>(bytes::Bytes::from_static(
+            b"event: endpoint\ndata: /messages\n\n",
+        ))]);
+        let held = futures::StreamExt::chain(opening, futures::stream::pending());
+        axum::response::Response::builder()
+            .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+            .body(axum::body::Body::from_stream(held))
+            .unwrap()
+    }
+    async fn message(body: String) -> axum::response::Response {
+        use axum::response::IntoResponse as _;
+        let frame: Value = serde_json::from_str(&body).unwrap_or_default();
+        if frame.get("method").and_then(Value::as_str) == Some("initialize") {
+            let id = frame.get("id").cloned().unwrap_or_default();
+            let result = serde_json::json!({"protocolVersion": "2024-11-05", "capabilities": {},
+                "serverInfo": {"name": "legacy", "version": "1"}});
+            let answer = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result});
+            return axum::Json(answer).into_response();
+        }
+        let len = match frame.pointer("/params/name").and_then(Value::as_str) {
+            Some("big") => CAP + 1,
+            Some("exact") => CAP,
+            _ => 200,
+        };
+        let text = sized_template(len).replace("{id}", &posted_id(&body));
+        axum::response::Response::builder()
+            .header(axum::http::header::CONTENT_TYPE, "application/json")
+            .body(axum::body::Body::from(text))
+            .unwrap()
+    }
+    let app = axum::Router::new()
+        .route("/sse", axum::routing::get(session))
+        .route("/messages", axum::routing::post(message));
+    let (addr, task) = crate::test_fixture_host::serve_http(app).await;
+    (format!("http://{addr}/sse"), task)
+}
+
+/// CAP.1 (review r1): the SSE-mode JSON body is read under the cap: one byte
+/// over is refused, exactly the cap is read.
+#[tokio::test]
+async fn an_sse_mode_json_body_is_held_to_the_cap() {
+    let (url, task) = legacy_peer().await;
+    let transport = make_transport_sse(&url);
+    transport.set_max_response_bytes(CAP);
+    transport.initialize().await.expect("the legacy handshake");
+    let call = |name: &str| Some(serde_json::json!({"name": name, "arguments": {}}));
+    let err = transport
+        .request("tools/call", call("big"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::ResponseTooLarge { limit: CAP }),
+        "{err:?}"
+    );
+    let exact = transport.request("tools/call", call("exact")).await;
+    assert!(exact.is_ok_and(|answer| answer.result.is_some()));
+    task.abort();
+}
+
+/// A 500 whose body breaks off mid-read.
+async fn broken_error_body() -> axum::response::Response {
+    let parts = futures::stream::iter([
+        Ok(bytes::Bytes::from_static(b"partial")),
+        Err(std::io::Error::other("cut")),
+    ]);
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .body(axum::body::Body::from_stream(parts))
+        .unwrap()
+}
+
+/// Review r1: on a live transport an error body that cannot be read is an
+/// empty body, so the caller still gets the status; only a body over the
+/// limit (row above) or under the preview's budget is reported as the read's.
+#[tokio::test]
+async fn an_unreadable_error_body_still_reports_the_status() {
+    let app = axum::Router::new().route("/mcp", axum::routing::post(broken_error_body));
+    let (addr, task) = crate::test_fixture_host::serve_http(app).await;
+    let err = capped_transport(addr)
+        .request("tools/call", None)
+        .await
+        .unwrap_err();
+    let text = err.to_string();
+    assert!(
+        text.contains("500"),
+        "the status, not the read failure: {err:?}"
+    );
+    assert!(!matches!(err, Error::ResponseTooLarge { .. }), "{err:?}");
+    task.abort();
+}

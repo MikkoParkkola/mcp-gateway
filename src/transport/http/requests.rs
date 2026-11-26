@@ -602,10 +602,8 @@ impl HttpTransport {
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
             let needles = self.needles.get().map(AsRef::as_ref);
-            match self.body_budget.get() {
-                Some(budget) => decode_sse_exchange(budget.metered(stream), needles).await,
-                None => decode_sse_exchange(stream, needles).await,
-            }
+            // One exchange is one answer: every byte of its events counts.
+            decode_sse_exchange(self.answer_budget().metered(stream), needles).await
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
         } else {
