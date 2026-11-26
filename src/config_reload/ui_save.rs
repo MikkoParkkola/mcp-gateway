@@ -379,7 +379,8 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         // No log under auth, or the log refused this save's intent: either
         // way the audit the save requires is not there, and nothing was
         // written (the adopt route answers both alike).
-        ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_) => UiRefused::NoAuditLog,
+        ReplaceError::NoAuditLog => UiRefused::NoAuditLog,
+        ReplaceError::AuditRefused(_) => UiRefused::AuditRefused,
         ReplaceError::Busy => UiRefused::Busy(BusyReason::Locked),
         ReplaceError::Gated(Refusal::Busy | Refusal::ReplayOwed) => {
             UiRefused::Busy(BusyReason::Restart)
@@ -400,7 +401,7 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         ReplaceError::Unsupported(why) => UiRefused::Preview(PreviewRefused::Untrusted(why)),
         ReplaceError::Stage(_) => write_failed("stage"),
         ReplaceError::Write(_) => write_failed("write"),
-        ReplaceError::WriterRefused { .. } => write_failed("writer_refused"),
+        ReplaceError::WriterRefused { code, text } => UiRefused::WriterRefused { code, text },
         ReplaceError::Failed(_) => write_failed("failed"),
         ReplaceError::RollbackFailed { .. } => write_failed("rollback_failed"),
         ReplaceError::Unconfirmed { .. } => write_failed("unconfirmed"),

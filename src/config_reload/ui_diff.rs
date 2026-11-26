@@ -177,9 +177,19 @@ pub(crate) enum UiRefused {
         class: RefusalClass,
     },
     Unsupported(String),
-    /// Save: auth is on and no audit log is configured, or the audit log
-    /// refused this save's intent; nothing was written either way.
+    /// Save: auth is on and no audit log is configured; nothing was
+    /// attempted.
     NoAuditLog,
+    /// Save: the audit log refused this save's intent: an append was
+    /// started, so the outcome is not confirmed (nothing was written).
+    AuditRefused,
+    /// Save: the writer refused the file before the target changed, and left
+    /// no scratch behind: its own code and text, which name the file and
+    /// user ids only.
+    WriterRefused {
+        code: &'static str,
+        text: String,
+    },
     /// Save: the edit cannot be proven in place; the change as steps.
     Unprovable(Patch),
     /// Save: the file changed since the preview; the preview of it now.

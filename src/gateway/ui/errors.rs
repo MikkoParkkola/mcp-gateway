@@ -61,15 +61,46 @@ pub(super) enum Retry {
 /// not confirmed, so the route keeps its own answer. No wildcard arm: a new
 /// variant does not compile until it is classified.
 pub(super) fn nothing_attempted(error: &ReplaceError) -> Option<Retry> {
-    let _ = error;
-    None
+    match error {
+        ReplaceError::Busy | ReplaceError::Gated(Refusal::Busy | Refusal::ReplayOwed) => {
+            Some(Retry::Now)
+        }
+        ReplaceError::Gated(Refusal::Restarting | Refusal::Stopping)
+        | ReplaceError::Stale { .. }
+        | ReplaceError::NoAuditLog
+        | ReplaceError::NoConfigFile
+        | ReplaceError::ConfigRefused(_)
+        // The target and its metadata are unchanged and no scratch is left
+        // at every site that builds it.
+        | ReplaceError::WriterRefused { .. } => Some(Retry::No),
+        // An append was started, or a step whose outcome is not confirmed.
+        ReplaceError::AuditRefused(_)
+        | ReplaceError::Refused(_)
+        | ReplaceError::Unsupported(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::ReloadRefused { .. }
+        | ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Failed(_)
+        | ReplaceError::Secrets(_) => None,
+    }
 }
 
 /// A refusal that attempted nothing: status 409, body and other headers
 /// kept, and `Retry-After` owned here: `1` for `Retry::Now`, none for
 /// `Retry::No`.
-pub(super) fn refusal(retry: Retry, answer: Response) -> Response {
-    let _ = retry;
+pub(super) fn refusal(retry: Retry, mut answer: Response) -> Response {
+    *answer.status_mut() = StatusCode::CONFLICT;
+    let headers = answer.headers_mut();
+    match retry {
+        Retry::Now => {
+            headers.insert(RETRY_AFTER, HeaderValue::from_static("1"));
+        }
+        Retry::No => {
+            headers.remove(RETRY_AFTER);
+        }
+    }
     answer
 }
 
@@ -79,12 +110,10 @@ pub(super) fn refusal(retry: Retry, answer: Response) -> Response {
 pub(super) fn gate_refusal(refusal: Refusal) -> Response {
     let ending = |code, message| structured_error(StatusCode::CONFLICT, code, message);
     match refusal {
-        Refusal::Busy | Refusal::ReplayOwed => {
-            let mut busy = flat_error(StatusCode::CONFLICT, RESTART_BUSY).into_response();
-            busy.headers_mut()
-                .insert(RETRY_AFTER, HeaderValue::from_static("1"));
-            busy
-        }
+        Refusal::Busy | Refusal::ReplayOwed => refusal(
+            Retry::Now,
+            flat_error(StatusCode::CONFLICT, RESTART_BUSY).into_response(),
+        ),
         Refusal::Restarting => ending("restarting", RELOAD_RESTARTING).into_response(),
         Refusal::Stopping => ending("stopping", RELOAD_STOPPING).into_response(),
     }
@@ -140,13 +169,18 @@ pub(super) fn no_config_file() -> (StatusCode, Json<Value>) {
 
 /// gateway.yaml could not be read, or the read guard refused it or its
 /// recovery files. Fixed text for every route that writes it: the reason
-/// names the file, so it goes to the log only.
+/// names the file, so it goes to the log only. Nothing was attempted (409).
 pub(super) fn config_refusal() -> (StatusCode, Json<Value>) {
-    flat_error(
-        StatusCode::SERVICE_UNAVAILABLE,
-        "gateway.yaml could not be loaded",
-    )
+    flat_error(StatusCode::CONFLICT, CONFIG_UNLOADABLE)
 }
+
+/// [`config_refusal`] for a read (the settings diff): it cannot answer right
+/// now (503), as [`no_reload_read`] beside [`no_reload_write`].
+pub(super) fn config_refusal_read() -> (StatusCode, Json<Value>) {
+    flat_error(StatusCode::SERVICE_UNAVAILABLE, CONFIG_UNLOADABLE)
+}
+
+const CONFIG_UNLOADABLE: &str = "gateway.yaml could not be loaded";
 
 pub(super) fn admin_auth_required() -> (StatusCode, Json<Value>) {
     flat_error(StatusCode::FORBIDDEN, "Admin authentication required")
@@ -169,9 +203,10 @@ pub(super) fn no_reload_write() -> (StatusCode, Json<Value>) {
     flat_error(StatusCode::CONFLICT, NO_RELOAD)
 }
 
+/// No config path to write: nothing was attempted (409).
 pub(super) fn config_path_unavailable() -> (StatusCode, Json<Value>) {
     flat_error(
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::CONFLICT,
         "Config file path not available; cannot persist changes",
     )
 }
@@ -211,15 +246,14 @@ pub(super) fn incomplete(route: WriteRoute, variant: &'static str) -> axum::resp
 
 /// The answer to a UI config write the writer refused, logged as `route`'s.
 pub(super) fn refused_write(route: WriteRoute, e: &ReplaceError) -> axum::response::Response {
-    match e {
+    let class = nothing_attempted(e);
+    let answer = match e {
         // A busy gateway has written nothing, so this is a retry-me, not a
         // failure. 500 would tell the operator their edit broke something.
         ReplaceError::Gated(refusal) => gate_refusal(*refusal),
-        ReplaceError::Busy => flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            ConfigWriteError::Busy.to_string(),
-        )
-        .into_response(),
+        ReplaceError::Busy => {
+            flat_error(StatusCode::CONFLICT, ConfigWriteError::Busy.to_string()).into_response()
+        }
         ReplaceError::Stale { .. } => structured_error(
             StatusCode::CONFLICT,
             "stale",
@@ -228,7 +262,7 @@ pub(super) fn refused_write(route: WriteRoute, e: &ReplaceError) -> axum::respon
         .into_response(),
         // The gateway's own posture, fixed text: the operator can act on it.
         ReplaceError::NoAuditLog => structured_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::CONFLICT,
             "audit_log_required",
             NO_AUDIT_LOG,
         )
@@ -314,6 +348,10 @@ pub(super) fn refused_write(route: WriteRoute, e: &ReplaceError) -> axum::respon
             );
             config_refusal().into_response()
         }
+    };
+    match class {
+        Some(retry) => refusal(retry, answer),
+        None => answer,
     }
 }
 

@@ -28,8 +28,8 @@ fn patch() -> Patch {
         }],
     }
 }
-async fn check(refusal: UiRefused, status: StatusCode, code: &str, retry: bool) {
-    let response = answer(refusal);
+async fn check(refusal: UiRefused, asked: Asked, status: StatusCode, code: &str, retry: bool) {
+    let response = answer(refusal, asked);
     assert_eq!(response.status(), status, "shared answer status");
     assert_eq!(response.headers().contains_key(RETRY_AFTER), retry);
     if retry {
@@ -61,9 +61,12 @@ async fn check(refusal: UiRefused, status: StatusCode, code: &str, retry: bool) 
 }
 macro_rules! row {
     ($name:ident, $refusal:expr, $status:ident, $code:expr, $retry:expr) => {
+        row!($name, Save, $refusal, $status, $code, $retry);
+    };
+    ($name:ident, $asked:ident, $refusal:expr, $status:ident, $code:expr, $retry:expr) => {
         #[doc = concat!("Red oracle: ", stringify!($name), " maps to ", stringify!($status), ", its code and retry contract, without payload text.")]
         #[tokio::test]
-        async fn $name() { check($refusal, StatusCode::$status, $code, $retry).await; }
+        async fn $name() { check($refusal, Asked::$asked, StatusCode::$status, $code, $retry).await; }
     };
 }
 row!(
@@ -140,8 +143,25 @@ row!(
 row!(
     no_audit_log,
     UiRefused::NoAuditLog,
+    CONFLICT,
+    "audit_log_required",
+    false
+);
+row!(
+    audit_refused,
+    UiRefused::AuditRefused,
     SERVICE_UNAVAILABLE,
     "audit_log_required",
+    false
+);
+row!(
+    writer_refused,
+    UiRefused::WriterRefused {
+        code: "foreign-owner",
+        text: "gateway.yaml is owned by another user".into()
+    },
+    CONFLICT,
+    "foreign-owner",
     false
 );
 row!(
@@ -164,12 +184,20 @@ row!(
 row!(
     stale_unpreviewable,
     UiRefused::StaleUnpreviewable(CANARY.into()),
-    SERVICE_UNAVAILABLE,
+    CONFLICT,
     "stale",
     true
 );
 row!(
     recovering,
+    UiRefused::Preview(PreviewRefused::Recovering),
+    CONFLICT,
+    "the config write is recovering; retry",
+    true
+);
+row!(
+    recovering_on_the_diff,
+    Diff,
     UiRefused::Preview(PreviewRefused::Recovering),
     SERVICE_UNAVAILABLE,
     "the config write is recovering; retry",
@@ -185,12 +213,28 @@ row!(
 row!(
     untrusted,
     UiRefused::Preview(PreviewRefused::Untrusted(CANARY.into())),
-    SERVICE_UNAVAILABLE,
+    CONFLICT,
     "gateway.yaml could not be loaded",
     false
 );
 row!(
     unread,
+    UiRefused::Preview(PreviewRefused::Unread(CANARY.into())),
+    CONFLICT,
+    "gateway.yaml could not be loaded",
+    false
+);
+row!(
+    untrusted_on_the_diff,
+    Diff,
+    UiRefused::Preview(PreviewRefused::Untrusted(CANARY.into())),
+    SERVICE_UNAVAILABLE,
+    "gateway.yaml could not be loaded",
+    false
+);
+row!(
+    unread_on_the_diff,
+    Diff,
     UiRefused::Preview(PreviewRefused::Unread(CANARY.into())),
     SERVICE_UNAVAILABLE,
     "gateway.yaml could not be loaded",
@@ -201,6 +245,13 @@ row!(
     UiRefused::Busy(BusyReason::Locked),
     CONFLICT,
     "the config is being written; retry",
+    true
+);
+row!(
+    busy_restart,
+    UiRefused::Busy(BusyReason::Restart),
+    CONFLICT,
+    "a restart is being prepared; retry",
     true
 );
 row!(

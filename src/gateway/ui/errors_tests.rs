@@ -19,7 +19,7 @@ fn auth_required_preserves_caller_status() {
 #[test]
 fn config_path_unavailable_shape_is_stable() {
     let (status, body) = config_path_unavailable();
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(status, StatusCode::CONFLICT);
     assert_eq!(
         body.0,
         json!({ "error": "Config file path not available; cannot persist changes" })

@@ -680,11 +680,7 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
     }
 
     let Some(reload_context) = state.meta_mcp.reload_context() else {
-        return flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Config reload is not enabled on this gateway",
-        )
-        .into_response();
+        return self::errors::no_reload_write().into_response();
     };
 
     let who = admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());

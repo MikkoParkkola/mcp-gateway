@@ -542,7 +542,18 @@ fn every_writer_result_maps_to_one_refusal() {
         (
             ReplaceError::AuditRefused("a".into()),
             None,
-            Mapped::Refusal(UiRefused::NoAuditLog),
+            Mapped::Refusal(UiRefused::AuditRefused),
+        ),
+        (
+            ReplaceError::WriterRefused {
+                code: "target-changed",
+                text: "w".into(),
+            },
+            None,
+            Mapped::Refusal(UiRefused::WriterRefused {
+                code: "target-changed",
+                text: "w".into(),
+            }),
         ),
         (
             ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable("u".into()))),
