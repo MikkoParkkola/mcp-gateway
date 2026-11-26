@@ -282,6 +282,12 @@ fn audit_verify_failed_verdicts_print_their_document_with_exit_1() {
         .unwrap_or_else(|| panic!("no failure line: {}", plain.stderr));
     assert_eq!(doc["error"], json!(message));
     assert_eq!((plain.code, plain.stdout.as_str()), (Some(1), ""));
+    // A verdict prints no `error: ` line: a chain failure is not a local error (MIK-10060.LERRB.4).
+    assert!(
+        !plain.stderr.lines().any(|l| l.starts_with("error: ")),
+        "{}",
+        plain.stderr
+    );
     assert_eq!(json.stderr, plain.stderr);
 
     // A signed log verified with another key: the HMAC check fails the verdict.

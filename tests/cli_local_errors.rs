@@ -8,6 +8,8 @@
 
 #[path = "common/gateway_bin.rs"]
 mod gateway_bin;
+#[path = "cli_local_errors/guards.rs"]
+mod guards;
 #[path = "cli_local_errors/scenarios.rs"]
 mod scenarios;
 
