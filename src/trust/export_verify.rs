@@ -171,14 +171,15 @@ pub(crate) fn export_verdict(
     render: crate::cli::output::Render,
 ) -> crate::cli::output::Printed {
     use crate::cli::output::{Printed, Render};
+    use crate::commands::CliExit;
     let trust = match trust_set(jwk, config) {
         Ok(t) => t,
         Err(why) => {
-            return Printed {
-                stdout: String::new(),
-                stderr: format!("{why}\n"),
-                exit: 1,
-            };
+            return Printed::error(
+                CliExit::LocalFailure,
+                &why,
+                "Pass --jwk naming the key 'mcp-gateway provenance public-key' printed, or fix the gateway's signing key.",
+            );
         }
     };
     let verdict = match read_bounded(file, MAX_EXPORT_BYTES) {
@@ -231,20 +232,17 @@ pub(crate) fn export_verdict(
             match crate::cli::output::document(&view) {
                 Ok(doc) => doc,
                 Err(why) => {
-                    return Printed {
-                        stdout: String::new(),
-                        stderr: format!("could not print the verdict: {why}\n"),
-                        exit: 1,
-                    };
+                    return Printed::error(
+                        CliExit::LocalFailure,
+                        &format!("could not print the verdict: {why}"),
+                        "Rerun without --json for the text form, and report this as a bug.",
+                    );
                 }
             }
         }
     };
-    Printed {
-        stdout,
-        stderr: String::new(),
-        exit,
-    }
+    // The verdict, valid or not: what it printed, and its code.
+    Printed::verdict(exit, stdout, String::new())
 }
 
 /// Runs `audit verify --export`: [`export_verdict`], printed once.

@@ -135,6 +135,5 @@ T	src/commands/upgrade.rs	run_upgrade_command	-	CLI subcommand output (upgrade.r
 T	src/config_persistence.rs	say_waiting	-	reached only through cli_lock, a CLI config write
 T	src/registry/mod.rs	Registry::build_index	-	only production callers are commands/cap.rs:431 and :465 (the cap subcommand)
 T	src/trust/provenance_public_cli.rs	emit_line	-	the provenance public-key subcommand
-T	src/trust/provenance_public_cli.rs	run_public_key	-	the provenance public-key subcommand
 T	src/validator/cli_handler.rs	collect_capability_files	-	the validate subcommand
 T	src/validator/cli_handler.rs	run_validate_command	-	the validate subcommand
