@@ -127,8 +127,16 @@ def blank(source: str, mode: Wipe = Wipe.COMMENTS_AND_LITERALS) -> str:
             else:
                 i += 1  # a lifetime or label: 'a
         else:
-            i += 1
+            # Plain code: jump to the next place a branch above can start (a scan of every
+            # character in Python made a whole-crate module walk take seconds per thousand files).
+            m = _LEXEME.search(source, i + 1)
+            i = m.start() if m else n
     return "".join(out)
+
+
+# Every position where a branch of `blank` can fire: a comment, a quote, or a raw string's
+# prefix at the start of an identifier (what `_ident_start` checks).
+_LEXEME = re.compile(r"""//|/\*|"|'|(?<!\w)[bc]?r#*\"""")
 
 
 def _ident_start(source: str, i: int) -> bool:
@@ -370,10 +378,10 @@ class Tree:
             self._files = set(self._git("ls-tree", "-r", "--name-only", self.rev).split())
         return path in self._files
 
-    def files_declaring(self, name: str, under: str = "src") -> list[str]:
-        """The `<under>/**.rs` files whose text has `fn <name>`, found by one `git grep`."""
+    def files_declaring(self, name: str) -> list[str]:
+        """The `src/**.rs` files whose text has `fn <name>`, found by one `git grep`."""
         done = subprocess.run(["git", "grep", "-l", "-E", rf"(^|[^[:alnum:]_])fn[[:space:]]+{re.escape(name)}([^[:alnum:]_]|$)",
-                               self.rev, "--", f"{under}/*.rs", f"{under}/**/*.rs"],
+                               self.rev, "--", "src/*.rs", "src/**/*.rs"],
                               cwd=self.root, capture_output=True, text=True)
         if done.returncode not in (0, 1):
             raise RuntimeError(f"git grep: {done.stderr.strip()}")
@@ -637,6 +645,7 @@ def resolve(tree: Tree, ob: Obligation, rust_files: set[str]) -> Outcome:
 
 GAP_TABLE = "docs/release/c6-gap/v4.0.0-c6-gap-table.tsv"
 _MOD = re.compile(r"\bmod\s+([A-Za-z_]\w*)\s*([;{])")
+_MOD_WORD = re.compile(r"\bmod\b")
 _PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]')
 
 
@@ -662,7 +671,12 @@ def module_tree(tree: Tree, root: str) -> dict[str, ModFile]:
         if path in files:
             raise Unsupported(f"{path} is mounted twice")
         source = tree.read(path)
-        code, kept = blank(source), blank(source, Wipe.COMMENTS)
+        if not _MOD_WORD.search(source):
+            files[path] = ModFile(module, ())  # no `mod` anywhere: no child, no inline block
+            continue
+        code = blank(source)
+        # Literals are kept only to read a #[path]; a file that names none needs no second pass.
+        kept = blank(source, Wipe.COMMENTS) if "#[path" in source else code
         line_at = [0] * (len(code) + 1)  # _matching names a line only in its error
         found = [(m, m.start()) for m in _MOD.finditer(code) if _ident_start(code, m.start())]
         inline = tuple((m.end() - 1, _matching(code, m.end() - 1, line_at), m.group(1))
@@ -707,9 +721,9 @@ def _declared_test_path(tree: Tree, target: str) -> str | None:
     return None
 
 
-def filter_refusal(tree: Tree, args: str, crates: dict[str, dict[str, ModFile]]) -> str | None:
+def filter_refusal(tree: Tree, args: str, crates: dict[str, tuple[dict[str, ModFile], dict[str, list[str]]]]) -> str | None:
     """Why the killer arguments' test filter does not name exactly one test, or None.
-    `crates` caches each crate's module tree across rows."""
+    `crates` caches each crate's module tree and fn-name index across rows."""
     words = args.split()
     if words[:1] == ["--lib"] and len(words) == 2:
         root = "src/lib.rs"
@@ -725,15 +739,24 @@ def filter_refusal(tree: Tree, args: str, crates: dict[str, dict[str, ModFile]])
     wanted = words[-1]
     name = wanted.rsplit("::", 1)[-1]
     try:
-        mods = crates.get(root) or crates.setdefault(root, module_tree(tree, root))
+        if root not in crates:
+            mods = module_tree(tree, root)
+            # Which crate files spell `fn <name>`, for every name at once: one pass over the
+            # cached text instead of one `git grep` per row. Comments and strings still match
+            # here; declarations() below keeps only code.
+            index: dict[str, list[str]] = {}
+            for path in mods:
+                for found in sorted(set(_FN.findall(tree.read(path)))):
+                    index.setdefault(found, []).append(path)
+            crates[root] = (mods, index)
+        mods, index = crates[root]
         defs = []
-        for path in tree.files_declaring(name, os.path.dirname(root)):
-            if path in mods:
-                mod = mods[path]
-                for d in declarations(tree.read(path)):
-                    if d.name == name:
-                        around = [n for o, c, n in mod.inline if o < d.at < c]
-                        defs.append(("::".join(p for p in (mod.path, *around, name) if p), f"{path}:{d.start}"))
+        for path in index.get(name, ()):
+            mod = mods[path]
+            for d in declarations(tree.read(path)):
+                if d.name == name:
+                    around = [n for o, c, n in mod.inline if o < d.at < c]
+                    defs.append(("::".join(p for p in (mod.path, *around, name) if p), f"{path}:{d.start}"))
     except Unsupported as unreadable:
         return f"test filter {wanted}: cannot read the crate's module tree with certainty: {unreadable}"
     if not defs:
@@ -810,7 +833,7 @@ def _run(tree: Tree, args: argparse.Namespace) -> int:
                 twin.detail = (f"{first.obligation.path} rank {first.obligation.rank} and "
                                f"{o.obligation.path} rank {o.obligation.rank} resolve to one function at {o.file}")
     # A row whose test filter names no test, or several, would not judge its killer.
-    crates: dict[str, dict[str, ModFile]] = {}
+    crates: dict[str, tuple[dict[str, ModFile], dict[str, list[str]]]] = {}
     for row, o in _gap_rows(tree, outcomes):
         if o.status != "unresolved" and (why := filter_refusal(tree, row["declared_killer_args"], crates)):
             o.status, o.detail = "unresolved", why
