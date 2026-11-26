@@ -472,6 +472,20 @@ async fn k1_a_live_session_marks_step_three_seen() {
     assert!(body["checklist"].get("tool_tried").is_none(), "{body}");
 }
 
+/// K1b: a session whose client gave no name counts the same.
+#[tokio::test]
+async fn k1b_a_nameless_session_counts_too() {
+    let (state, _dir) = fixture(0, false).await;
+    let owner = crate::gateway::session_id::SessionOwner::Credential("nameless".into());
+    let _session = state
+        .multiplexer
+        .get_or_create_session_id_scoped(None, &owner, None);
+
+    let body = overview(&state).await;
+
+    assert_eq!(body["checklist"]["client_seen"], true, "{body}");
+}
+
 /// K3: a past call is not taken as a client: only a live session or a key finishes step 3 there. (This fixture holds keys,
 /// which `client_seen` ignores; K5 pins that.)
 #[tokio::test]
