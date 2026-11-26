@@ -13,8 +13,9 @@ const SWEEP_LOG: &str = "mcp_gateway=info,mcp_gateway::transport::stdio::sweep=d
 const FREEZE_START: &str = "descendant sweep: freeze start";
 const FREEZE_END: &str = "descendant sweep: freeze end";
 
-/// How the stdio outer ends: EOF only (its planned stop), or EOF and then a
-/// SIGTERM, which hurries it to a kill after roughly 300 ms.
+/// How the stdio outer ends: EOF only (its planned stop, natural ordering), or
+/// EOF, then a SIGTERM sent once the inner's sweep has begun, which hurries the
+/// outer to a kill after roughly 300 ms, inside the inner's freeze.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Stop {
     Eof,
@@ -129,6 +130,17 @@ async fn zombie_chain(stop: Stop) -> Ended {
     })
     .await;
     if stop == Stop::Hurried {
+        // Forced takeover (F8): the SIGTERM waits for the inner's own sweep to
+        // begin, so the outer's hurry lands inside the inner's freeze. Left to
+        // the clock, the inner's 1 s pre-reap grace always loses to the outer's
+        // 300 ms hurry. No line within the bound fails the row: a premise.
+        let inner_log = root.join("inner.log");
+        until(
+            root,
+            "premise: the inner logged no freeze start before the SIGTERM",
+            || std::fs::read_to_string(&inner_log).is_ok_and(|text| text.contains(FREEZE_START)),
+        )
+        .await;
         sigterm(pid);
     }
     let exit = tokio::time::timeout(STDIO_SIGTERM_EXIT_BOUND, outer.child_mut().wait()).await;
@@ -191,17 +203,16 @@ async fn a_zombie_holding_inner_still_leaves_no_leaf() {
     );
 }
 
-/// Hurried stop of the same chain: the outer's kill comes after about 300 ms
-/// while the inner's unsettled freeze runs for its 700 ms slice, so the outer's
-/// own sweep may take the inner over. No process of the tree may survive, and
-/// the outer (which always sweeps) must have logged a freeze start. The run
-/// prints one TAKEOVER line: `yes` only when the inner logged a freeze start,
-/// the outer's sweep started at or after it, and before the inner's freeze end
-/// (or the inner logged no end, being frozen or killed mid-freeze). An inner
-/// that never reached its sweep (the outer was first) is a run without overlap:
-/// `no`, never `yes`. The SNAP.7 harness counts those lines over its runs; one
-/// run cannot force the overlap, so the row itself asserts only what every run
-/// must show.
+/// Hurried stop of the same chain, forced to overlap: the outer's SIGTERM is
+/// sent only once the inner logged its freeze start (a premise: no line, the
+/// row fails), and the outer's kill comes about 300 ms later, while the inner's
+/// unsettled freeze runs for its 700 ms slice. No process of the tree may
+/// survive, and the outer (which always sweeps) must have logged a freeze start.
+/// The run prints one TAKEOVER line: `yes` only when the outer's sweep started at
+/// or after the inner's freeze start and before the inner's freeze end (or the
+/// inner logged no end, being frozen or killed mid-freeze). The SNAP.7 harness
+/// counts those lines (bar: at least 19 of 20); the row itself asserts only what
+/// every run must show.
 /// Red if a hurried takeover of a zombie-holding inner leaves a leaf behind.
 #[tokio::test]
 async fn a_hurried_takeover_of_a_freezing_inner_leaves_no_leaf() {
