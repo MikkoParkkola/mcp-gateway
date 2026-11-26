@@ -46,6 +46,33 @@ preview. Preview the address, then send that digest with the import.";
 /// The reason a UI write is told to retry while a restart is being prepared.
 pub(super) const RESTART_BUSY: &str = crate::config_reload::RESTART_BUSY;
 
+/// Whether the same request may simply be sent again once a refusal that
+/// attempted nothing clears: `Now` when the gateway's own work ends by
+/// itself (a held lock, the restart gate preparing), `No` when someone must
+/// change something first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Retry {
+    Now,
+    No,
+}
+
+/// The class of a writer error: `Some` when nothing was attempted (a 409),
+/// with whether to retry; `None` when a step was started or the outcome is
+/// not confirmed, so the route keeps its own answer. No wildcard arm: a new
+/// variant does not compile until it is classified.
+pub(super) fn nothing_attempted(error: &ReplaceError) -> Option<Retry> {
+    let _ = error;
+    None
+}
+
+/// A refusal that attempted nothing: status 409, body and other headers
+/// kept, and `Retry-After` owned here: `1` for `Retry::Now`, none for
+/// `Retry::No`.
+pub(super) fn refusal(retry: Retry, answer: Response) -> Response {
+    let _ = retry;
+    answer
+}
+
 /// The one answer to a config-gate refusal of a UI write, for every write
 /// route: all are 409s, since nothing was tried; busy alone is retryable and
 /// carries `Retry-After`.
