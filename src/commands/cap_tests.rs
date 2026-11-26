@@ -122,19 +122,21 @@ async fn cap_test_failures_before_the_call_print_nothing_on_stdout() {
         .unwrap();
     let missing = dir.path().join("missing.yaml");
     let executor = mcp_gateway::capability::CapabilityExecutor::new();
-    // (file, arguments, the start of the stderr line, a word it must name)
+    // (file, arguments, the start of the stderr, a word it must name, the exit)
     let cases = [
         (
             &missing,
             r#"{"city": "Oulu"}"#,
-            "❌ Failed to parse capability: ",
+            "error: Failed to parse capability: ",
             "missing.yaml",
+            1,
         ),
-        (&file, "{", "❌ Invalid JSON arguments: ", "EOF"),
+        // Arguments that are not JSON are a wrong invocation.
+        (&file, "{", "error: Invalid JSON arguments: ", "EOF", 2),
         // The schema refusal: `city` is required and missing.
-        (&file, "{}", "❌ ", "city"),
+        (&file, "{}", "error: ", "city", 1),
     ];
-    for (path, args, start, names) in cases {
+    for (path, args, start, names, exit) in cases {
         for render in [Render::Text, Render::Json] {
             let mut banner = String::new();
             let printed = super::cap_test_with(&executor, path, args, render, &mut |b| {
@@ -147,7 +149,7 @@ async fn cap_test_failures_before_the_call_print_nothing_on_stdout() {
             );
             assert_eq!(
                 (printed.stdout.as_str(), printed.exit),
-                ("", 1),
+                ("", exit),
                 "{args} {render:?}"
             );
             assert!(

@@ -15,7 +15,7 @@ use std::process::ExitCode;
 
 use super::config_write::CommentLoss;
 
-use super::{CliExit, check_config_command, fail, usage};
+use super::{CliExit, check_config_command, fail, usage, write_remedy};
 
 use mcp_gateway::{
     cli_support::store_backend_literals,
@@ -150,7 +150,7 @@ pub async fn run_add_command(
         None => Vec::new(),
     };
     if let Err(e) = written {
-        return fail(CliExit::LocalFailure, &e, &write_remedy(config));
+        return fail(CliExit::LocalFailure, &e, &write_remedy(Some(config)));
     }
 
     // ── Report ─────────────────────────────────────────────────────────────
@@ -192,7 +192,7 @@ pub fn run_remove_command(name: &str, config: &Path, mode: CommentLoss) -> ExitC
             .map_err(|msg| format!("{msg} (in {})", config.display()))
     });
     if let Err(e) = written {
-        return fail(CliExit::LocalFailure, &e, &write_remedy(config));
+        return fail(CliExit::LocalFailure, &e, &write_remedy(Some(config)));
     }
 
     println!("Removed '{name}'.");
@@ -513,15 +513,6 @@ pub(crate) fn env_inputs(
         }
     }
     Ok(values)
-}
-
-/// The remedy when `add` or `remove` could not load, edit or write `config`: the message names what to fix, and
-/// doctor says why a config does not load.
-fn write_remedy(config: &Path) -> String {
-    format!(
-        "Fix what the message names, or run '{}' if the config does not load.",
-        check_config_command(config)
-    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

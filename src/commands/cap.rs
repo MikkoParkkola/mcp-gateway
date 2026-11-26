@@ -7,6 +7,8 @@ use crate::cli::stdout::{print, println};
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use super::{CliExit, check_config_command, fail, usage};
+
 use mcp_gateway::{
     capability::{
         AuthTemplate, CapabilityExecutor, CapabilityLoader, IssueSeverity, OpenApiConverter,
@@ -107,8 +109,11 @@ async fn cap_validate(file: std::path::PathBuf, render: Render) -> ExitCode {
     match parse_capability_file(&file).await {
         Ok(cap) => {
             if let Err(e) = validate_capability(&cap) {
-                eprintln!("❌ Validation failed: {e}");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &format!("Validation failed: {e}"),
+                    &fix_and_rerun(&file),
+                );
             }
             // The structural checks the loader runs: an error here means the
             // gateway would skip the file, a warning that it loads with a smell.
@@ -117,8 +122,11 @@ async fn cap_validate(file: std::path::PathBuf, render: Render) -> ExitCode {
                 eprintln!("{issue}");
             }
             if issues.iter().any(|i| i.severity == IssueSeverity::Error) {
-                eprintln!("❌ Validation failed: structural errors above");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    "Validation failed: structural errors above",
+                    &fix_and_rerun(&file),
+                );
             }
             if render == Render::Json {
                 let warnings = issues
@@ -147,10 +155,11 @@ async fn cap_validate(file: std::path::PathBuf, render: Render) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("❌ Failed to parse: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Failed to parse: {e}"),
+            &check_capability_file(&file),
+        ),
     }
 }
 
@@ -176,14 +185,16 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
             println!("   sha256: {hash}");
             ExitCode::SUCCESS
         }
-        Ok(Err(error)) => {
-            eprintln!("❌ {error}");
-            ExitCode::FAILURE
-        }
-        Err(join) => {
-            eprintln!("❌ Pinning {} stopped: {join}", file.display());
-            ExitCode::FAILURE
-        }
+        Ok(Err(error)) => fail(
+            CliExit::LocalFailure,
+            &error.to_string(),
+            &check_capability_file(&file),
+        ),
+        Err(join) => fail(
+            CliExit::LocalFailure,
+            &format!("Pinning {} stopped: {join}", file.display()),
+            "Rerun 'mcp-gateway cap pin', and report this as a bug if it stops again.",
+        ),
     }
 }
 
@@ -218,8 +229,11 @@ async fn cap_list(
     let executor = match list_executor(config) {
         Ok(executor) => executor,
         Err((path, e)) => {
-            eprintln!("❌ Failed to load config {}: {e}", path.display());
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &format!("Failed to load config {}: {e}", path.display()),
+                &format!("Run '{}' to see why.", check_config_command(&path)),
+            );
         }
     };
     let path = directory.to_string_lossy();
@@ -248,10 +262,11 @@ async fn cap_list(
             }
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("❌ Failed to load: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Failed to load: {e}"),
+            &format!("Check that {path} exists and holds capability files."),
+        ),
     }
 }
 
@@ -272,8 +287,7 @@ async fn cap_import(
         .as_deref()
         .is_some_and(|key| crate::capability::credential_form(key).is_err())
     {
-        eprintln!("Error: {AUTH_KEY_REFUSAL}");
-        return ExitCode::from(2);
+        return usage("cap import", AUTH_KEY_REFUSAL);
     }
     let mut converter = OpenApiConverter::new();
     if let Some(p) = prefix {
@@ -314,15 +328,19 @@ async fn cap_import(
             if failed > 0 {
                 // A tool not written, an existing name included, is a failed
                 // import: a script must not read it as done.
-                eprintln!("{failed} tools could not be written.");
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &format!("{failed} tools could not be written"),
+                    "Each failed tool is named above: move or rename the files in the way, or pick another --output.",
+                );
             }
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("❌ Failed to convert: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Failed to convert: {e}"),
+            &format!("Check that {spec_ref} exists and is an OpenAPI document."),
+        ),
     }
 }
 
@@ -346,31 +364,34 @@ async fn cap_test_with(
     banner_out: &mut dyn FnMut(&str),
 ) -> crate::cli::output::Printed {
     use crate::cli::output::Printed;
-    let failed = |stdout: String, stderr: String| Printed {
-        stdout,
-        stderr,
-        exit: 1,
-    };
     let cap = match parse_capability_file(file).await {
         Ok(c) => c,
         Err(e) => {
-            return failed(
-                String::new(),
-                format!("❌ Failed to parse capability: {e}\n"),
+            return Printed::error(
+                CliExit::LocalFailure,
+                &format!("Failed to parse capability: {e}"),
+                &check_capability_file(file),
             );
         }
     };
     let params: serde_json::Value = match serde_json::from_str(args) {
         Ok(v) => v,
-        Err(e) => return failed(String::new(), format!("❌ Invalid JSON arguments: {e}\n")),
+        Err(e) => {
+            return Printed::error(
+                CliExit::Usage,
+                &format!("Invalid JSON arguments: {e}"),
+                "Run 'mcp-gateway cap test --help' for usage.",
+            );
+        }
     };
     // The schema check a gateway call gets (MIK-7943); the arguments go on as
     // given, as in `invoke`.
     let verdict = mcp_gateway::capability::validate_arguments(&params, &cap.schema.input);
     if !verdict.is_valid() {
-        return failed(
-            String::new(),
-            format!("❌ {}\n", verdict.format_error(&cap.schema.input)),
+        return Printed::error(
+            CliExit::LocalFailure,
+            &verdict.format_error(&cap.schema.input),
+            "Pass --args matching the capability's input schema.",
         );
     }
     if render == Render::Text {
@@ -390,9 +411,10 @@ async fn cap_test_with(
                 Render::Json => match json::test(&cap.name, &params, &result) {
                     Ok(doc) => doc,
                     Err(why) => {
-                        return failed(
-                            String::new(),
-                            format!("❌ Could not print the capability document: {why}\n"),
+                        return Printed::error(
+                            CliExit::LocalFailure,
+                            &format!("Could not print the capability document: {why}"),
+                            "Rerun without --json for the text form, and report this as a bug.",
                         );
                     }
                 },
@@ -403,7 +425,11 @@ async fn cap_test_with(
                 exit: 0,
             }
         }
-        Err(e) => failed(String::new(), format!("❌ Execution failed: {e}\n")),
+        Err(e) => Printed::error(
+            CliExit::LocalFailure,
+            &format!("Execution failed: {e}"),
+            "Check the capability's provider, its URL and any credential it names, then rerun.",
+        ),
     }
 }
 
@@ -422,10 +448,11 @@ async fn cap_install(
                 println!("✅ Installed to {}", path.display());
                 ExitCode::SUCCESS
             }
-            Err(e) => {
-                eprintln!("❌ Installation failed: {e}");
-                ExitCode::FAILURE
-            }
+            Err(e) => fail(
+                CliExit::LocalFailure,
+                &format!("Installation failed: {e}"),
+                "Check the capability name, --repo and --branch, then rerun.",
+            ),
         }
     } else {
         println!("ℹ️  All capabilities are already available in the capabilities directory.");
@@ -461,10 +488,14 @@ async fn cap_search(query: String, capabilities: std::path::PathBuf, render: Ren
             }
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("❌ Failed to build registry index: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Failed to build registry index: {e}"),
+            &format!(
+                "Check that {} exists and holds capability files.",
+                capabilities.display()
+            ),
+        ),
     }
 }
 
@@ -487,11 +518,31 @@ async fn cap_registry_list(capabilities: std::path::PathBuf, render: Render) -> 
             println!("All capabilities are available in the capabilities directory.");
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("❌ Failed to build registry index: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Failed to build registry index: {e}"),
+            &format!(
+                "Check that {} exists and holds capability files.",
+                capabilities.display()
+            ),
+        ),
     }
+}
+
+/// The remedy for a capability file that could not be read or parsed: it names the file.
+fn check_capability_file(file: &std::path::Path) -> String {
+    format!(
+        "Check that {} exists and is a capability YAML file.",
+        file.display()
+    )
+}
+
+/// The remedy for a capability file that parsed but failed validation.
+fn fix_and_rerun(file: &std::path::Path) -> String {
+    format!(
+        "Fix {} as the message says, then rerun 'mcp-gateway cap validate'.",
+        file.display()
+    )
 }
 
 #[cfg(tp2)]

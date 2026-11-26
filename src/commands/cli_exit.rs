@@ -551,21 +551,19 @@ pub(crate) fn verdict(code: u8) -> std::process::ExitCode {
 impl crate::cli::output::Printed {
     /// A local failure as a built result: the two error lines on stderr, the kind's code.
     pub(crate) fn error(kind: CliExit, message: &str, remedy: &str) -> Self {
-        let _ = kind;
         Self {
             stdout: String::new(),
-            stderr: format!("error: {message}\n{remedy}\n"),
-            exit: 1,
+            stderr: error_outcome(kind, message, remedy).stderr().to_owned(),
+            exit: kind.code(),
         }
     }
 
     /// A finished command's negative answer: what it printed, and its code.
     pub(crate) fn verdict(code: u8, stdout: String, stderr: String) -> Self {
-        let _ = (code, stdout, stderr);
         Self {
-            stdout: String::new(),
-            stderr: String::new(),
-            exit: 0,
+            stdout,
+            stderr,
+            exit: code,
         }
     }
 }

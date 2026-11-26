@@ -105,6 +105,13 @@ pub(crate) fn check_config_command(path: &std::path::Path) -> String {
     format!("mcp-gateway doctor --config {arg}")
 }
 
+/// The remedy when a command could not load, edit or write the config at `path` (`None`: the one it discovers): the
+/// message names what to fix, and doctor says why a config does not load.
+pub(crate) fn write_remedy(path: Option<&std::path::Path>) -> String {
+    let doctor = path.map_or_else(|| "mcp-gateway doctor".to_owned(), check_config_command);
+    format!("Fix what the message names, or run '{doctor}' if the config does not load.")
+}
+
 /// Now for a CLI command, or the error it exits non-zero with: chrono's own
 /// clock read panics on a clock before 1970 (MIK-8202 P4a).
 pub(crate) fn clock_now() -> Result<chrono::DateTime<chrono::Utc>, String> {
