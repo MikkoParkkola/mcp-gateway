@@ -316,7 +316,7 @@ const WAIT_FOR_ONE = 'Opens after step 1.';
 function checklistPanel(data) {
   const ck = data.checklist ?? {};
   const done = [isCount(data.kpi?.servers_total) && data.kpi.servers_total > 0, ck.tool_tried === true,
-    ck.has_key === true || ck.client_seen === true];
+    ck.has_key === true];
   if (done.every(Boolean)) return null;
   const section = card('checklist', 'Get started ', h('span', { class: 'ck-count' }, `${done.filter(Boolean).length} of 3`));
   const list = h('ol', { class: 'ck-steps', role: 'list' });
