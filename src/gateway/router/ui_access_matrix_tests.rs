@@ -352,6 +352,8 @@ fn shapes(method: &str, path: &str) -> Vec<&'static str> {
         "GET" if path == routes::UI_ACTIVITY_RECEIPT => vec!["plain", "bad-query", "other-receipt"],
         // CSV is the unsigned export, so it answers without a signing key.
         "GET" if path == routes::UI_ACTIVITY_EXPORT => vec!["plain", "bad-query", "csv"],
+        // A counts read is refused without a window, so it also gets one.
+        "GET" if path == routes::UI_ACTIVITY_COUNTS => vec!["plain", "bad-query", "window"],
         "GET" => vec!["plain", "bad-query"],
         _ => vec!["plain"],
     }
@@ -373,6 +375,8 @@ fn request(
         uri.push_str("?limit=1&limit=2");
     } else if shape == "csv" {
         uri.push_str("?format=csv&server=srv");
+    } else if shape == "window" {
+        uri.push_str("?server=srv&from=1970-01-01T00:00:00Z&to=2100-01-01T00:00:00Z");
     } else if path == routes::UI_ACTIVITY {
         // Only the seeded calls: the audit layer's own records for earlier
         // cells would otherwise page them out, newest first.

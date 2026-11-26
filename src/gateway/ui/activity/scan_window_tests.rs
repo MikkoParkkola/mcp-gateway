@@ -7,7 +7,7 @@
 use std::cell::RefCell;
 use std::io;
 use std::ops::{ControlFlow, RangeInclusive};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{DateTime, FixedOffset, TimeDelta};
@@ -120,6 +120,14 @@ pub(super) fn rotating_logger(path: &Path) -> Arc<TransparencyLogger> {
     Arc::new(TransparencyLogger::open(Arc::new(config)).expect("a logger"))
 }
 
+/// A [`rotating_logger`] writing `inv.jsonl` in a new kept folder: the
+/// logger, the log's path, and the folder, which must outlive both.
+pub(super) fn rotating_log() -> (Arc<TransparencyLogger>, PathBuf, Arc<tempfile::TempDir>) {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let path = dir.path().join("inv.jsonl");
+    (rotating_logger(&path), path, dir)
+}
+
 /// Call `write` with 0, 1, 2, ... until more than 3 MiB is kept, more than
 /// one pass; the number of writes.
 pub(super) fn fill_past_one_pass(path: &Path, mut write: impl FnMut(usize)) -> usize {
@@ -151,7 +159,7 @@ pub(super) fn rotate_past_sealed(path: &Path, mut write: impl FnMut(usize)) {
 }
 
 /// A plain call through the logger.
-fn plain(log: &TransparencyLogger, i: usize) {
+pub(super) fn plain(log: &TransparencyLogger, i: usize) {
     log.log_invocation(
         "s",
         "c",
@@ -328,9 +336,7 @@ fn s3_a_governance_log_does_not_eat_the_cap() {
 #[test]
 fn s4_a_log_that_rotates_during_the_read_is_not_read_twice() {
     for rotate in [true, false] {
-        let dir = crate::test_dir_keep::kept_tempdir();
-        let path = dir.path().join("inv.jsonl");
-        let log = rotating_logger(&path);
+        let (log, path, _dir) = rotating_log();
         let t0 = wall_now();
         let written = fill_past_one_pass(&path, |i| plain(&log, i));
         let mut hooks = 0;
