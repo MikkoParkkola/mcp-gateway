@@ -10,6 +10,8 @@
 mod gateway_bin;
 #[path = "cli_local_errors/guards.rs"]
 mod guards;
+#[path = "common/provenance_fixture.rs"]
+mod provenance_fixture;
 #[path = "cli_local_errors/scenarios.rs"]
 mod scenarios;
 
