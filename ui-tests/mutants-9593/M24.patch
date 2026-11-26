@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/chart.d67f9b90c255.js b/src/gateway/ui/shell/chart.d67f9b90c255.js
+--- a/src/gateway/ui/shell/chart.d67f9b90c255.js
++++ b/src/gateway/ui/shell/chart.d67f9b90c255.js
+@@ -120,7 +120,7 @@
+   const top = scaleTop(Math.max(...values, limit && isValue(limit.value) ? limit.value : 0));
+   const yAt = (v) => 100 - (v / top) * 100;
+ 
+-  const plot = svgEl('svg', { class: 'chart-plot', viewBox: `0 0 ${buckets} 100`, preserveAspectRatio: 'none', role: 'img', 'aria-labelledby': id });
++  const plot = svgEl('svg', { class: 'chart-plot', viewBox: `0 0 ${buckets} 100`, preserveAspectRatio: 'none', role: 'img' });
+   for (const s of lines) {
+     let run = [];
+     const end = () => {

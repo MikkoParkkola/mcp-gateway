@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.a8910ad01346.js b/src/gateway/ui/shell/overview.a8910ad01346.js
+--- a/src/gateway/ui/shell/overview.a8910ad01346.js
++++ b/src/gateway/ui/shell/overview.a8910ad01346.js
+@@ -487,7 +487,7 @@
+   const [calls, blocks, hits] = reads;
+   await Promise.all([
+     calls.then((s) => fillTrend(t.calls, kpi, 'calls', s)),
+-    calls.then((s) => fillChart(callsChart, data, s)),
++    ctx.api(seriesPath('calls')).then((s) => fillChart(callsChart, data, s)),
+     blocks.then((s) => fillTrend(t.blocks, kpi, 'blocks', s)),
+     Promise.all([calls, hits]).then(([c, k]) => fillCache(t.cache, data, c, k)),
+   ]);
