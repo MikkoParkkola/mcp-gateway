@@ -386,7 +386,9 @@ fn run(args: &[String]) -> Output {
 fn run_env(args: &[String], env: &[(&'static str, String)], stdin: std::process::Stdio) -> Output {
     let home = tempfile::tempdir().expect("home");
     let mut command = gateway_bin::command(home.path(), gateway_bin::Inherit::Nothing);
-    command.envs(env.iter().map(|(k, v)| (*k, v.as_str())));
+    command.envs(gateway_bin::checked_env(
+        env.iter().map(|(k, v)| (*k, v.as_str())),
+    ));
     command
         .env("MCP_GATEWAY_CONFIG_DIR", home.path())
         .arg("--log-level")
