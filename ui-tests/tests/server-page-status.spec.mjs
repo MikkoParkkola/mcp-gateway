@@ -5,7 +5,7 @@
 // and how the page follows the live status (T1, T2 of the frozen test plan).
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { countListeners, shellReady } from './shell.mjs';
-import { entry, fullView, fakeServerGateway, statusEvent, shellCall } from './server-page.mjs';
+import { entry, fullView, fakeServerGateway, statusEvent, shellCall, gate } from './server-page.mjs';
 
 test.use({ timezoneId: 'UTC' });
 
@@ -13,6 +13,8 @@ const content = (page) => page.locator('#content');
 const word = (page, state) => shellCall(page, (m, s) => m.stateWord(s), state);
 const banner = (page, server) => shellCall(page, (m, s) => m.serverBanner(s)?.querySelector('h2')?.textContent ?? null, server);
 const goTo = (page, path) => shellCall(page, (m, p) => m.go(p), path);
+// One macrotask after an answer lands, so a late callback has had its turn before a row looks.
+const settle = (page) => page.evaluate(() => new Promise((ok) => setTimeout(ok, 50)));
 async function open(page, path) {
   await page.goto(path);
   await shellReady(page);
@@ -50,6 +52,7 @@ test.describe('T1 a server has its own page', () => {
     await goTo(page, '/ui/servers/nope/status');
     await expect(page.getByRole('heading', { level: 1, name: 'nope', exact: true })).toBeVisible();
     await expect(content(page).locator('.lb').first()).toContainText(await word(page, 'refused'));
+    await expect(content(page).locator('[data-state="server"] h2')).toHaveText(await banner(page, refused));
     await expect(page.getByText('rsn-sentinel-refused')).toHaveCount(0);
   });
 
@@ -90,6 +93,22 @@ test.describe('T1 a server has its own page', () => {
       await expect(c.getByRole('link', { name: odd, exact: true })).toHaveCount(0);
     }
   });
+
+  test('T1d the path helper is never asked for the address of . or ..', async ({ page }) => {
+    // The served helper, with its serverPath wrapped to record each name it is asked for.
+    await page.route(/\/ui\/assets\/server-paths\.[0-9a-f]{12}\.js$/, async (route) => {
+      const real = await (await route.fetch()).text();
+      const spied = real.replace('export const serverPath = ', 'const unspiedServerPath = ')
+        + '\nexport const serverPath = (name, tab) => { (globalThis.__askedFor ??= []).push(name); return unspiedServerPath(name, tab); };\n';
+      await route.fulfill({ status: 200, contentType: 'text/javascript', body: spied });
+    });
+    await fakeServerGateway(page, { status: fullView(entry('github', 'running'), entry('.', 'running'), entry('..', 'running')) });
+    await open(page, '/ui/servers/status?open=other');
+    await expect(content(page).getByRole('link', { name: 'github', exact: true })).toHaveCount(1);
+    const asked = await page.evaluate(() => globalThis.__askedFor ?? []);
+    expect(asked).toContain('github');
+    expect(asked.filter((n) => n === '.' || n === '..')).toEqual([]);
+  });
 });
 
 test.describe('T2 the page follows the live status', () => {
@@ -115,6 +134,7 @@ test.describe('T2 the page follows the live status', () => {
     await goTo(page, '/ui/servers/b/status');
     await expect(page.getByRole('heading', { level: 1, name: 'b', exact: true })).toBeVisible();
     expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(1);
+    expect(await page.evaluate(() => window.__listenerCalls('gateway-status'))).toEqual({ add: 2, delete: 1 });
     await statusEvent(page, fullView(entry('a', 'paused', { running: false }), entry('b', 'running')));
     await expect(content(page).locator('.lb').first()).toContainText(await word(page, 'running'));
     await statusEvent(page, fullView(entry('a', 'running'), entry('b', 'paused', { running: false })));
@@ -125,6 +145,57 @@ test.describe('T2 the page follows the live status', () => {
     const before = await content(page).innerHTML();
     await statusEvent(page, fullView(entry('a', 'running'), entry('b', 'running')));
     expect(await content(page).innerHTML()).toBe(before);
+  });
+
+  test('T2c a status read answered after the user left adds no listener', async ({ page }) => {
+    await countListeners(page, ['gateway-status']);
+    const hold = gate();
+    const reads = [];
+    page.on('request', (r) => { if (r.url().endsWith('/ui/api/status')) reads.push(r); });
+    const late = { code: 200, body: fullView(entry('svc', 'running')), hold: hold.shut };
+    const seen = await fakeServerGateway(page, { status: (n) => (n === 1 ? late : fullView(entry('svc', 'running'))) });
+    await page.goto('/ui/servers/svc/status');
+    await expect.poll(() => seen.status).toBe(1);
+    await goTo(page, '/ui/overview/status');
+    await shellReady(page);
+    const adds = await page.evaluate(() => window.__listenerCalls('gateway-status').add);
+    hold.open();
+    await reads[1].response();
+    await settle(page);
+    expect(await page.evaluate(() => window.__listenerCalls('gateway-status').add)).toBe(adds);
+  });
+
+  test('T2c the first event after the page has gone takes its listener away', async ({ page }) => {
+    await countListeners(page, ['gateway-status']);
+    await fakeServerGateway(page, { status: fullView(entry('svc', 'running')) });
+    await open(page, '/ui/servers/svc/status');
+    await goTo(page, '/ui/overview/status');
+    await shellReady(page);
+    const live = await page.evaluate(() => window.__listeners('gateway-status'));
+    await statusEvent(page, fullView(entry('svc', 'running')));
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(live - 1);
+  });
+
+  test('T2d a redraw keeps keyboard focus on the Activity link', async ({ page }) => {
+    await fakeServerGateway(page, { status: fullView(entry('svc', 'unhealthy')) });
+    await open(page, '/ui/servers/svc/status');
+    const link = content(page).getByRole('link', { name: 'Its calls in Activity' });
+    await link.focus();
+    await statusEvent(page, fullView(entry('svc', 'running')));
+    await expect(content(page).locator('.lb').first()).toContainText(await word(page, 'running'));
+    await expect(link).toBeFocused();
+  });
+
+  test('T2d a list refresh keeps keyboard focus on a server-name link', async ({ page }) => {
+    const seen = await fakeServerGateway(page, { status: fullView(entry('github', 'running'), entry('svc', 'unhealthy')) });
+    await open(page, '/ui/servers/status?open=other');
+    const link = content(page).getByRole('link', { name: 'github', exact: true });
+    await link.focus();
+    const reads = seen.status;
+    await statusEvent(page, {});
+    await expect.poll(() => seen.status).toBe(reads + 1);
+    await settle(page);
+    await expect(link).toBeFocused();
   });
 });
 

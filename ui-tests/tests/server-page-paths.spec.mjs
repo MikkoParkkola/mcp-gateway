@@ -69,6 +69,22 @@ test.describe('source rows', () => {
     }
   });
 
+  // Every string that holds /ui/ is a whole fixed path from this list (or a hashed asset import), so a
+  // prefix kept in a variable and joined to a name later cannot pass where the patterns above look.
+  const FIXED = {
+    page: ['/ui/api/keys', '/ui/api/status', '/ui/servers/status'],
+    servers: ['/ui/api/discovery', '/ui/api/registry', '/ui/api/status', '/ui/classic'],
+  };
+  const ASSET = /^\/ui\/assets\/[a-z-]+\.[0-9a-f]{12}\.js$/;
+  const uiStrings = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
+    .match(/(['"`])(?:\\.|(?!\1)[^\\\n])*\1/g)?.map((s) => s.slice(1, -1)).filter((s) => s.includes('/ui/')) ?? [];
+  test('S1 every /ui/ string in the server page and the Servers module is a fixed path', () => {
+    for (const [pattern, fixed] of [[PAGE, FIXED.page], [SERVERS, FIXED.servers]]) {
+      const { name, text } = served(pattern);
+      expect(uiStrings(text).filter((s) => !fixed.includes(s) && !ASSET.test(s)), name).toEqual([]);
+    }
+  });
+
   test('S2 the server page, the paths module and the Servers module insert no markup', () => {
     for (const pattern of [PAGE, PATHS, SERVERS]) {
       const { name, text } = served(pattern);
