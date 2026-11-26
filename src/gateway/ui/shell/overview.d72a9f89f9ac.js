@@ -12,7 +12,7 @@
 // draws from the calls series and the markers with the shared chart module. The
 // flow map is its own slice; every panel takes its place through place().
 import { register, go, el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
-import { chart, spark } from '/ui/assets/chart.d67f9b90c255.js';
+import { chart, spark } from '/ui/assets/chart.8bfe2ae5cd10.js';
 
 const NOT_YET = 'Not available yet';
 const CLOCK = "Not available right now: the counter clock can't be read";

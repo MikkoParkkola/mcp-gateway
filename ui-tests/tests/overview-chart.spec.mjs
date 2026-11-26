@@ -69,7 +69,7 @@ test('K0 the chart and the sparkline refuse to draw without a unit', async ({ pa
 });
 
 test('K1 the chart draws the last 24 h over the 24 h before, each point at its time', async ({ page }) => {
-  const markers = { rows: [{ t: T[2], kind: 'upgrade', subject: '4.0.0' }, { t: T[0] - 3600, kind: 'pause', subject: 'github' }], more: { count: 0 } };
+  const markers = { rows: [{ t: T[2], kind: 'upgrade', subject: '4.0.0' }, { t: T[0] - 3600, kind: 'pause', subject: 'github' }, { t: T[3] + 1200, kind: 'restart', subject: null }], more: { count: 0 } };
   await showChart(page, { markers });
   const fig = chartPanel(page).locator('figure.chart');
   await expect(fig.locator('.chart-caption')).toHaveText('Calls per 30 min');
@@ -82,11 +82,12 @@ test('K1 the chart draws the last 24 h over the 24 h before, each point at its t
   for (const role of ['main', 'previous']) {
     expect(xs(await plot(page).locator(`polyline[data-role="${role}"]`).getAttribute('points')), role).toEqual([0.5, 1.5, 2.5, 3.5]);
   }
-  // The marker inside the day draws at its bucket; the one before it is listed but not drawn.
+  // The markers inside the day draw in the middle of their buckets (one twenty minutes into the
+  // newest); the one before the day is listed but not drawn.
   const marks = plot(page).locator('line.chart-mark');
-  await expect(marks).toHaveCount(1);
-  await expect(marks).toHaveAttribute('x1', '2.5');
-  await expect(fig.locator('.chart-markers li')).toHaveCount(2);
+  await expect(marks).toHaveCount(2);
+  expect(await marks.evaluateAll((ls) => ls.map((l) => l.getAttribute('x1')))).toEqual(['2.5', '3.5']);
+  await expect(fig.locator('.chart-markers li')).toHaveCount(3);
 
   // The module places by time: a previous period left a day early never reaches the plot.
   const unshifted = await page.evaluate(async ([src, t, day]) => {
@@ -251,6 +252,26 @@ test('K11 a gap is never bridged, a quiet series lies on the baseline, and an em
   expect(errors).toEqual([]);
 });
 
+test('K11b a time left out keeps its place as a gap, and a one-bucket chart still shows its marker', async ({ page }) => {
+  await serve(page);
+  await open(page);
+  const out = await page.evaluate(async ([src, t]) => {
+    const { chart } = await import(src);
+    const base = { caption: 'c', unit: { words: 'u' }, x: String, y: String, summary: 's' };
+    // The third half hour is left out, as the API's wall-clock pairing can on a clock change.
+    const skipped = chart({ ...base, series: [{ name: 'now', role: 'main', points: [0, 1, 3].map((i) => ({ t: t[i], v: i + 1 })) }] });
+    const single = chart({ ...base, series: [{ name: 'now', role: 'main', points: [{ t: t[0], v: 3 }] }], markers: [{ t: t[0] + 900, glyph: '•', words: 'w' }] });
+    return {
+      box: skipped.querySelector('svg.chart-plot').getAttribute('viewBox'),
+      runs: [...skipped.querySelectorAll('polyline')].map((l) => l.getAttribute('points').trim().split(/\s+/).map((p) => Number(p.split(',')[0]))),
+      lone: [...single.querySelectorAll('line.chart-mark')].map((l) => l.getAttribute('x1')),
+    };
+  }, [chartSrc(), T]);
+  expect(out.box).toBe('0 0 4 100');
+  expect(out.runs).toEqual([[0.5, 1.5], [3.25, 3.75]]);
+  expect(out.lone).toEqual(['0.5']);
+});
+
 test('K12 the two days differ by stroke pattern, not only by colour', async ({ page }) => {
   await showChart(page);
   const dash = (loc) => loc.evaluate((e) => getComputedStyle(e).strokeDasharray);
@@ -273,10 +294,16 @@ test('K13 the half-hour values are a table, closed until asked for', async ({ pa
   const missing = await page.evaluate(async ([src, t]) => {
     const { chart } = await import(src);
     const fig = chart({ caption: 'c', unit: { words: 'u' }, x: String, y: String, summary: 's',
-      series: [{ name: 'now', role: 'main', points: [{ t: t[0], v: 5 }, { t: t[1], v: null }] }] });
-    return [...fig.querySelectorAll('details tbody td')].map((c) => c.textContent);
+      series: [{ name: 'now', role: 'main', points: [{ t: t[0], v: 5 }, { t: t[1], v: null }] },
+        // A value ten minutes into the second bucket sits in that bucket's row, as the plot places it.
+        { name: 'other', role: 'second', points: [{ t: t[1] + 600, v: 7 }] }] });
+    const cells = (f) => [...f.querySelectorAll('details tbody td')].map((c) => c.textContent);
+    // A main series with a time left out: every row still shows its own value.
+    const sparse = chart({ caption: 'c', unit: { words: 'u' }, x: String, y: String, summary: 's',
+      series: [{ name: 'now', role: 'main', points: [0, 1, 3].map((i) => ({ t: t[i], v: i + 1 })) }] });
+    return { offGrid: cells(fig), sparse: cells(sparse) };
   }, [chartSrc(), T]);
-  expect(missing).toEqual(['5', 'not counted']);
+  expect(missing).toEqual({ offGrid: ['5', 'not counted', 'not counted', '7'], sparse: ['1', '2', '4'] });
 });
 
 test('K14 the module alone: a second series, a limit, and a day across a clock change', async ({ page }) => {

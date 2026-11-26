@@ -4,7 +4,7 @@
    tokens only; the card (.tk) and .num come from the shell. */
 
 /* The shared chart's sheet, loaded with this one, so the calls chart is styled on its first paint. */
-@import url("/ui/assets/chart.304183007870.css");
+@import url("/ui/assets/chart.812bfa2e8150.css");
 /* The chart panel keeps about a chart's height while its read is out, so the panels below stay put. */
 .chart-wait { min-height: calc(var(--space-16) * 4.5); }
 
@@ -23,9 +23,6 @@ a.ov-go:hover .ov-label { color: var(--color-text-primary); }
   min-height: calc(var(--space-10) + var(--space-0-5)); display: flex; align-items: center; }
 .ov-trend { display: flex; align-items: center; gap: var(--space-2); min-height: var(--space-5); }
 .ov-ctx, .ov-trend-off { font: var(--type-small); color: var(--color-text-tertiary); }
-.ov-spark { flex: none; width: calc(var(--space-16) + var(--space-2)); height: calc(var(--space-4) + var(--space-0-5)); overflow: visible; }
-.ov-spark polyline { fill: none; stroke: var(--color-accent-default); stroke-width: var(--size-tick-stroke);
-  vector-effect: non-scaling-stroke; stroke-linejoin: round; }
 
 /* The panels below the tiles, filled in DOM order (place() keeps that order).
    One column; two from 1100 px, where the KPI strip and the checklist span both. */
