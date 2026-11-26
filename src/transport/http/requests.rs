@@ -596,14 +596,21 @@ impl HttpTransport {
             // notification until the call it belongs to had already finished
             // -- the liveness `MIK-7272.SUB.2b` asks for is unreachable from a
             // complete body. Each frame is published as its chunk arrives.
-            use super::sse_decoder::decode_sse_exchange;
+            use super::sse_decoder::decode_sse_answer;
             use futures::TryStreamExt;
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
             let needles = self.needles.get().map(AsRef::as_ref);
-            // One exchange is one answer: every byte of its events counts.
-            decode_sse_exchange(self.answer_budget().metered(stream), needles).await
+            // Each event is held only while it is assembled (notifications
+            // are published as they complete), so the limit bounds one event.
+            // The preview also counts every byte against its kept budget.
+            match self.body_budget.get() {
+                Some(budget) => {
+                    decode_sse_answer(budget.metered(stream), needles, budget.per_response()).await
+                }
+                None => decode_sse_answer(stream, needles, self.max_response_bytes()).await,
+            }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
         } else {

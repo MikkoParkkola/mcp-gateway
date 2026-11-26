@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use super::sse_decoder::{MAX_PENDING_SSE_BYTES, SseDecoder, SseEvent};
+use super::sse_decoder::{SseDecoder, SseEvent};
 use crate::protocol::{JsonRpcResponse, RequestId};
 use crate::security::http_diagnostics::safe_request_error;
 use crate::transport::upstream_tap::{TAP_CAPACITY, UpstreamNote};
@@ -106,9 +106,9 @@ fn key_of(id: &Value) -> String {
 impl SseChannel {
     /// Read `response` (the session GET) up to its `endpoint` event, resolve
     /// that with `resolve`, then keep reading in the background: responses to
-    /// their waiting requests, notifications to `sink`. A frame over the
-    /// response bound (`MAX_PENDING_SSE_BYTES`, the limit a call answer has
-    /// in a body) or a read error ends the channel.
+    /// their waiting requests, notifications to `sink`. A frame over `limit` (the
+    /// backend's per-answer limit, the bound a call answer has in a body) or
+    /// a read error ends the channel.
     ///
     /// Under the start-once preview's `budget`, every byte read counts
     /// against its total and each event is bounded by its per-response
@@ -118,10 +118,11 @@ impl SseChannel {
         resolve: impl FnOnce(&str) -> Result<String>,
         sink: Option<Sink>,
         budget: Option<Arc<super::budget::ByteBudget>>,
+        limit: usize,
     ) -> Result<Arc<Self>> {
-        let frame_cap = budget.as_ref().map_or(MAX_PENDING_SSE_BYTES, |b| {
-            b.per_response().min(MAX_PENDING_SSE_BYTES)
-        });
+        let frame_cap = budget
+            .as_ref()
+            .map_or(limit, |b| b.per_response().min(limit));
         let mut decoder = SseDecoder::new(frame_cap);
         let mut early: Vec<SseEvent> = Vec::new();
         let mut read = 0usize;

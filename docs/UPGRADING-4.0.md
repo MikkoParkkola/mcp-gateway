@@ -3899,7 +3899,7 @@ The embedded script that wrote a caller-chosen path is gone. A declarative `save
 
 Through 3.x the gateway read a stdio backend's output line by line with no ceiling, so a peer that never sent a newline could grow its memory without bound. A message (one line) over 16 MiB now fails the call and stops that backend's process; the error names the backend setting.
 
-An HTTP backend's response body is held to the same limit, counted while it is read, so an oversized answer is never held whole. A body over the limit fails that call only: the caller gets a tool error with `RESPONSE_TOO_LARGE` and `retry: false`, the backend keeps serving, and the call does not count toward its circuit breaker.
+An HTTP backend's response body is held to the same limit (for a streamed answer, each event), counted while it is read, so an oversized answer is never held whole. A body over the limit fails that call only: the caller gets a tool error with `RESPONSE_TOO_LARGE` and `retry: false`, the backend keeps serving, and the call does not count toward its circuit breaker.
 
 **Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid on a backend declared with a `command` or a `url`.
 

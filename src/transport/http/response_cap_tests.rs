@@ -394,3 +394,35 @@ async fn an_unreadable_error_body_still_reports_the_status() {
     assert!(!matches!(err, Error::ResponseTooLarge { .. }), "{err:?}");
     task.abort();
 }
+
+/// A POST answered as an event stream of twenty 8 KiB progress notes, then a
+/// small result: 160 KiB in all, each event far under the cap.
+async fn chatty_answer(body: String) -> axum::response::Response {
+    let note = serde_json::json!({"jsonrpc": "2.0", "method": "notifications/progress",
+        "params": {"progressToken": "t", "progress": 1, "message": "p".repeat(8 * 1024)}});
+    let mut stream = format!("event: message\ndata: {note}\n\n").repeat(20);
+    let id = posted_id(&body);
+    stream.push_str(&format!(
+        "event: message\ndata: {{\"jsonrpc\":\"2.0\",\"id\":{id},\"result\":{{\"content\":[]}}}}\n\n"
+    ));
+    axum::response::Response::builder()
+        .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+        .body(axum::body::Body::from(stream))
+        .unwrap()
+}
+
+/// Design delta (review r1): an event stream holds only the event being
+/// assembled (notifications are published as they complete), so the limit
+/// bounds one event, never the exchange's total: many small events summing
+/// past the cap are served.
+#[tokio::test]
+async fn many_small_events_past_the_cap_in_total_are_served() {
+    let app = axum::Router::new().route("/mcp", axum::routing::post(chatty_answer));
+    let (addr, task) = crate::test_fixture_host::serve_http(app).await;
+    let answer = capped_transport(addr).request("tools/call", None).await;
+    assert!(
+        answer.is_ok_and(|a| a.result.is_some()),
+        "each event is under the cap"
+    );
+    task.abort();
+}

@@ -58,6 +58,7 @@ async fn open_budgeted(
         |data| Ok(format!("resolved:{data}")),
         sink,
         budget,
+        16 << 20, // the default per-answer limit
     )
     .await
 }
