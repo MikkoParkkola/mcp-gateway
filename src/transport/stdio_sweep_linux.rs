@@ -23,6 +23,10 @@ use super::{
     is_stray_stop,
 };
 
+#[path = "stdio_sweep_linux_pinned.rs"]
+mod pinned;
+use pinned::Pinned;
+
 /// What `/proc/<pid>/stat` says about a process.
 #[derive(Debug, PartialEq, Eq)]
 struct Stat {
@@ -63,11 +67,16 @@ enum Lookup {
 /// `ESRCH`: reading a task's `/proc` file as it exits fails with this.
 const ESRCH: i32 = 3;
 
+/// Whether a failed `/proc` read means the process is gone (the file vanished
+/// with it, or it exited while its directory was open).
+fn is_gone(err: &std::io::Error) -> bool {
+    err.kind() == std::io::ErrorKind::NotFound || err.raw_os_error() == Some(ESRCH)
+}
+
 fn lookup_of(read: std::io::Result<String>) -> Lookup {
     match read {
         Ok(text) => parse_stat(&text).map_or(Lookup::Unreadable, Lookup::Found),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Lookup::Gone,
-        Err(err) if err.raw_os_error() == Some(ESRCH) => Lookup::Gone,
+        Err(err) if is_gone(&err) => Lookup::Gone,
         Err(_) => Lookup::Unreadable,
     }
 }
@@ -86,25 +95,6 @@ fn read_stat(pid: u32) -> Lookup {
 fn has_children_files(proc_root: &std::path::Path) -> bool {
     let tid = rustix::thread::gettid().as_raw_nonzero().get();
     proc_root.join(format!("self/task/{tid}/children")).exists()
-}
-
-/// Take back everything one walk added to the reading, given the lengths of
-/// its rows, unreadable list and queue when the walk began (`marks`), and
-/// leave the reading neither complete nor settled.
-fn undo_walk(
-    listing: &mut Listing,
-    queue: &mut Vec<Identity>,
-    seen: &mut std::collections::HashSet<u32>,
-    marks: (usize, usize, usize),
-) {
-    let (rows, unreadable, queued) = marks;
-    listing.rows.truncate(rows);
-    listing.unreadable.truncate(unreadable);
-    for added in queue.drain(queued..) {
-        seen.remove(&added.pid);
-    }
-    listing.complete = false;
-    listing.settled = false;
 }
 
 /// One children file: the pids it lists, `Ok(None)` when the task is gone
@@ -194,6 +184,13 @@ pub(in crate::transport::stdio) struct LinuxTable {
     pub(super) rewrite_after_read: Option<(usize, std::path::PathBuf, String)>,
     #[cfg(test)]
     pub(super) rewrite_fired: bool,
+    /// Test only: after read number `.0`, rename each (from, to) pair in order,
+    /// once: a fake pid reuse (the walked directory moves away and a stranger
+    /// takes its path). `moved` records that every rename succeeded.
+    #[cfg(test)]
+    pub(super) move_after_read: Option<(usize, Vec<(std::path::PathBuf, std::path::PathBuf)>)>,
+    #[cfg(test)]
+    pub(super) moved: bool,
 }
 
 impl LinuxTable {
@@ -219,6 +216,10 @@ impl LinuxTable {
             rewrite_after_read: None,
             #[cfg(test)]
             rewrite_fired: false,
+            #[cfg(test)]
+            move_after_read: None,
+            #[cfg(test)]
+            moved: false,
         }
     }
 
@@ -270,12 +271,9 @@ impl LinuxTable {
         read
     }
 
-    /// One task's own `stat` under this table's proc root.
-    fn task_stat_at(&mut self, pid: u32, tid: &std::ffi::OsStr) -> Lookup {
-        let mut path = self.proc_root.join(format!("{pid}/task"));
-        path.push(tid);
-        path.push("stat");
-        let read = stat_file(&path);
+    /// One task's own `stat`, read through the walked process's pinned directory.
+    fn task_stat_at(&mut self, dir: &Pinned, tid: &std::ffi::OsStr) -> Lookup {
+        let read = lookup_of(dir.read(&std::path::Path::new("task").join(tid).join("stat")));
         #[cfg(test)]
         self.tick();
         read
@@ -298,6 +296,13 @@ impl LinuxTable {
                 .is_none_or(|dir| std::fs::create_dir_all(dir).is_ok());
             self.rewrite_fired = made && std::fs::write(path, text).is_ok();
         }
+        if let Some((at, pairs)) = &self.move_after_read
+            && self.reads == *at
+        {
+            self.moved = pairs
+                .iter()
+                .all(|(from, to)| std::fs::rename(from, to).is_ok());
+        }
     }
 
     /// One task's own state (design delta D5'), read before and again after
@@ -306,11 +311,11 @@ impl LinuxTable {
     /// nothing.
     fn task_state(
         &mut self,
-        pid: u32,
+        dir: &Pinned,
         tid: &std::ffi::OsStr,
         listing: &mut Listing,
     ) -> Option<ProcState> {
-        match self.task_stat_at(pid, tid) {
+        match self.task_stat_at(dir, tid) {
             Lookup::Found(stat) => Some(stat.state),
             Lookup::Gone => None,
             Lookup::Unreadable => {
@@ -320,12 +325,9 @@ impl LinuxTable {
         }
     }
 
-    /// One task's `children` file under this table's proc root.
-    fn children_at(&mut self, pid: u32, tid: &std::ffi::OsStr) -> Result<Option<Vec<u32>>, ()> {
-        let mut path = self.proc_root.join(format!("{pid}/task"));
-        path.push(tid);
-        path.push("children");
-        let read = children_in(std::fs::read_to_string(path));
+    /// One task's `children` file, read through the pinned directory.
+    fn children_at(&mut self, dir: &Pinned, tid: &std::ffi::OsStr) -> Result<Option<Vec<u32>>, ()> {
+        let read = children_in(dir.read(&std::path::Path::new("task").join(tid).join("children")));
         #[cfg(test)]
         self.tick();
         read
@@ -421,13 +423,40 @@ impl LinuxTable {
         if self.expired(until) {
             return false;
         }
-        // What this walk adds, so a pid reused under it can be undone below.
-        let marks = (listing.rows.len(), listing.unreadable.len(), queue.len());
-        let tasks = match std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) {
-            Ok(tasks) => tasks,
+        // Option A: pin the process. Its directory is opened once, checked to
+        // still be `who` through the open directory, and every other read of
+        // this walk goes through it, so a later process at this pid is never
+        // read. The identity read is not counted by the test seam.
+        let dir = match Pinned::open(&self.proc_root.join(pid.to_string())) {
+            Ok(dir) => dir,
             // Gone since it was listed: its state was never judged here, and
             // it may have handed its children to a parent already read.
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Err(err) if is_gone(&err) => {
+                listing.settled = false;
+                return true;
+            }
+            Err(_) => {
+                listing.complete = false;
+                return true;
+            }
+        };
+        match lookup_of(dir.read(std::path::Path::new("stat"))) {
+            Lookup::Found(stat) if stat.start == who.start => {}
+            // Exited, or the pid already belongs to another process: `who` is
+            // not walked, and the change leaves the reading unsettled.
+            Lookup::Found(_) | Lookup::Gone => {
+                listing.settled = false;
+                return true;
+            }
+            Lookup::Unreadable => {
+                listing.complete = false;
+                listing.settled = false;
+                return true;
+            }
+        }
+        let tasks = match dir.list(std::path::Path::new("task")) {
+            Ok(tasks) => tasks,
+            Err(err) if is_gone(&err) => {
                 listing.settled = false;
                 return true;
             }
@@ -440,20 +469,14 @@ impl LinuxTable {
         // (i) failed on some task; and whether the process is still EXITED.
         let mut unstopped = false;
         let mut exited = true;
-        for task in tasks {
-            let Ok(task) = task else {
-                listing.complete = false;
-                exited = false;
-                continue;
-            };
-            let tid = task.file_name();
+        for tid in tasks {
             tids.push(tid.clone());
             if self.expired(until) {
                 return false;
             }
             // (i) A task gone before its read is skipped (its file went with
             // it) but still unsettles: its children went to a sibling task.
-            let Some(before) = self.task_state(pid, &tid, listing) else {
+            let Some(before) = self.task_state(&dir, &tid, listing) else {
                 listing.settled = false;
                 exited = false;
                 continue;
@@ -461,7 +484,7 @@ impl LinuxTable {
             if self.expired(until) {
                 return false;
             }
-            let children = match self.children_at(pid, &tid) {
+            let children = match self.children_at(&dir, &tid) {
                 Ok(Some(children)) => children,
                 Ok(None) => {
                     listing.settled = false;
@@ -486,7 +509,7 @@ impl LinuxTable {
                 return false;
             }
             // (i) Stopped at both reads: a task that cannot fork or reap.
-            let after = self.task_state(pid, &tid, listing);
+            let after = self.task_state(&dir, &tid, listing);
             exited &= before == ProcState::Zombie && after == Some(ProcState::Zombie);
             if before != ProcState::Stopped || after != Some(ProcState::Stopped) {
                 unstopped = true;
@@ -497,27 +520,13 @@ impl LinuxTable {
         }
         // (iii) A thread created after the first directory read was never
         // walked: a tid only the second read lists unsettles the reading.
-        match self.task_set_held(pid, &tids, until, listing) {
+        match self.task_set_held(&dir, &tids, until, listing) {
             None => return false,
             Some(true) => {}
             Some(false) => {
                 listing.settled = false;
                 exited = false;
             }
-        }
-        // The pid may have been freed and reused during this walk, so every
-        // file read above may be a stranger's. Read the identity once more,
-        // after the last read (a changed start time is permanent, so this one
-        // check covers every read before it). Another start time, or a stat
-        // that cannot be read, drops all this walk added: a stranger's children
-        // are never adopted, and the reading is neither complete nor settled.
-        // Gone is no stranger: its children are kept, the reading unsettled.
-        let identity = stat_file(&self.proc_root.join(format!("{pid}/stat")));
-        if matches!(identity, Lookup::Gone) {
-            listing.settled = false;
-        } else if !matches!(identity, Lookup::Found(stat) if stat.start == who.start) {
-            undo_walk(listing, queue, seen, marks);
-            return true;
         }
         // (i') The leader alone, at both directory reads.
         exited &= tids.len() == 1 && tids[0].to_str() == Some(pid.to_string().as_str());
@@ -584,29 +593,30 @@ impl LinuxTable {
     /// run the read past the slice); the caller cuts the reading short.
     fn task_set_held(
         &mut self,
-        pid: u32,
+        dir: &Pinned,
         tids: &[std::ffi::OsString],
         until: Duration,
         listing: &mut Listing,
     ) -> Option<bool> {
         let known: std::collections::HashSet<&std::ffi::OsStr> =
             tids.iter().map(std::ffi::OsString::as_os_str).collect();
-        let Ok(again) = std::fs::read_dir(self.proc_root.join(format!("{pid}/task"))) else {
-            return Some(false);
+        let again = match dir.list(std::path::Path::new("task")) {
+            Ok(again) => again,
+            Err(err) => {
+                if !is_gone(&err) {
+                    listing.complete = false;
+                }
+                return Some(false);
+            }
         };
         let mut held = true;
-        for entry in again {
+        for tid in again {
             #[cfg(test)]
             self.tick();
             if self.expired(until) {
                 return None;
             }
-            let Ok(entry) = entry else {
-                listing.complete = false;
-                held = false;
-                continue;
-            };
-            held &= known.contains(entry.file_name().as_os_str());
+            held &= known.contains(tid.as_os_str());
         }
         Some(held)
     }

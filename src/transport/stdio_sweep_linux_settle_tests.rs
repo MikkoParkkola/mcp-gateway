@@ -439,39 +439,45 @@ fn an_exit_seen_in_one_freeze_does_not_carry_to_the_next() {
     assert_eq!(settled_over(&tree, &walk, 1), vec![false], "carried over");
 }
 
-/// Code review r1 (both seats, CRITICAL): a pid reused under its own walk. S
-/// lists K, K lists G. After read 9 (G's listing stat, inside K's walk: S seed
-/// 1, S task 2, S children 3, K stat 4, S task 5, S re-read 6, K task 7, K
-/// children 8, G stat 9) K's pid is given another start time, as if K died and
-/// a stranger took the pid. The walk's identity re-check drops what K's walk
-/// added, so G is not adopted, and the reading is neither complete nor settled.
-/// Untouched, G is added and the reading settles. Red if the re-check after the
-/// walk is removed (G adopted from a stranger's children file).
+/// Code review r1/r2, option A: a pid reused under its own walk. S lists K,
+/// and K's own directory names no child. After read 7 (K's first task state:
+/// S seed 1, S task 2, S children 3, K stat 4, S task 5, S re-read 6, K task 7)
+/// K's directory moves away and a stranger's takes its path; the stranger
+/// lists X, whose stat names K's pid as its parent. The walk reads through
+/// K's pinned directory, so it still sees K's empty children file and X is
+/// never adopted. Red if the walk reads by path (mutant M10: X adopted).
 #[test]
 fn a_pid_reused_under_its_walk_adopts_none_of_its_children() {
-    let (k, g) = (fake(2), fake(3));
     let tree = s_and_k('T');
-    tree.proc(g, k, 'T', 1, &[]);
-    tree.task(k, k, 'T', &[g]);
-    let control = read_from_s(&tree);
-    assert!(pids(&control).contains(&g), "premise: G is K's child");
-    assert!(control.settled, "premise: the untouched tree settles");
-    let swapped = read_with_rewrite(
-        &tree,
-        9,
-        &format!("{k}/stat"),
-        &stat_line(k, fake(1), 'T', 2),
+    let (holder, orphan) = (fake(2), fake(9));
+    tree.proc(orphan, holder, 'T', 1, &[]);
+    tree.write("stranger/stat", &stat_line(holder, fake(1), 'T', 2));
+    tree.write(
+        &format!("stranger/task/{holder}/stat"),
+        &stat_line(holder, 1, 'T', 2),
     );
+    tree.write(
+        &format!("stranger/task/{holder}/children"),
+        &orphan.to_string(),
+    );
+    let before = read_from_s(&tree);
+    assert!(!pids(&before).contains(&orphan), "premise: K has no child");
+    let mut swapping = LinuxTable::with_root(tree.path());
+    let at = |rel: &str| tree.path().join(rel);
+    swapping.move_after_read = Some((
+        7,
+        vec![
+            (at(&holder.to_string()), at("moved-away")),
+            (at("stranger"), at(&holder.to_string())),
+        ],
+    ));
+    let after = swapping.read(&[who(fake(1), 1)], &[], Duration::MAX);
+    assert!(swapping.moved, "the swap did not happen inside K's walk");
     assert!(
-        !pids(&swapped).contains(&g),
+        !pids(&after).contains(&orphan),
         "a stranger's child was adopted"
     );
-    assert!(pids(&swapped).contains(&k), "S's own finding was dropped");
-    assert!(
-        !swapped.complete,
-        "a reused pid's walk left the reading complete"
-    );
-    assert!(!swapped.settled, "a reused pid's walk settled the reading");
+    assert!(pids(&after).contains(&holder), "S's own finding was lost");
 }
 
 /// Code review r1 (both seats, MEDIUM): rule (iii)'s re-read checks `until`
