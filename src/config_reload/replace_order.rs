@@ -33,7 +33,6 @@ pub(super) fn record(target: &Path, event: &'static str) {
 
 /// Runs `hook` when the writer records `event` for `target`, until the
 /// target's events are taken.
-#[cfg(feature = "webui")]
 pub(crate) fn on(target: &Path, event: &'static str, hook: Hook) {
     HOOKS
         .lock()

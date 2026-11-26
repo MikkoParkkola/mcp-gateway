@@ -151,7 +151,8 @@ async fn r6_a_refused_intent_append_refuses_the_restore_with_the_file_untouched(
         (StatusCode::INTERNAL_SERVER_ERROR, json!(NOT_WRITTEN))
     );
     let steps = rig.steps();
-    assert!(steps.is_empty(), "the writer went on: {steps:?}");
+    // Only the traced writer's first step: the refused append stops it.
+    assert_eq!(steps, ["traced"], "the writer went on");
     assert_eq!(rig.bytes(), before);
     assert!(rig.rejected().is_empty());
     assert_eq!(rig.store.events().len(), events);

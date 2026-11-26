@@ -140,6 +140,7 @@ impl Gw {
             WAIT,
         )
         .await
+        .result
     }
 }
 
@@ -636,3 +637,7 @@ fn k7_store_timeout_stays_timeout() {
         super::Mapped::Refusal(UiRefused::SecretsRefused { timeout: true })
     ));
 }
+
+/// The save's write trace and outcome word.
+#[path = "ui_save_outcome_tests.rs"]
+mod outcome;

@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/config_reload/replace_audit.rs	replace_audited	persist:replace_traced	1	layer	the audited writer's one-line wrapper over the traced writer; it drops the trace, and every caller of it is a row
