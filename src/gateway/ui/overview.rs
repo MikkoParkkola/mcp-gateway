@@ -17,9 +17,8 @@
 //! never a scan. With a decision source unreadable it is left out and
 //! `needs_you.decisions` goes into `degraded`.
 //!
-//! `checklist.client_seen` stands in for a connected client: true when an MCP
-//! session is live now, or when authentication is off and a call was counted
-//! in the last 30 days.
+//! `checklist.client_seen` stands in for a connected client: true while an MCP
+//! session is live.
 //!
 //! Not available in this version, and so absent:
 //! - `checklist.client_connected`: no connection is remembered across
@@ -131,7 +130,7 @@ pub(super) async fn overview(
         (!generation.auth().api_keys().is_empty()).into(),
     );
     source.add_tool_tried(&mut checklist);
-    let seen = client_seen(&state, generation.auth().enabled, &checklist);
+    let seen = client_seen(&state);
     checklist.insert("client_seen".into(), seen.into());
     body.insert("checklist".into(), checklist.into());
     degraded.extend_from_slice(source.degraded());
@@ -141,16 +140,13 @@ pub(super) async fn overview(
     Json(Value::Object(body)).into_response()
 }
 
-/// Step 3 of the first-run checklist when no key decides it: some MCP session
-/// is live now, or, with authentication off, a call was counted in the last
-/// 30 days (no key is ever made on such a gateway, so a counted call is the
-/// one lasting sign that a client got through). With auth off a Try-a-tool
-/// call from this UI counts too: nothing tells it from a client's call.
-/// Always present, since the session list can always be read.
-fn client_seen(state: &AppState, auth_on: bool, checklist: &Map<String, Value>) -> bool {
+/// Step 3 of the first-run checklist when no key decides it: an MCP session is
+/// live now. Always present, since the session list can always be read. (No
+/// auth-off branch: an auth-off gateway's anonymous caller is not an admin,
+/// so this admin read never answers there.)
+fn client_seen(state: &AppState) -> bool {
     let sessions = state.multiplexer.client_roster();
-    let live = sessions.named_total + sessions.unnamed > 0;
-    live || (!auth_on && checklist.get("tool_tried") == Some(&Value::Bool(true)))
+    sessions.named_total + sessions.unnamed > 0
 }
 
 /// All backends, in name order. Sort on the full name; clipping first could
