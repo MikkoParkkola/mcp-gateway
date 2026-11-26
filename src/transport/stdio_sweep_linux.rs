@@ -156,6 +156,10 @@ pub(in crate::transport::stdio) struct LinuxTable {
     /// Whether this kernel has the per-task `children` files (probed once, at
     /// creation): without them every reading is the full scan, for life.
     walkable: bool,
+    /// Processes a reading of this table found fully exited (design delta
+    /// D5'''' (i')). A table serves one sweep, so the set lives for one
+    /// freeze and is dropped with it.
+    exited: std::collections::HashSet<Identity>,
     /// Test only: stat and children-file reads so far, and the read count at
     /// which this table's clock jumps past every `until`.
     #[cfg(test)]
@@ -185,6 +189,7 @@ impl LinuxTable {
             origin: Instant::now(),
             proc_root,
             walkable,
+            exited: std::collections::HashSet::new(),
             #[cfg(test)]
             reads: 0,
             #[cfg(test)]
@@ -324,7 +329,7 @@ impl LinuxTable {
             gone: Vec::new(),
             settled: true,
         };
-        let mut queue: Vec<u32> = Vec::new();
+        let mut queue: Vec<Identity> = Vec::new();
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
         for seed in walk {
             if self.expired(until) {
@@ -333,12 +338,12 @@ impl LinuxTable {
             if let Some(parent) = self.seed(*seed, &mut listing) {
                 listing.rows.push((*seed, parent));
                 if seen.insert(seed.pid) {
-                    queue.push(seed.pid);
+                    queue.push(*seed);
                 }
             }
         }
-        while let Some(pid) = queue.pop() {
-            if !self.walk_one(pid, until, &mut listing, &mut queue, &mut seen) {
+        while let Some(who) = queue.pop() {
+            if !self.walk_one(who, until, &mut listing, &mut queue, &mut seen) {
                 return cut(listing);
             }
         }
@@ -376,17 +381,25 @@ impl LinuxTable {
     /// file, is Stopped both times (the leader's state alone does not cover its
     /// threads: an exited leader is a zombie while they run); (ii) every listed
     /// child is still this pid's child and Stopped at its listing stat; (iii)
-    /// the task set did not grow during the walk. A Zombie anywhere settles nothing: it cannot tell
-    /// a dead process from a zombie leader whose threads still run, and a
-    /// child that died may have handed its children to a parent already read.
+    /// the task set did not grow during the walk. A Zombie settles nothing (it
+    /// cannot tell a dead process from a zombie leader whose threads still run,
+    /// and a child that died may have handed its children to a parent already
+    /// read), with one exception, design delta D5'''' (i'): a walked process
+    /// that is EXITED (task dir = its leader only, at both directory reads;
+    /// leader Zombie before and after an empty children file) settles when this
+    /// table already found the same identity EXITED in an earlier reading. Every
+    /// thread's exit handed its children on before it left the task dir, so
+    /// the earlier reading saw a finished exit and this one sees the children
+    /// wherever they went. The first reading to find it stays unsettled.
     fn walk_one(
         &mut self,
-        pid: u32,
+        who: Identity,
         until: Duration,
         listing: &mut Listing,
-        queue: &mut Vec<u32>,
+        queue: &mut Vec<Identity>,
         seen: &mut std::collections::HashSet<u32>,
     ) -> bool {
+        let pid = who.pid;
         if self.expired(until) {
             return false;
         }
@@ -404,9 +417,13 @@ impl LinuxTable {
             }
         };
         let mut tids: Vec<std::ffi::OsString> = Vec::new();
+        // (i) failed on some task; and whether the process is still EXITED.
+        let mut unstopped = false;
+        let mut exited = true;
         for task in tasks {
             let Ok(task) = task else {
                 listing.complete = false;
+                exited = false;
                 continue;
             };
             let tid = task.file_name();
@@ -418,6 +435,7 @@ impl LinuxTable {
             // it) but still unsettles: its children went to a sibling task.
             let Some(before) = self.task_state(pid, &tid, listing) else {
                 listing.settled = false;
+                exited = false;
                 continue;
             };
             if self.expired(until) {
@@ -427,21 +445,18 @@ impl LinuxTable {
                 Ok(Some(children)) => children,
                 Ok(None) => {
                     listing.settled = false;
+                    exited = false;
                     continue;
                 }
                 Err(()) => {
                     listing.complete = false;
                     listing.settled = false;
+                    exited = false;
                     continue;
                 }
             };
+            exited &= children.is_empty();
             for child in children {
-                // Seen only once added: a child turned away here (it names
-                // another parent) must still be taken when its real parent's
-                // file lists it later in this same reading.
-                if seen.contains(&child) {
-                    continue;
-                }
                 if self.expired(until) {
                     return false;
                 }
@@ -450,25 +465,34 @@ impl LinuxTable {
                 // shows as gone, a reused pid or a reparent as another parent.
                 // It must also be Stopped HERE, not only at its own later walk:
                 // the parent's children file is reliable only while the
-                // children are stopped during that read.
+                // children are stopped during that read. Judged for a child
+                // already seen too (a member walked as a seed, D5'''' (ii'')):
+                // its own walk must not stand in for this check.
+                let already = seen.contains(&child);
                 match self.stat_at(child) {
                     Lookup::Found(stat) if stat.ppid == pid => {
                         if stat.state != ProcState::Stopped {
                             listing.settled = false;
                         }
-                        let id = Identity {
-                            pid: child,
-                            start: stat.start,
-                        };
-                        seen.insert(child);
-                        listing.rows.push((id, stat.ppid));
-                        queue.push(child);
+                        // Added only once: a child turned away under another
+                        // parent is still taken here, under its real one.
+                        if !already {
+                            let id = Identity {
+                                pid: child,
+                                start: stat.start,
+                            };
+                            seen.insert(child);
+                            listing.rows.push((id, stat.ppid));
+                            queue.push(id);
+                        }
                     }
                     Lookup::Found(_) | Lookup::Gone => listing.settled = false,
                     Lookup::Unreadable => {
                         listing.complete = false;
                         listing.settled = false;
-                        listing.unreadable.push(child);
+                        if !already {
+                            listing.unreadable.push(child);
+                        }
                     }
                 }
             }
@@ -477,8 +501,9 @@ impl LinuxTable {
             }
             // (i) Stopped at both reads: a task that cannot fork or reap.
             let after = self.task_state(pid, &tid, listing);
+            exited &= before == ProcState::Zombie && after == Some(ProcState::Zombie);
             if before != ProcState::Stopped || after != Some(ProcState::Stopped) {
-                listing.settled = false;
+                unstopped = true;
             }
         }
         if self.expired(until) {
@@ -491,15 +516,30 @@ impl LinuxTable {
                 for task in again {
                     match task {
                         Ok(task) if tids.contains(&task.file_name()) => {}
-                        Ok(_) => listing.settled = false,
+                        Ok(_) => {
+                            listing.settled = false;
+                            exited = false;
+                        }
                         Err(_) => {
                             listing.complete = false;
                             listing.settled = false;
+                            exited = false;
                         }
                     }
                 }
             }
-            Err(_) => listing.settled = false,
+            Err(_) => {
+                listing.settled = false;
+                exited = false;
+            }
+        }
+        // (i') The leader alone, at both directory reads.
+        exited &= tids.len() == 1 && tids[0].to_str() == Some(pid.to_string().as_str());
+        if unstopped && !(exited && self.exited.contains(&who)) {
+            listing.settled = false;
+        }
+        if exited {
+            self.exited.insert(who);
         }
         true
     }

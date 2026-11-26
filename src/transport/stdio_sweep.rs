@@ -84,7 +84,9 @@ pub(super) struct Listing {
     /// A walked reading: every walked task's own state was Stopped before and
     /// after its children read; every listed child was still that process's
     /// child and Stopped when listed; the task set did not grow. A Zombie
-    /// anywhere settles nothing (design delta D5'''). A full scan is always
+    /// settles nothing, except a walked process found fully exited (leader-only
+    /// task dir, Zombie at both reads, no children) already in an earlier
+    /// reading of the same freeze (design delta D5''''). A full scan is always
     /// settled.
     pub(super) settled: bool,
 }
@@ -358,6 +360,7 @@ impl Sweep {
             "descendant sweep: freeze start"
         );
         let mut settled = false;
+        let mut pause = Duration::ZERO;
         // Freeze first: the root and every member the snapshot recorded are
         // stopped before any reading, so a reading cannot spend the slice
         // before anything is frozen. Anything but Gone (Unknown included)
@@ -374,6 +377,7 @@ impl Sweep {
         pending.extend(self.members.keys().copied());
         loop {
             report.passes += 1;
+            let frozen_before = frozen.len();
             for who in std::mem::take(&mut pending) {
                 if table.now() >= freeze_end || frozen.iter().any(|f| f.id == who) {
                     continue;
@@ -410,6 +414,19 @@ impl Sweep {
             if table.now() >= freeze_end {
                 break;
             }
+            // D5'''': no pause before the first reading; then 1 ms, doubling per
+            // unsettled reading to PAUSE_CAP, back to 1 ms after a pass that froze
+            // something new. Never past the slice: a re-read with no pause spins
+            // a core and starves the very processes it waits on.
+            if !pause.is_zero() {
+                if frozen.len() > frozen_before {
+                    pause = PAUSE_FLOOR;
+                }
+                table.idle(pause.min(freeze_end.saturating_sub(table.now())));
+                if table.now() >= freeze_end {
+                    break;
+                }
+            }
             let listing = self.read(table, freeze_end);
             settled = listing.settled;
             let added = self.collect(&listing);
@@ -419,6 +436,11 @@ impl Sweep {
             if listing.complete && listing.settled && added == 0 {
                 break;
             }
+            pause = if pause.is_zero() {
+                PAUSE_FLOOR
+            } else {
+                (pause * 2).min(PAUSE_CAP)
+            };
             pending = self
                 .members
                 .keys()
@@ -538,6 +560,10 @@ const SNAPSHOT_SLICE: Duration = Duration::from_millis(5);
 /// The wait between two polls of a frozen process's state, and the first
 /// pause between two unsettled readings (design delta D5'''').
 const PAUSE_FLOOR: Duration = Duration::from_millis(1);
+/// The longest pause between two unsettled readings: about the longest wait
+/// for one state change plus scheduling seen under the 2-core, 16-thread load
+/// repro (16.4 ms). Provisional: the acceptance run measures it.
+const PAUSE_CAP: Duration = Duration::from_millis(16);
 /// The room the terminal kills are guaranteed after the freeze, checked at
 /// compile time against the reaper's kill reserve: five times the Linux kill
 /// phase measured at the cap (141 ms), as the margin for macOS, whose cost per
