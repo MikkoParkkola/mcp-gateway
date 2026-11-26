@@ -39,7 +39,7 @@ const ROOTS: [&str; 3] = ["src/lib.rs", "src/main.rs", "src/bin/provenance-eval.
 /// the web UI's one write wrapper: a call of one is a `persist:<name>` site.
 /// Found by the scan and cross-checked by a text search of the tree (the
 /// review packet lists both).
-const WRITERS: [&str; 14] = [
+const WRITERS: [&str; 15] = [
     "edit_config",
     "write_config_and_reload",
     "write_config_and_reload_outcome",
@@ -51,6 +51,7 @@ const WRITERS: [&str; 14] = [
     "write_spliced",
     "write_yaml_at",
     "replace_audited",
+    "replace_traced",
     "replace_detached",
     "write_audited",
     "mutate_config_and_reload",

@@ -98,7 +98,7 @@ async fn w1_the_held_write_traces_intent_then_write_and_keeps_the_bytes() {
         matches!(answer, Ok(ReplaceReload::HeldForRestart { .. })),
         "{answer:?}"
     );
-    assert_eq!(trace, ["intent", "commit"]);
+    assert_eq!(trace, ["traced", "intent", "commit"]);
     assert_eq!(gw.file(), starter(&[("first", FIRST)]));
 }
 
@@ -111,8 +111,9 @@ async fn w5_a_rolled_back_hold_traces_intent_then_write_and_restores() {
         matches!(answer, Err(ReplaceError::ReloadRefused { .. })),
         "{answer:?}"
     );
-    // The writer's trace names the roll-back step since the line added it.
-    assert_eq!(trace, ["intent", "commit", "rollback"]);
+    // The writer's trace names the roll-back step since the line added it,
+    // and the traced writer's own first step since every write runs it.
+    assert_eq!(trace, ["traced", "intent", "commit", "rollback"]);
     assert_eq!(gw.file(), starter(&[]));
 }
 

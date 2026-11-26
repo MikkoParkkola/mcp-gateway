@@ -72,6 +72,7 @@ pub(super) fn record_write_intent(
     unchanged: bool,
     recovery_intent_id: Option<audit::IntentId>,
     target: &std::path::Path,
+    trace: &super::WriteTrace,
 ) -> Result<(), ReplaceError> {
     #[cfg(not(test))]
     let _ = target;
@@ -83,11 +84,14 @@ pub(super) fn record_write_intent(
             recovery_intent_id,
             writer: writer.clone(),
         };
-        sink.append(&intent).map_err(|e| {
+        let id = sink.append(&intent).map_err(|e| {
             ReplaceError::AuditRefused(format!(
                 "the audit log refused this change's record; nothing was written: {e}"
             ))
         })?;
+        // Kept before anything else can stop the task: a write that dies
+        // after its append still reports the intent it made.
+        trace.keep_intent(id);
         #[cfg(test)]
         order::record(target, "intent");
     }
