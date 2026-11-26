@@ -346,6 +346,40 @@ def post_merge_errors(jobs: dict) -> list[str]:
     return errors
 
 
+SAVE_FLAGS = {"Swatinem/rust-cache@": "save-if", "astral-sh/setup-uv@": "save-cache"}
+SAVING_PUSHES = (f"refs/heads/{RELEASE_LINE}", "refs/heads/main")
+
+
+def dead_save_errors(jobs: dict) -> list[str]:
+    """Refuse a dead cache save. Saves are meant for pushes to the release line or main, the runs whose caches pull
+    requests restore (by policy: a manual dispatch on the line would also write a restorable cache, but dispatches are
+    rare and are not a warming route); which save conditions are allowed at all is cache_writers.py's rule, not this
+    check's. A step whose save condition is true on none of the pushes its job runs on never saves, yet reads as
+    warming: macos-shards built cold on every train while its step looked like it kept a cache (measured 2026-11-25).
+    Such a step must say false. Clippy's `check` runs on the release-line push for exactly that reason (comment above
+    POST_MERGE_SKIPPED)."""
+    runs_on = {}
+    for ref in SAVING_PUSHES:
+        c = ctx("push", "success", "false")
+        c["github"].update({"event_name": "push", "ref": ref})
+        runs_on[ref] = (c, simulate(jobs, c))
+    errors = []
+    for job_id, job in sorted(jobs.items()):
+        for step in job.get("steps") or []:
+            uses = str(step.get("uses", ""))
+            flag = next((f for prefix, f in SAVE_FLAGS.items() if uses.startswith(prefix)), None)
+            if flag is None:
+                continue
+            value = (step.get("with") or {}).get(flag, True)
+            if value is False or str(value).strip() == "false":
+                continue
+            if not any(job_id in ran and (value is True or bool(evaluate(str(value), c)))
+                       for c, ran in runs_on.values()):
+                errors.append(f"{job_id}: its {uses.split('@')[0]} step's {flag} is true on no push this job runs "
+                              f"on (release line, main), so it never saves; write {flag}: false")
+    return errors
+
+
 def ctx(event: str, scope_result: str, docs_only: str | None) -> dict:
     g = {"repository": REPO, "event_name": event, "ref": "refs/heads/x",
          "base_ref": RELEASE_LINE if event == "pull_request" else "",
@@ -521,6 +555,7 @@ def main() -> int:
     errors += macos_train_errors(jobs)
     errors += lane_label_errors(jobs)
     errors += post_merge_errors(jobs)
+    errors += dead_save_errors(jobs)
     errors += cache_writers.errors() + cache_writers.self_test()
     errors += ui_tests_apt_errors()
     # The macOS cases must be able to fail: each mutant is caught by the case
@@ -608,6 +643,22 @@ def main() -> int:
         mutate(mutated)
         if not post_merge_errors(mutated):
             errors.append(f"post-merge self-test: '{label}' was not caught")
+    # The dead-save check must be able to fail: a release-line save put back on macos-shards (it runs on main pushes
+    # only, where that condition is false) is caught, and so is a step with no save-if in macos-int-lane (it runs on
+    # no push, so even the action's save-always default never fires).
+    line_save = "${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}"
+    for label, job, edit in (("a release-line save", "macos-shards", lambda w: w.update({"save-if": line_save})),
+                             ("no save-if", "macos-int-lane", lambda w: w.pop("save-if", None)),
+                             # linux-lib-union runs on main pushes only: its line-or-main uv save is live, a
+                             # line-only one is dead (the real ci.yml passing shows the live form is accepted).
+                             ("a release-line uv save", "linux-lib-union",
+                              lambda w: w.update({"save-cache": line_save}))):
+        mutated = copy.deepcopy(jobs)
+        for step in mutated[job]["steps"]:
+            if str(step.get("uses", "")).startswith(("Swatinem/rust-cache@", "astral-sh/setup-uv@")):
+                edit(step["with"])
+        if not any(e.startswith(f"{job}:") for e in dead_save_errors(mutated)):
+            errors.append(f"dead-save self-test: {label} on {job} was not caught")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):

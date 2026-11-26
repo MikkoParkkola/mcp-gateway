@@ -323,7 +323,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: The installed compiler is the pinned one
         run: python3 scripts/ci/check_toolchain_pin.py --runtime
       # Here because this job already has the pinned compiler and is cheap:
@@ -347,7 +348,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: Validate first-use smoke scripts
         # One file per `bash -n`: it checks only its first argument.
         run: for f in scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh scripts/dev/smoke-fixture-capability.sh; do bash -n "$f"; done
@@ -389,7 +391,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       # rg, PyYAML, lsof and shasum are all called by the script; a missing rg
       # would read as a missing downgrade warning, not as a missing tool.
       - name: Install and check the script's tools
@@ -707,7 +710,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       # Every shard: the W-T6 rows can land in any of them.
@@ -772,7 +776,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # MIK-8449: the registry-ban pass (MIK-8387) over the Windows build, so
       # `cfg(windows)` production code is linted like the Linux job's; only
@@ -907,7 +912,11 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves; the
+          # train's macOS legs build cold. A warm cache would save only the
+          # dependency build, about 2.5 of 78-95 min (measured 2026-11-25): not worth a macOS
+          # runner on every landing.
+          save-if: false
       # macOS is a shipped target (Homebrew, release binaries), so its tests
       # run here, not only compile (MIK-8174): signals, process groups, file
       # locks and paths behave differently on a Mac. The two skips are the
@@ -1169,7 +1178,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Runs on pull requests only, never the release-line push, so it never saves.
+          save-if: false
       - name: Shard suite
         timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos int
@@ -1200,7 +1210,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: Build the shared lib test binary
         # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py). The phase line
         # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
@@ -1281,11 +1292,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
-      # Saved on the release line only, restored everywhere.
+      # Restored everywhere, never saved: this job skips the release-line push (POST_MERGE_SKIPPED).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         # Keyed by job, compiler and lock file (the action's default).
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          save-if: false
       # pwsh, as the legs: the same shell builds and runs the exe.
       - name: Build the shared lib test exe
         shell: pwsh
@@ -1369,7 +1380,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: Build the gateway binary for the lib shards' sandbox rows
         timeout-minutes: 15
         run: |
@@ -1405,7 +1417,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
@@ -2014,7 +2027,9 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # A dispatch-only rehearsal: it never runs on the release-line push, the
+          # only run allowed to save (test_docs_only_gating.py), so it does not save.
+          save-if: false
       - name: Install cargo-auditable
         run: cargo install cargo-auditable --locked --version 0.7.6
       - name: Install cosign
