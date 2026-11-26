@@ -99,9 +99,10 @@ fn write_at(
     // The target's metadata, when there is a file to inherit from. A symlink
     // at the destination is not one: the rename swaps the link itself away,
     // so there is no mode to keep. Absence reads as absent; any other stat
-    // failure under `Inherit` is returned before any scratch is created, so a
-    // target we could not stat is never replaced by a wider default-mode file,
-    // while a `Private` write never needed the stat.
+    // failure is returned before any scratch is created: under `Inherit` so a
+    // target we could not stat is never replaced by a wider default-mode
+    // file, and under `Private` on Windows so its owner check is never
+    // skipped.
     let stat = std::fs::symlink_metadata(target);
     #[cfg(all(test, windows))]
     let stat = match windows::test_seams::METADATA_ERROR.with(std::cell::Cell::get) {
@@ -113,12 +114,18 @@ fn write_at(
         Ok(_) => None,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
-            if matches!(mode, FileMode::Inherit) {
+            if matches!(mode, FileMode::Inherit) || cfg!(windows) {
                 return Err(e);
             }
             None
         }
     };
+    // Windows: a private copy is owned by the gateway's account, so a
+    // `Private` save keeps the target's owner or refuses (WRITER.5).
+    #[cfg(windows)]
+    if mode == FileMode::Private && target_meta.is_some() {
+        windows::private_owner_allows(target)?;
+    }
     let (mut file, scratch) = create_scratch(
         target,
         super::next_scratch_seed(),
