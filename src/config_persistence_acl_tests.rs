@@ -73,9 +73,11 @@ fn an_acl_on_the_target_keeps_only_the_owner_bits() {
     );
 }
 
-/// The target has no ACL; the DIRECTORY's default ACL is inherited by the scratch.
+/// The target has no ACL; the DIRECTORY's default ACL is inherited by the
+/// scratch. WRITER.6: a replacement drops that inherited ACL, so the target's
+/// own mode is kept (it was narrowed to 0600 while the ACL stayed on).
 #[test]
-fn an_acl_the_scratch_inherits_keeps_only_the_owner_bits() {
+fn a1_a_replacement_drops_the_acl_its_scratch_inherits() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.json");
     std::fs::write(&path, "{}").unwrap();
@@ -84,11 +86,60 @@ fn an_acl_the_scratch_inherits_keeps_only_the_owner_bits() {
         return;
     }
     write_atomic(&path, b"{}", FileMode::Inherit, Symlink::Replace).unwrap();
-    assert_eq!(
-        mode(&path),
-        0o600,
-        "an inherited ACL must not survive a group-readable chmod"
-    );
+    assert!(!has_access_acl(&path), "A1: the inherited ACL is gone");
+    assert_eq!(mode(&path), 0o640, "A1: the target's own mode is kept");
+}
+
+/// Whether `path` carries an access ACL.
+fn has_access_acl(path: &Path) -> bool {
+    let file = std::fs::File::open(path).unwrap();
+    match rustix::fs::fgetxattr(&file, "system.posix_acl_access", &mut [0u8; 0][..]) {
+        Err(e) if e == rustix::io::Errno::NODATA => false,
+        Ok(_) => true,
+        Err(e) => panic!("reading the access ACL of {}: {e}", path.display()),
+    }
+}
+
+/// A2: a `Private` save of a new file drops the folder's inherited ACL.
+#[test]
+fn a2_a_private_new_file_drops_the_inherited_acl() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secret.json");
+    if !set_acl(dir.path(), "system.posix_acl_default") {
+        return;
+    }
+    write_atomic(&path, b"{}", FileMode::Private, Symlink::Replace).unwrap();
+    assert!(!has_access_acl(&path), "A2: no inherited ACL");
+    assert_eq!(mode(&path), 0o600, "A2: owner-only");
+}
+
+/// A3: an `Inherit` save of a NEW file keeps what the folder gives it.
+#[test]
+fn a3_an_inherit_new_file_keeps_the_folders_acl() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    if !set_acl(dir.path(), "system.posix_acl_default") {
+        return;
+    }
+    write_atomic(&path, b"{}", FileMode::Inherit, Symlink::Replace).unwrap();
+    assert!(has_access_acl(&path), "A3: the folder's ACL stays");
+}
+
+/// A4: a backup keeps the owner-bits rule when its folder has a default ACL:
+/// the ACL is not stripped from a backup.
+#[test]
+fn a4_a_backup_keeps_the_owner_bits_under_a_folder_acl() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("state.json");
+    std::fs::write(&source, "{}").unwrap();
+    std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o640)).unwrap();
+    if !set_acl(dir.path(), "system.posix_acl_default") {
+        return;
+    }
+    let backup = dir.path().join("state.json.bak");
+    super::copy_keeping_access(&source, &backup).unwrap();
+    assert!(has_access_acl(&backup), "A4: not stripped");
+    assert_eq!(mode(&backup), 0o600, "A4: owner bits only");
 }
 
 /// Linux only: `Absent` exists only where the probe can prove it.

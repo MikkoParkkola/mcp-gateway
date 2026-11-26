@@ -1,0 +1,2 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/config_persistence_atomic_unix.rs	label_not_kept	refusal	1	no-record	Linux: a save turned down because the new copy could not take the file's security label; reported by the CLI, the admin UI or a log line, and no tool call goes out
