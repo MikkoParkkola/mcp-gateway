@@ -106,6 +106,8 @@ fn wrong_invocations_exit_two() {
     write(&p.join("zz.yaml"), VERDICT_CAPABILITY);
     let dir = text(p);
     let cap = text(&p.join("zz.yaml"));
+    // M5 names a baseline to write: the refusal must come before the evaluation writes it.
+    let baseline = p.join("baseline.json");
     let cases = vec![
         (
             "kubernetes controller",
@@ -150,6 +152,8 @@ fn wrong_invocations_exit_two() {
                 "-C",
                 &dir,
                 "--update-baseline-registry",
+                "--write-baseline",
+                &text(&baseline),
             ]),
             Pin::Exact("error: --update-baseline-registry requires --baseline-registry".to_owned()),
         ),
@@ -159,15 +163,20 @@ fn wrong_invocations_exit_two() {
             Pin::Starts("error: "),
         ),
     ];
-    check(
-        cases
-            .into_iter()
-            .map(|(leaf, args, first)| {
-                let out = run(&args);
-                (leaf, out, wrong_call(leaf, args, first))
-            })
-            .collect(),
+    let results = cases
+        .into_iter()
+        .map(|(leaf, args, first)| {
+            let out = run(&args);
+            (leaf, out, wrong_call(leaf, args, first))
+        })
+        .collect();
+    // Before the shape checks, so a red here names the write, not M5's exit code.
+    assert!(
+        !baseline.exists(),
+        "trust lab evaluate wrote {} before refusing",
+        baseline.display()
     );
+    check(results);
 }
 
 /// B1, B2: `tool invoke`'s other argument refusals share the `--args` error arm but stay exit 1.
