@@ -347,7 +347,17 @@ impl Sweep {
         budget: &PidfdBudget,
     ) -> SweepReport {
         let mut report = SweepReport::default();
-        let freeze_end = table.now() + self.cfg.freeze_slice;
+        let freeze_start = table.now();
+        let freeze_end = freeze_start + self.cfg.freeze_slice;
+        // Pids, counts and durations only: a sweep log never carries a path or
+        // a command line.
+        tracing::debug!(
+            root = self.root.pid,
+            members = self.members.len(),
+            slice_ms = self.cfg.freeze_slice.as_millis(),
+            "descendant sweep: freeze start"
+        );
+        let mut settled = false;
         // Freeze first: the root and every member the snapshot recorded are
         // stopped before any reading, so a reading cannot spend the slice
         // before anything is frozen. Anything but Gone (Unknown included)
@@ -401,6 +411,7 @@ impl Sweep {
                 break;
             }
             let listing = self.read(table, freeze_end);
+            settled = listing.settled;
             let added = self.collect(&listing);
             // Stable only on a COMPLETE and SETTLED reading that adds nothing: a
             // running parent's children file may leave a child out, and after a
@@ -415,6 +426,13 @@ impl Sweep {
                 .filter(|who| !frozen.iter().any(|f| f.id == *who))
                 .collect();
         }
+        tracing::debug!(
+            root = self.root.pid,
+            passes = report.passes,
+            settled,
+            freeze_ms = table.now().saturating_sub(freeze_start).as_millis(),
+            "descendant sweep: freeze end"
+        );
         self.terminate(table, budget, &frozen, &mut permits, root_live, &mut report);
         report.residual.extend(self.dropped.iter().copied());
         report.incomplete_reads = self.incomplete_reads;
