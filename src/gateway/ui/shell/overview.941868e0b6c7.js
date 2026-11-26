@@ -298,7 +298,7 @@ function lastActionsPanel(data) {
     section.append(h('div', { class: 'la-row' }, h('span', { class: 'la-time num' }, stamp(r?.at)),
       h('span', { class: 'la-what' }, `${what} by ${who}${ending(r?.outcome)}`)));
   }
-  if (la.complete === false) {
+  if (la.complete === 'never') {
     section.append(h('p', { class: 'la-older' }, 'Older actions may exist. ', h('a', { href: '/ui/activity/status' }, 'See Activity ›')));
   }
   return section;
