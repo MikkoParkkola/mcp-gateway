@@ -10,7 +10,7 @@ use super::policy_hits_tests::{
     read_with, rule, stripped, write_log,
 };
 use super::scan_window_tests::{
-    MIB, ago, fill_past_one_pass, n, rotate_past_sealed, rotating_logger, wall_now,
+    MIB, ago, fill_past_one_pass, n, rotate_past_sealed, rotating_log, wall_now,
 };
 use super::{
     access::Access,
@@ -287,9 +287,7 @@ fn p12_a_rotated_read_keeps_the_rules_and_nulls_the_counts() {
         .retain(|k, _| !k.starts_with("SENTINEL"));
     let decision: Decision = serde_json::from_value(raw).expect("a decision");
     for rotate in [true, false] {
-        let dir = crate::test_dir_keep::kept_tempdir();
-        let path = dir.path().join("inv.jsonl");
-        let log = rotating_logger(&path);
+        let (log, path, _dir) = rotating_log();
         let written = fill_past_one_pass(&path, |_| deny_call(&log, &decision));
         let mut hooks = 0;
         let model = read_model_with_hits(
