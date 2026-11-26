@@ -228,7 +228,7 @@ function needsYouPanel(data) {
     rows.splice(after < 0 ? rows.length : after, 0, needRow('decisions', { glyph: '☐', title: FAILED, lines: [] }));
   }
   const section = card('needs-you', 'Needs you ', h('span', { class: 'ny-count num' }, n(rows.length + more)));
-  if (!rows.length && !more) section.append(h('p', { class: 'ny-empty' }, NOTHING_NEEDED));
+  if (!rows.length && !more) return null;
   section.append(...rows);
   const signIns = ny.more?.by_kind?.sign_in;
   if (isCount(signIns) && signIns > 0) {
