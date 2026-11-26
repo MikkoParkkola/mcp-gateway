@@ -4,10 +4,10 @@ src/gateway/ui/discovery_adopt.rs	answer	refusal	1	no-record	admin UI discovery 
 src/gateway/ui/errors.rs	gate_refusal	refusal	1	no-record	admin UI write routes: the config gate's busy answer takes its 409 and Retry-After from the shared refusal, no call delivery
 src/gateway/ui/errors.rs	refused_write	refusal	1	no-record	admin UI backend and restore routes: a writer refusal that attempted nothing answers 409 through the shared refusal, no call delivery
 src/gateway/ui/keys_create.rs	preconditions	refusal	1	no-record	admin UI key create: reload off or an unloadable gateway.yaml answers 409 through the shared refusal, no call delivery
-src/gateway/ui/keys_create.rs	refused_by_writer	gate_refusal	1	no-record	admin UI key create (moved from refused_write): a restart being prepared, decided or stopping turned the write away at the gate
 src/gateway/ui/keys_create.rs	refused_by_writer	refusal	1	no-record	admin UI key create: a writer refusal that attempted nothing answers 409 through the shared refusal, no call delivery
 src/gateway/ui/keys_revoke.rs	refused	refusal	1	no-record	admin UI key revoke: a writer refusal that attempted nothing answers 409 through the shared refusal, no call delivery
-src/gateway/ui/keys_revoke.rs	refused_answer	config_refusal	1	no-record	admin UI key revoke (moved from refused): the writer's guarded read turned gateway.yaml down; the answer is fixed text
-src/gateway/ui/keys_revoke.rs	refused_answer	gate_refusal	1	no-record	admin UI key revoke (moved from refused): a restart being prepared, decided or stopping turned the write away at the gate
 src/gateway/ui/keys_revoke.rs	revoke_key	refusal	1	no-record	admin UI key revoke: no audit log is the posture refusal, 409 through the shared refusal, no call delivery
 src/gateway/ui/settings.rs	answer	refusal	1	no-record	admin UI settings: a save refusal that attempted nothing answers 409 through the shared refusal, no call delivery
+src/gateway/ui/keys_create.rs	refused_by_writer	gate_refusal	1	no-record	admin UI key create: the config gate refused the write while a restart is prepared, decided or stopping
+src/gateway/ui/keys_revoke.rs	refused_answer	gate_refusal	1	no-record	admin UI key revoke: the config gate refused the write while a restart is prepared, decided or stopping
+src/gateway/ui/keys_revoke.rs	refused_answer	config_refusal	1	no-record	admin UI key revoke: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
