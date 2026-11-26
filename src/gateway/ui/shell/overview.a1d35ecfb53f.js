@@ -128,7 +128,7 @@ const PANEL_ORDER = ['kpis', 'checklist', 'flow-map', 'needs-you', 'calls-chart'
 export function place(root, section) {
   const rank = PANEL_ORDER.indexOf(section.dataset.panel);
   const later = [...root.children].find((s) => PANEL_ORDER.indexOf(s.dataset.panel) > rank);
-  root.insertBefore(section, later ?? null);
+  root.insertBefore(section, (later, null));
 }
 /** A panel card with its heading; `extra` sits beside the heading text. */
 function card(id, title, ...extra) {
