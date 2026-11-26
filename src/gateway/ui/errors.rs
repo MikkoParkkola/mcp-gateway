@@ -107,9 +107,9 @@ pub(super) fn refusal(retry: Retry, mut answer: Response) -> Response {
 /// The one answer to a config-gate refusal of a UI write, for every write
 /// route: all are 409s, since nothing was tried; busy alone is retryable and
 /// carries `Retry-After`.
-pub(super) fn gate_refusal(refusal: Refusal) -> Response {
+pub(super) fn gate_refusal(gate: Refusal) -> Response {
     let ending = |code, message| structured_error(StatusCode::CONFLICT, code, message);
-    match refusal {
+    match gate {
         Refusal::Busy | Refusal::ReplayOwed => refusal(
             Retry::Now,
             flat_error(StatusCode::CONFLICT, RESTART_BUSY).into_response(),

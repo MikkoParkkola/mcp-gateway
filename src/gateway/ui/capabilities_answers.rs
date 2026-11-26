@@ -112,7 +112,7 @@ pub(super) fn refused(name: &str, refusal: Refused) -> axum::response::Response 
     }
     let answer = (status, Json(body)).into_response();
     if busy {
-        super::errors::refusal(super::errors::Retry::Now, answer)
+        super::super::errors::refusal(super::super::errors::Retry::Now, answer)
     } else {
         answer
     }
