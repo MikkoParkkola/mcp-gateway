@@ -18,12 +18,14 @@ fn main() {
     println!("cargo::rustc-check-cfg=cfg(tp_partial)");
     match std::env::var("MCP_GATEWAY_TEST_PART") {
         Ok(value) => {
-            let k: u32 =
-                value.parse().ok().filter(|k| *k <= N).unwrap_or_else(|| {
-                    panic!("MCP_GATEWAY_TEST_PART must be 0..={N}, got {value:?}")
+            // Probe only (never merged): a comma list builds several parts in one compile.
+            for one in value.split(',') {
+                let k: u32 = one.trim().parse().ok().filter(|k| *k <= N).unwrap_or_else(|| {
+                    panic!("MCP_GATEWAY_TEST_PART must be 0..={N} or a list, got {value:?}")
                 });
-            if k > 0 {
-                println!("cargo::rustc-cfg=tp{k}");
+                if k > 0 {
+                    println!("cargo::rustc-cfg=tp{k}");
+                }
             }
             println!("cargo::rustc-cfg=tp_partial");
         }
