@@ -155,9 +155,9 @@ pub(super) trait ProcessTable {
     /// Give back any handle held for `id` (a signal to it failed, so the sweep
     /// does not keep its budget slot).
     fn release(&mut self, _id: Identity) {}
-    /// Yield between two polls of a state, so waiting for a freeze to land does
-    /// not spin a core.
-    fn idle(&mut self) {}
+    /// Wait `pause` between two polls of a state or two readings, so waiting
+    /// for the tree to change does not spin a core.
+    fn idle(&mut self, _pause: Duration) {}
     /// A by-pid signal to `member` found its pid taken by another process: if
     /// that one is stopped (the sweep's SIGSTOP landed on it), resume it. Only a
     /// process created after the member qualifies (see [`is_stray_stop`]).
@@ -404,7 +404,7 @@ impl Sweep {
                         ProcState::Running | ProcState::Unknown
                     )
                 {
-                    table.idle();
+                    table.idle(PAUSE_FLOOR);
                 }
             }
             if table.now() >= freeze_end {
@@ -535,6 +535,9 @@ const FREEZE_SLICE: Duration = Duration::from_millis(700);
 /// How long the snapshot before a stop may read: the first-snapshot p99
 /// target. A reading cut short only seeds; it prunes nothing.
 const SNAPSHOT_SLICE: Duration = Duration::from_millis(5);
+/// The wait between two polls of a frozen process's state, and the first
+/// pause between two unsettled readings (design delta D5'''').
+const PAUSE_FLOOR: Duration = Duration::from_millis(1);
 /// The room the terminal kills are guaranteed after the freeze, checked at
 /// compile time against the reaper's kill reserve: five times the Linux kill
 /// phase measured at the cap (141 ms), as the margin for macOS, whose cost per

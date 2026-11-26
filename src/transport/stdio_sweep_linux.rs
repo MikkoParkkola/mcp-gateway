@@ -643,8 +643,8 @@ impl ProcessTable for LinuxTable {
         }
     }
 
-    fn idle(&mut self) {
-        std::thread::sleep(Duration::from_millis(1));
+    fn idle(&mut self, pause: Duration) {
+        std::thread::sleep(pause);
     }
 }
 

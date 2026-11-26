@@ -88,6 +88,14 @@ struct Fake {
     /// A by-pid target that is running when its identity is checked exits and its
     /// pid is reused before the signal lands: (pid, start of the reusing process).
     reuse_while_running: Option<(u32, u64)>,
+    /// Every reading is complete but unsettled (a tree that never settles).
+    unsettled: bool,
+    /// Readings so far.
+    reads: u32,
+    /// At this reading a new running child of pid 1 appears (pid 900).
+    appear_at_read: Option<u32>,
+    /// Every pause the sweep asked for, in order.
+    idles: Vec<Duration>,
 }
 
 impl Fake {
@@ -126,6 +134,10 @@ impl Fake {
             unreadable: None,
             fail: None,
             reuse_while_running: None,
+            unsettled: false,
+            reads: 0,
+            appear_at_read: None,
+            idles: Vec::new(),
         }
     }
 
@@ -233,6 +245,20 @@ impl Fake {
 impl ProcessTable for Fake {
     fn read(&mut self, walk: &[Identity], stat_only: &[Identity], _until: Duration) -> Listing {
         self.operate();
+        self.reads += 1;
+        if self.appear_at_read == Some(self.reads) {
+            self.procs.push(Proc {
+                id: id(900),
+                ppid: 1,
+                pgid: 900,
+                state: ProcState::Running,
+                churns: false,
+                ignores_stop: false,
+                stop_lag: 0,
+                stop_in: None,
+                fork_at: None,
+            });
+        }
         if self.blind {
             return Listing {
                 rows: Vec::new(),
@@ -252,7 +278,7 @@ impl ProcessTable for Fake {
             complete: true,
             unreadable: self.foreign.into_iter().collect(),
             gone: Vec::new(),
-            settled: true,
+            settled: !self.unsettled,
         };
         let seeds: Vec<Identity> = walk.iter().chain(stat_only).copied().collect();
         listing.gone = super::full_scan_gone(&seeds, &listing);
@@ -356,6 +382,11 @@ impl ProcessTable for Fake {
 
     fn now(&mut self) -> Duration {
         self.clock
+    }
+
+    fn idle(&mut self, pause: Duration) {
+        self.idles.push(pause);
+        self.clock += pause;
     }
 
     fn release(&mut self, id: Identity) {
@@ -717,6 +748,40 @@ fn the_pidfd_limit_is_floored_capped_and_leaves_a_reserve() {
         4096,
         "capped at 4096"
     );
+}
+
+/// E5 (D5''''): between unsettled readings the sweep pauses 1, 2, 4, 8, then
+/// 16 ms (the cap), not at all before the first reading, and back to 1 ms after
+/// a pass that froze a new member (pid 900, appearing at the fourth freeze
+/// reading; the snapshot is table read 1). No pause
+/// runs past the slice. Red under a re-read with no pause (no pauses recorded)
+/// or without the cap or the reset.
+#[test]
+fn unsettled_readings_back_off_from_1_to_16_ms_within_the_slice() {
+    let slice = ms(200);
+    let mut fake = Fake::new(&[(1, 0)]);
+    fake.unsettled = true;
+    fake.appear_at_read = Some(5);
+    let config = SweepConfig {
+        freeze_slice: slice,
+        cap: 4096,
+    };
+    let report = run_with(&mut fake, 1, config, &PidfdBudget::new(4096));
+    let pauses: Vec<u128> = fake.idles.iter().map(Duration::as_millis).collect();
+    let (ladder, rest) = pauses.split_at(9);
+    assert_eq!(ladder, [1, 2, 4, 1, 2, 4, 8, 16, 16], "pauses: {pauses:?}");
+    let (last, middle) = rest.split_last().expect("pauses after the ladder");
+    assert!(middle.iter().all(|&p| p == 16), "pauses: {pauses:?}");
+    assert!((1..=16).contains(last), "the last pause: {pauses:?}");
+    assert!(
+        fake.idles.iter().sum::<Duration>() < slice,
+        "the pauses ran past the slice: {pauses:?}"
+    );
+    assert!(
+        fake.delivered(900).contains(&Sig::Stop),
+        "premise: the new member was frozen"
+    );
+    assert!(report.passes <= 25, "passes {}", report.passes);
 }
 
 #[path = "stdio_sweep_error_tests.rs"]

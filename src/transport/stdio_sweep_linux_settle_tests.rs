@@ -337,3 +337,99 @@ fn a_child_gone_before_its_own_walk_unsettles_the_reading() {
         "a child gone before its walk settled the reading"
     );
 }
+
+/// `n` readings of `walk` through one table (one freeze): each reading's
+/// settled flag, every reading complete.
+fn settled_over(tree: &Tree, walk: &[Identity], n: usize) -> Vec<bool> {
+    let mut table = LinuxTable::with_root(tree.path());
+    (1..=n)
+        .map(|reading| {
+            let listing = table.read(walk, &[], Duration::MAX);
+            assert!(listing.complete, "reading {reading}: incomplete");
+            listing.settled
+        })
+        .collect()
+}
+
+/// E1 (D5'''' (i')): a lone exited root (task dir = its leader only, Zombie,
+/// no children) unsettles the first reading that finds it and settles every
+/// later one of the same freeze. Red under D5''' (never settles) and if the
+/// earlier-reading condition is dropped (settles on reading 1).
+#[test]
+fn an_exited_root_settles_from_the_second_reading_on() {
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'Z', 1, &[]);
+    assert_eq!(
+        settled_over(&tree, &[who(fake(1), 1)], 3),
+        vec![false, true, true]
+    );
+}
+
+/// E2, E3: an exited leader still holding a second task (a worker that runs or
+/// is stopped), or one whose children file lists a pid, is not EXITED: no
+/// reading of the freeze settles. A Stopped tree of the same shape settles at
+/// once, so only the exit is what keeps these unsettled.
+#[test]
+fn a_zombie_with_a_second_task_or_a_child_never_settles() {
+    for (case, state) in [("worker", 'Z'), ("control", 'T')] {
+        let tree = Tree::new(true);
+        tree.proc(fake(1), 1, state, 1, &[]);
+        tree.task(fake(1), fake(10), 'T', &[]);
+        let want = if case == "control" {
+            [true; 3]
+        } else {
+            [false; 3]
+        };
+        assert_eq!(settled_over(&tree, &[who(fake(1), 1)], 3), want, "{case}");
+    }
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'Z', 1, &[fake(2)]);
+    tree.proc(fake(2), fake(1), 'T', 1, &[]);
+    assert_eq!(
+        settled_over(&tree, &[who(fake(1), 1)], 3),
+        vec![false; 3],
+        "a zombie listing a child settled"
+    );
+}
+
+/// E4: the earlier reading must have found the SAME process. A zombie found
+/// exited in reading 1 whose pid then holds a new zombie (another start time)
+/// unsettles reading 2, and reading 3 settles on the new one.
+#[test]
+fn a_reused_pid_does_not_inherit_an_earlier_exit() {
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'Z', 1, &[]);
+    let mut table = LinuxTable::with_root(tree.path());
+    let first = table.read(&[who(fake(1), 1)], &[], Duration::MAX);
+    assert!(!first.settled, "reading 1 settled");
+    tree.proc(fake(1), 1, 'Z', 2, &[]);
+    let walk = [who(fake(1), 2)];
+    let second = table.read(&walk, &[], Duration::MAX);
+    assert!(!second.settled, "the new process took the old one's exit");
+    assert!(table.read(&walk, &[], Duration::MAX).settled, "reading 3");
+}
+
+/// E7 (D5'''' (ii'')): a Stopped parent and its zombie child, BOTH walked as
+/// seeds (the child became a member), never settle: the parent's listing still
+/// judges the child, which is not Stopped. Red if a seen child skips (ii).
+#[test]
+fn a_zombie_member_listed_by_its_stopped_parent_never_settles() {
+    let walk = [who(fake(1), 1), who(fake(2), 1)];
+    assert_eq!(
+        settled_over(&s_and_k('Z'), &walk, 3),
+        vec![false; 3],
+        "a zombie member under a live parent settled"
+    );
+    assert_eq!(settled_over(&s_and_k('T'), &walk, 2), vec![true; 2]);
+}
+
+/// E8: the exits recorded live only for one freeze (one table). A second
+/// table's first reading of the same exited root is unsettled again.
+#[test]
+fn an_exit_seen_in_one_freeze_does_not_carry_to_the_next() {
+    let tree = Tree::new(true);
+    tree.proc(fake(1), 1, 'Z', 1, &[]);
+    let walk = [who(fake(1), 1)];
+    assert_eq!(settled_over(&tree, &walk, 2), vec![false, true]);
+    assert_eq!(settled_over(&tree, &walk, 1), vec![false], "carried over");
+}

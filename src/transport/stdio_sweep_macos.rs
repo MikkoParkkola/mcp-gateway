@@ -383,8 +383,8 @@ impl ProcessTable for MacTable {
         self.origin.elapsed()
     }
 
-    fn idle(&mut self) {
-        std::thread::sleep(std::time::Duration::from_millis(1));
+    fn idle(&mut self, pause: std::time::Duration) {
+        std::thread::sleep(pause);
     }
 
     fn rescue(&mut self, member: Identity) -> Rescue {

@@ -168,6 +168,9 @@ impl ProcessTable for Timed {
     fn now(&mut self) -> Duration {
         self.inner.now()
     }
+    fn idle(&mut self, pause: Duration) {
+        self.inner.idle(pause);
+    }
 }
 
 /// Measurement, not a gate: a root shell with 1000, then 4000,
@@ -345,4 +348,60 @@ fn a_rescue_resumes_a_stopped_reuser_and_leaves_a_running_one() {
     );
     child.kill().expect("kill");
     child.wait().expect("reap");
+}
+
+/// E9 (D5'''', real kernel): a root that exits after the snapshot, leaving a
+/// live child and staying an unreaped zombie (this process does not wait for
+/// it until the end). The sweep settles within 3 passes (reading 1 records the
+/// exit, a later one settles on it) and still kills the former child, which
+/// the snapshot made a member. Red under D5''' (the zombie never settles, so
+/// the freeze runs every pass of its slice).
+#[test]
+fn an_exited_root_settles_fast_and_its_former_child_is_still_killed() {
+    let mut root = Command::new("sh")
+        .args(["-c", "sleep 60 & read _"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("root starts");
+    let root_id = identity(&root);
+    let mut table = LinuxTable::new();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let child = loop {
+        let rows = table.read(&[root_id], &[], Duration::MAX).rows;
+        if let Some((id, _)) = rows.iter().find(|(_, ppid)| *ppid == root_id.pid) {
+            break *id;
+        }
+        assert!(Instant::now() < deadline, "the root never forked");
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let cfg = SweepConfig {
+        freeze_slice: Duration::from_millis(700),
+        cap: 64,
+    };
+    let mut sweep = Sweep::new(root_id, cfg);
+    sweep.snapshot(&mut LinuxTable::new());
+    assert!(
+        sweep.members.contains_key(&child),
+        "premise: the snapshot made the child a member"
+    );
+    drop(root.stdin.take());
+    assert!(
+        settle(&mut table, root_id, ProcState::Zombie),
+        "premise: the root exited and stays unreaped"
+    );
+    let report = sweep.run(&mut LinuxTable::new(), &PidfdBudget::new(64));
+    assert!(report.passes <= 3, "passes {}", report.passes);
+    assert!(
+        report.killed.iter().any(|who| who.pid == child.pid),
+        "the former child was not killed: {:?}",
+        report.killed
+    );
+    // Dead either way: reaped by whoever adopted it, or a zombie until then.
+    let dead = (0..200).any(|_| {
+        std::thread::sleep(Duration::from_millis(10));
+        matches!(table.state(child), ProcState::Gone | ProcState::Zombie)
+    });
+    assert!(dead, "the former child outlived the sweep");
+    root.wait().expect("reap");
 }
