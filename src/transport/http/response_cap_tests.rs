@@ -363,29 +363,17 @@ async fn an_sse_mode_json_body_is_held_to_the_cap() {
     task.abort();
 }
 
-/// A 500 whose body breaks off mid-read.
-async fn broken_error_body() -> axum::response::Response {
-    use futures::StreamExt as _;
-    // The cut waits so the status and the first bytes reach the client first:
-    // an error before that fails the request itself, not the body read.
-    let cut = futures::stream::once(async {
-        tokio::time::sleep(Duration::from_millis(200)).await;
-        Err(std::io::Error::other("cut"))
-    });
-    let parts = futures::stream::iter([Ok(bytes::Bytes::from_static(b"partial"))]).chain(cut);
-    axum::response::Response::builder()
-        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-        .body(axum::body::Body::from_stream(parts))
-        .unwrap()
-}
-
 /// Review r1: on a live transport an error body that cannot be read is an
 /// empty body, so the caller still gets the status; only a body over the
 /// limit (row above) or under the preview's budget is reported as the read's.
 #[tokio::test]
 async fn an_unreadable_error_body_still_reports_the_status() {
-    let app = axum::Router::new().route("/mcp", axum::routing::post(broken_error_body));
-    let (addr, task) = crate::test_fixture_host::serve_http(app).await;
+    // A 500 that promises 100 body bytes, sends 7, and closes.
+    let (addr, task) = crate::test_fixture_host::serve_cut_body(
+        "HTTP/1.1 500 Internal Server Error\r\ncontent-length: 100\r\n\r\n",
+        b"partial",
+    )
+    .await;
     let err = capped_transport(addr)
         .request("tools/call", None)
         .await

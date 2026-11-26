@@ -76,6 +76,61 @@ pub(crate) async fn serve_http(router: axum::Router) -> (SocketAddr, tokio::task
     )
 }
 
+/// Answers one request with `head` (a status line and headers ending in a
+/// blank line, its Content-Length longer than `partial`) and then `partial`,
+/// then closes: a body the client can never finish reading. Ordered, not
+/// timed: the request is read whole first, the bytes are flushed before a
+/// half-close, and the socket drains until the client hangs up, so the client
+/// always holds the head before the cut and the close is never a reset.
+pub(crate) async fn serve_cut_body(
+    head: &'static str,
+    partial: &'static [u8],
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    // port-check: the listener serves on in the spawned task.
+    let socket = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .await
+        .expect("a loopback listener binds");
+    let addr = socket.local_addr().expect("the listener has an address");
+    let task = tokio::spawn(async move {
+        let Ok((mut conn, _)) = socket.accept().await else {
+            return;
+        };
+        let (mut request, mut chunk) = (Vec::new(), [0u8; 4096]);
+        while !request_is_whole(&request) {
+            match conn.read(&mut chunk).await {
+                Ok(0) | Err(_) => return,
+                Ok(n) => request.extend_from_slice(&chunk[..n]),
+            }
+        }
+        let wrote = async {
+            conn.write_all(head.as_bytes()).await?;
+            conn.write_all(partial).await?;
+            conn.flush().await?;
+            conn.shutdown().await
+        };
+        if wrote.await.is_ok() {
+            while conn.read(&mut chunk).await.is_ok_and(|n| n > 0) {}
+        }
+    });
+    (addr, task)
+}
+
+/// Whether `bytes` hold a whole HTTP request: its head and as many body
+/// bytes as its Content-Length names.
+fn request_is_whole(bytes: &[u8]) -> bool {
+    let Some(end) = bytes.windows(4).position(|w| w == b"\r\n\r\n") else {
+        return false;
+    };
+    let head = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+    let body = head
+        .lines()
+        .find_map(|line| line.strip_prefix("content-length:"))
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    bytes.len() >= end + 4 + body
+}
+
 /// Serves `router` over https on a fresh `127.0.0.1` port, with a leaf for
 /// [`FIXTURE_HOST`] signed by the CA [`fixture_client`] trusts. Returns the port.
 pub(crate) async fn serve_https(router: axum::Router) -> u16 {
