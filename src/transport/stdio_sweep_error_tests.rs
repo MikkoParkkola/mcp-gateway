@@ -57,8 +57,11 @@ fn an_unreadable_member_is_a_residual_counted_as_unknown() {
     assert!(fake.clock >= cfg().freeze_slice, "ran {:?}", fake.clock);
 }
 
-/// A complete listing still prunes: the dead are not signalled.
-/// Red if completeness is ignored and nothing is ever pruned.
+/// A complete listing still prunes, and nothing reaches the dead member.
+/// Freeze-first (design r5, Change 2) tries its Stop before any reading; the
+/// identity check refuses it, and the first reading prunes the member, so no
+/// Kill is ever tried on it. Red if completeness is ignored (nothing pruned)
+/// or a signal is delivered to the dead pid.
 #[test]
 fn a_complete_listing_still_prunes_the_dead() {
     let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
@@ -66,12 +69,48 @@ fn a_complete_listing_still_prunes_the_dead() {
     sweep.snapshot(&mut fake);
     fake.proc(12).state = ProcState::Gone;
     let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
-    assert!(fake.attempted(12).is_empty(), "{:?}", fake.attempts);
+    assert!(fake.delivered(12).is_empty(), "{:?}", fake.log);
+    assert!(
+        !fake.attempted(12).contains(&Sig::Kill),
+        "{:?}",
+        fake.attempts
+    );
     assert_eq!(report.incomplete_reads, 0);
     // And the sweep acted: the live members and the root were killed.
     for pid in [10, 11] {
         assert!(report.killed.contains(&id(pid)), "pid {pid}: {report:?}");
     }
+}
+
+/// The reuse leg of the row above: member 22 exits after the snapshot and an
+/// unrelated process (start 9999, parent 1) takes pid 22 before the freeze.
+/// The freeze-first Stop names the old identity, so the fake refuses it as a
+/// mismatch; the reading prunes the member; the stranger is never signalled,
+/// stays running and is not reported killed. Red if the identity check is
+/// skipped on any path (a delivered signal on pid 22).
+#[test]
+fn a_member_pid_taken_by_a_stranger_is_never_signalled() {
+    let stranger = Identity {
+        pid: 22,
+        start: 9_999,
+    };
+    let mut fake = Fake::new(&[(20, 1), (21, 20), (22, 21)]);
+    let mut sweep = Sweep::new(id(20), cfg());
+    sweep.snapshot(&mut fake);
+    let taken = fake.proc(22);
+    taken.id = stranger;
+    taken.ppid = 1;
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    assert!(fake.delivered(22).is_empty(), "delivered: {:?}", fake.log);
+    assert!(
+        fake.attempted(22).iter().all(|sig| *sig == Sig::Stop),
+        "only the refused freeze Stop: {:?}",
+        fake.attempts
+    );
+    assert_eq!(fake.state_of(22), ProcState::Running, "stranger touched");
+    assert!(!report.killed.contains(&stranger), "{report:?}");
+    assert!(report.killed.contains(&id(21)), "{report:?}");
+    assert_eq!(report.incomplete_reads, 0);
 }
 
 /// The gate itself: a by-pid Kill goes only to a stopped or zombie process.
