@@ -486,6 +486,15 @@ class KillerFilters(unittest.TestCase):
         code, out = self.repo.run()
         self.assertEqual(code, 0, out)
 
+    def test_a_test_target_with_a_declared_path_is_read_from_that_path(self) -> None:
+        self.filter("--test acs guard_admits_only_its_host")
+        self.repo.files["Cargo.toml"] = ('[package]\nname = "x"\n\n[[test]]\nname = "acs"\n'
+                                         'path = "tests/suites/acs_main.rs"\n\n[features]\n')
+        self.repo.files["tests/suites/acs_main.rs"] = KILLER
+        self.repo.files["tests/acs.rs"] = "// not the target: cargo reads the declared path\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
     def test_a_declared_module_with_no_file_is_unreadable_not_skipped(self) -> None:
         self.repo.files["src/lib.rs"] = "mod checks;\nmod gone;\n"
         code, out = self.repo.run()

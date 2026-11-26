@@ -693,6 +693,20 @@ def module_tree(tree: Tree, root: str) -> dict[str, ModFile]:
     return files
 
 
+def _declared_test_path(tree: Tree, target: str) -> str | None:
+    """The `path` a Cargo.toml `[[test]]` entry gives test target `target`, else None (cargo's
+    tests/X.rs or tests/X/main.rs). Read as text, one table at a time: no TOML parser in the
+    standard library this script may assume."""
+    if not tree.exists("Cargo.toml"):
+        return None
+    for table in tree.read("Cargo.toml").split("[[test]]")[1:]:
+        table = re.split(r"^\[", table, maxsplit=1, flags=re.M)[0]
+        if re.search(rf'^name\s*=\s*"{re.escape(target)}"\s*$', table, re.M):
+            m = re.search(r'^path\s*=\s*"([^"]+)"', table, re.M)
+            return m.group(1) if m else None
+    return None
+
+
 def filter_refusal(tree: Tree, args: str, crates: dict[str, dict[str, ModFile]]) -> str | None:
     """Why the killer arguments' test filter does not name exactly one test, or None.
     `crates` caches each crate's module tree across rows."""
@@ -700,7 +714,9 @@ def filter_refusal(tree: Tree, args: str, crates: dict[str, dict[str, ModFile]])
     if words[:1] == ["--lib"] and len(words) == 2:
         root = "src/lib.rs"
     elif words[:1] == ["--test"] and len(words) == 3:
-        roots = [r for r in (f"tests/{words[1]}.rs", f"tests/{words[1]}/main.rs") if tree.exists(r)]
+        declared = _declared_test_path(tree, words[1])
+        roots = [r for r in ((declared,) if declared else (f"tests/{words[1]}.rs", f"tests/{words[1]}/main.rs"))
+                 if tree.exists(r)]
         if not roots:
             return f"killer arguments {args!r}: no test target {words[1]}"
         root = roots[0]
