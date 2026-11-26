@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.a8910ad01346.js b/src/gateway/ui/shell/overview.a8910ad01346.js
+--- a/src/gateway/ui/shell/overview.a8910ad01346.js
++++ b/src/gateway/ui/shell/overview.a8910ad01346.js
+@@ -424,7 +424,7 @@
+     return { t: m.t, glyph, words };
+   });
+   section.replaceChildren(chart({ caption: 'Calls per 30 min', unit: CALLS_UNIT, series, markers, x: clock, y: n, summary }));
+-  if (!before && isCount(read.since)) section.append(h('p', { class: 'chart-note chart-since' }, `counting since ${when(read.since)}`));
++  if (false) section.append(h('p', { class: 'chart-note chart-since' }, `counting since ${when(read.since)}`));
+   if (degraded(data, 'markers')) section.append(h('p', { class: 'chart-note' }, CLOCK));
+   const earlier = data.markers?.more?.count;
+   if (isCount(earlier) && earlier > 0) section.append(h('p', { class: 'chart-note chart-more' }, `and ${n(earlier)} earlier`));
