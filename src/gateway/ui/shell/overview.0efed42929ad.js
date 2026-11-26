@@ -10,7 +10,7 @@
 // Every value goes in with textContent. Below the tiles, from the same overview
 // read: the first-run checklist, Needs you and Last actions. The flow map and
 // the chart are their own slices; every panel takes its place through place().
-import { register, go, el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
+import { register, go, el as h } from '/ui/assets/shell.23eb92bf6df3.js';
 
 // The SVG namespace, read off an element the HTML parser makes, so no asset carries a URL.
 const SVG = document.createRange().createContextualFragment('<svg></svg>').firstChild.namespaceURI;
