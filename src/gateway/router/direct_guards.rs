@@ -355,7 +355,7 @@ pub(super) fn scan_direct_egress(
             client.and_then(AuthenticatedClient::api_key_identity),
         ),
     };
-    // The router's own instance judges the direct route (MIK-7669).
+    // The router's own instance judges the direct route.
     #[cfg(feature = "firewall")]
     let firewall = state.firewall.as_deref();
     #[cfg(not(feature = "firewall"))]
