@@ -102,9 +102,10 @@ fn a_member_pid_taken_by_a_stranger_is_never_signalled() {
     taken.ppid = 1;
     let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
     assert!(fake.delivered(22).is_empty(), "delivered: {:?}", fake.log);
-    assert!(
-        fake.attempted(22).iter().all(|sig| *sig == Sig::Stop),
-        "only the refused freeze Stop: {:?}",
+    assert_eq!(
+        fake.attempted(22),
+        vec![Sig::Stop],
+        "exactly the one refused freeze Stop: {:?}",
         fake.attempts
     );
     assert_eq!(fake.state_of(22), ProcState::Running, "stranger touched");
