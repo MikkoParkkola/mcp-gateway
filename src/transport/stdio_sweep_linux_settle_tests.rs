@@ -365,21 +365,22 @@ fn an_exited_root_settles_from_the_second_reading_on() {
     );
 }
 
-/// E2, E3: an exited leader still holding a second task (a worker that runs or
-/// is stopped), or one whose children file lists a pid, is not EXITED: no
-/// reading of the freeze settles. A Stopped tree of the same shape settles at
-/// once, so only the exit is what keeps these unsettled.
+/// E2, E3: an exited leader still holding a second task (a worker that is
+/// stopped, or itself exiting and Zombie), or one whose children file lists a
+/// pid, is not EXITED: no reading of the freeze settles. A Stopped tree of the
+/// same shape settles at once, so only the exit is what keeps these unsettled.
+/// The exiting worker is the case only the leader-only rule refuses.
 #[test]
 fn a_zombie_with_a_second_task_or_a_child_never_settles() {
-    for (case, state) in [("worker", 'Z'), ("control", 'T')] {
+    let cases = [
+        ("stopped worker", 'Z', 'T', [false; 3]),
+        ("exiting worker", 'Z', 'Z', [false; 3]),
+        ("control", 'T', 'T', [true; 3]),
+    ];
+    for (case, leader, worker, want) in cases {
         let tree = Tree::new(true);
-        tree.proc(fake(1), 1, state, 1, &[]);
-        tree.task(fake(1), fake(10), 'T', &[]);
-        let want = if case == "control" {
-            [true; 3]
-        } else {
-            [false; 3]
-        };
+        tree.proc(fake(1), 1, leader, 1, &[]);
+        tree.task(fake(1), fake(10), worker, &[]);
         assert_eq!(settled_over(&tree, &[who(fake(1), 1)], 3), want, "{case}");
     }
     let tree = Tree::new(true);
