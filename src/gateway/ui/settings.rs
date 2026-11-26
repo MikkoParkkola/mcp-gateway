@@ -601,6 +601,32 @@ fn bad_param_reason(reason: &str) -> &'static str {
     }
 }
 
+/// A reload refusal's answer, by the class of what refused it.
+fn reload_refused(class: RefusalClass) -> Response {
+    let error = |status, code, text| structured_error(status, code, text).into_response();
+    match class {
+        RefusalClass::Posture => error(
+            StatusCode::CONFLICT,
+            "posture_refused",
+            "the change was refused by the gateway's network posture",
+        ),
+        RefusalClass::Invalid => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
+        // The first-key question's own sentence names no value: shown.
+        RefusalClass::KeyList(refusal) => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            refusal.sentence(),
+        ),
+        RefusalClass::ShuttingDown => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "the gateway is shutting down; retry",
+        ),
+        RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
+        RefusalClass::RestartPending { waiting } => super::errors::restart_pending(waiting.names()),
+    }
+}
+
 fn answer(refusal: UiRefused, asked: Asked) -> Response {
     let retryable = retryable(&refusal);
     let class = save_class(&refusal, asked);
@@ -614,31 +640,7 @@ fn answer(refusal: UiRefused, asked: Asked) -> Response {
         UiRefused::BadValue(id, reason) => bad_value(id, &reason),
         UiRefused::BadParam(id, reason) => field_error(id, "bad_param", bad_param_reason(&reason)),
         UiRefused::Invalid(_) => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
-        UiRefused::ReloadRefused { class } => match class {
-            RefusalClass::Posture => error(
-                StatusCode::CONFLICT,
-                "posture_refused",
-                "the change was refused by the gateway's network posture",
-            ),
-            RefusalClass::Invalid => {
-                error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED)
-            }
-            // The first-key question's own sentence names no value: shown.
-            RefusalClass::KeyList(refusal) => error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid",
-                refusal.sentence(),
-            ),
-            RefusalClass::ShuttingDown => error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "shutting_down",
-                "the gateway is shutting down; retry",
-            ),
-            RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
-            RefusalClass::RestartPending { waiting } => {
-                super::errors::restart_pending(waiting.names())
-            }
-        },
+        UiRefused::ReloadRefused { class } => reload_refused(class),
         UiRefused::Unsupported(_) => error(
             StatusCode::CONFLICT,
             "unsupported",

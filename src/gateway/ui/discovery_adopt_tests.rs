@@ -27,6 +27,7 @@ async fn body_of(response: Response) -> (StatusCode, Value) {
 /// One row per writer outcome: the result, its status, and the `error` code
 /// when the answer names one. Every `Refused` and `Secrets` split has its own
 /// row, so the mapping test pins each branch.
+#[allow(clippy::too_many_lines)] // one table row per outcome
 fn writer_outcomes() -> Vec<(
     Result<ReplaceOutcome, ReplaceError>,
     StatusCode,

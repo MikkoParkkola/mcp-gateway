@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use super::config_file::{Gateway, read_gateway};
 use super::errors::{
-    Retry, flat_error, gate_refusal, nothing_attempted, refusal, stale, structured_error,
+    flat_error, gate_refusal, nothing_attempted, refusal, stale, structured_error,
 };
 use super::guard::Guard;
 use crate::config_persistence::keyedit::{
@@ -88,11 +88,8 @@ pub(super) async fn revoke_key(
         return flat_error(StatusCode::CONFLICT, error).into_response();
     }
     let Some(log) = state.transparency_log.clone() else {
-        // No log is the posture: nothing was attempted (409).
-        return refusal(
-            Retry::No,
-            flat_error(StatusCode::CONFLICT, "audit_unavailable").into_response(),
-        );
+        // No log is the posture: the writer's own no-log refusal (409).
+        return refused(&name, ReplaceError::NoAuditLog);
     };
     let who =
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());

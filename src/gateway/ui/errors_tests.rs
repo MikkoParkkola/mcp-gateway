@@ -163,6 +163,7 @@ async fn parts(answer: Response) -> (StatusCode, Option<String>, Value) {
 /// R1: the shared `refused_write` follows the class rule, for the backend
 /// routes and for the config restore route, which both answer through it.
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // one case per writer error
 async fn shared_write_refusals_follow_the_class() {
     use crate::config_reload::{FileRevision, NO_AUDIT_LOG, RELOAD_RESTARTING, RELOAD_STOPPING};
     let routes = [
