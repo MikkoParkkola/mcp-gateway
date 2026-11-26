@@ -88,7 +88,6 @@ T	src/commands/kubernetes.rs	print_cluster_execution_report	-	CLI subcommand out
 T	src/commands/kubernetes.rs	print_controller_report	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	print_plan	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	run_controller_command	-	CLI subcommand output (kubernetes.rs)
-T	src/commands/kubernetes.rs	run_kubernetes_command	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/mod.rs	print_init_success	-	CLI subcommand output (mod.rs)
 T	src/commands/mod.rs	run_init_command	-	CLI subcommand output (mod.rs)
 T	src/commands/mod.rs	tls_init_ca	-	CLI subcommand output (mod.rs)
