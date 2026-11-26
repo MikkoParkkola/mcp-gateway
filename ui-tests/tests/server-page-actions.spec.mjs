@@ -89,7 +89,8 @@ test.describe('T4 Remove: in progress, refused, done', () => {
     hold.open();
   });
 
-  for (const [code, words] of Object.entries(REFUSED_WORDS)) {
+  for (const [status, words] of Object.entries(REFUSED_WORDS)) {
+    const code = Number(status); // object keys are strings; the fake answers with a number
     test(`T4 a ${code} shows its reason and next step, and the dialog stays`, async ({ page }) => {
       await actions(page, entry(NAME, 'running'), { backend: () => ({ code, body: { error: 'x', message: `sentence ${code}` } }) });
       await page.getByRole('button', { name: `Remove ${NAME}` }).click();
