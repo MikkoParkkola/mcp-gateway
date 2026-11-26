@@ -411,29 +411,6 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 401, 401, 200],
     ),
-    // src/gateway/ui/activity/access.rs (resolve: no credential 401, a key
-    // with no Activity role 403); mod.rs (admit: no transparency log 404)
-    row(
-        "/ui/api/activity",
-        Method::GET,
-        "/ui/api/activity",
-        Payload::None,
-        [401, 401, 403, 404],
-    ),
-    row(
-        "/ui/api/activity/export",
-        Method::GET,
-        "/ui/api/activity/export",
-        Payload::None,
-        [401, 401, 403, 404],
-    ),
-    row(
-        "/ui/api/activity/{id}",
-        Method::GET,
-        "/ui/api/activity/1-0123456789abcdef",
-        Payload::None,
-        [401, 401, 403, 404],
-    ),
     // src/gateway/ui/backends.rs:132 (add_backend; no config path in the fixture)
     row(
         "/ui/api/backends",
@@ -676,7 +653,8 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-const GROUPS: [&[Row]; 5] = [
+const GROUPS: [&[Row]; 6] = [
+    activity::ROWS,
     control_plane::ROWS,
     gateway_rows::ROWS,
     pending::ROWS,
@@ -793,6 +771,8 @@ fn every_doc_internal_route_has_rows_and_no_other() {
     );
 }
 
+#[path = "internal_routes_activity.rs"]
+mod activity;
 #[path = "internal_routes_capabilities.rs"]
 mod capabilities;
 #[path = "internal_routes_control_plane_tests.rs"]
