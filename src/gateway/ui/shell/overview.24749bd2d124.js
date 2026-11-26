@@ -215,7 +215,7 @@ function needRow(kind, { glyph, title, lines, href, go }) {
 /** Needs you: the served rows in the served order, then what folded. */
 function needsYouPanel(data) {
   const ny = data.needs_you ?? {};
-  const served = Array.isArray(ny.rows) ? ny.rows : [];
+  const served = (Array.isArray(ny.rows) ? ny.rows : []).filter((r) => own(NEEDS, r?.kind));
   const more = isCount(ny.more?.count) ? ny.more.count : 0;
   const rows = served.map((r) => {
     const draw = own(NEEDS, r?.kind);
