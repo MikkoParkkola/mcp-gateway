@@ -350,11 +350,23 @@ SAVE_FLAGS = {"Swatinem/rust-cache@": "save-if", "astral-sh/setup-uv@": "save-ca
 SAVING_PUSHES = (f"refs/heads/{RELEASE_LINE}", "refs/heads/main")
 
 
+def step_runs(step: dict, c: dict) -> bool:
+    """Whether a step's own `if` lets it run in context `c`: no `if` runs, and a literal false (also
+    `${{ false }}`, as cache_writers.py reads it) never runs."""
+    if "if" not in step:
+        return True
+    cond = step["if"]
+    if cache_writers.is_literal_false(cond):
+        return False
+    return cond is True or bool(evaluate(str(cond), c))
+
+
 def dead_save_errors(jobs: dict) -> list[str]:
     """Refuse a dead cache save. Saves are meant for pushes to the release line or main, the runs whose caches pull
     requests restore (by policy: a manual dispatch on the line would also write a restorable cache, but dispatches are
     rare and are not a warming route); which save conditions are allowed at all is cache_writers.py's rule, not this
-    check's. A step whose save condition is true on none of the pushes its job runs on never saves, yet reads as
+    check's. A step whose save condition is true on none of the pushes its job runs on, or that its own `if` keeps
+    from running there, never saves, yet reads as
     warming: macos-shards built cold on every train while its step looked like it kept a cache (measured 2026-11-25).
     Such a step must say false. Clippy's `check` runs on the release-line push for exactly that reason (comment above
     POST_MERGE_SKIPPED)."""
@@ -371,9 +383,9 @@ def dead_save_errors(jobs: dict) -> list[str]:
             if flag is None:
                 continue
             value = (step.get("with") or {}).get(flag, True)
-            if value is False or str(value).strip() == "false":
+            if cache_writers.is_literal_false(value):
                 continue
-            if not any(job_id in ran and (value is True or bool(evaluate(str(value), c)))
+            if not any(job_id in ran and step_runs(step, c) and (value is True or bool(evaluate(str(value), c)))
                        for c, ran in runs_on.values()):
                 errors.append(f"{job_id}: its {uses.split('@')[0]} step's {flag} is true on no push this job runs "
                               f"on (release line, main), so it never saves; write {flag}: false")
