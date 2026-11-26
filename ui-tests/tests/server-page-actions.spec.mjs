@@ -4,9 +4,10 @@
 // A server's Actions tab. Remove and Restart go through the
 // shell's one confirm; Sign in again posts to the two sign-in routes (T3-T7 of
 // the frozen test plan). Every route answers with a body written here.
-import { test, expect } from './base.mjs';
+import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { shellReady } from './shell.mjs';
-import { entry, fullView, fakeServerGateway, gate } from './server-page.mjs';
+import { served } from './copy-check.mjs';
+import { entry, fullView, fakeServerGateway, gate, shellCall } from './server-page.mjs';
 
 test.use({ timezoneId: 'UTC' });
 
@@ -23,6 +24,14 @@ async function actions(page, server, opts = {}) {
 }
 const deletes = (seen) => seen.backend.filter((r) => r.method === 'DELETE');
 const posts = (seen, suffix) => seen.backend.filter((r) => r.method === 'POST' && r.path.endsWith(suffix));
+// The shell confirm's words per refused DELETE, in order: reason, the gateway's sentence when the shell
+// shows it, next step. A 503 is not one of the shell's refusals for a non-retryable action, so it reads
+// as not confirmed (pinned as it is today; the wording is filed for v4.0.1).
+const REFUSED_WORDS = {
+  404: [`⊘ ${NAME} is no longer there.`, 'Reload the page to see what is.'],
+  409: [`⊘ ${NAME} changed since this page loaded.`, 'Reload the page and try again.'],
+  503: ['⊘ The gateway did not confirm the outcome.', 'sentence 503', `Reload to see whether ${NAME} changed.`],
+};
 
 test.describe('T3 Remove states its consequences in numbers', () => {
   test('T3a it names the reaching keys in order, with tools, calls and the after-effects', async ({ page }) => {
@@ -80,12 +89,12 @@ test.describe('T4 Remove: in progress, refused, done', () => {
     hold.open();
   });
 
-  for (const code of [404, 409, 503]) {
+  for (const [code, words] of Object.entries(REFUSED_WORDS)) {
     test(`T4 a ${code} shows its reason and next step, and the dialog stays`, async ({ page }) => {
       await actions(page, entry(NAME, 'running'), { backend: () => ({ code, body: { error: 'x', message: `sentence ${code}` } }) });
       await page.getByRole('button', { name: `Remove ${NAME}` }).click();
       await dialog(page).getByRole('button', { name: `Remove ${NAME}` }).click();
-      await expect(dialog(page).getByText(/^⊘ /)).toHaveCount(1);
+      await expect(dialog(page).locator('.confirm-message p')).toHaveText(words);
       await expect(dialog(page)).toBeVisible();
     });
   }
@@ -163,7 +172,7 @@ test.describe('T5 Restart', () => {
     await shellReady(page);
     await page.getByRole('button', { name: `Restart ${NAME}` }).click();
     await dialog(page).getByRole('button', { name: `Restart ${NAME}` }).click();
-    await expect(dialog(page).getByText(/^⊘ /)).toHaveCount(1);
+    await expect(dialog(page).locator('.confirm-message p')).toHaveText(REFUSED_WORDS[404]);
     await expect(dialog(page)).toBeVisible();
   });
 
@@ -175,6 +184,13 @@ test.describe('T5 Restart', () => {
 });
 const OAUTH = (more = {}) => entry(NAME, 'needs_sign_in', { running: false, needs_sign_in: true, sign_in: { state: 'expired' }, ...more });
 const START_OK = { code: 200, body: { authorization_url: 'https://idp.example/authorize?x=1', attempt_id: 'att-1', expires_at: '2026-11-26T10:15:00Z' } };
+/** The fake for both sign-in routes: the start answers START_OK, the confirm `confirmAnswer`. */
+const signInFake = (confirmAnswer) => (method, path) => (path.endsWith('/signin') ? START_OK : confirmAnswer);
+/** Start a sign-in and press Finish: how the sign-in rows begin. */
+async function startAndFinish(page) {
+  await page.getByRole('button', { name: 'Sign in again' }).click();
+  await page.getByRole('button', { name: 'Finish sign-in' }).click();
+}
 
 test.describe('T6 Sign in again', () => {
   test('T6 the card shows only for a server with sign_in', async ({ page }) => {
@@ -185,7 +201,7 @@ test.describe('T6 Sign in again', () => {
 
   test('T6 start posts JSON, the link opens a new tab, Finish posts the decision, and the status is read again', async ({ page }) => {
     const seen = await actions(page, OAUTH(), {
-      backend: (method, path) => (path.endsWith('/signin') ? START_OK : { code: 200, body: { backend: NAME, outcome: 'confirmed' } }),
+      backend: signInFake({ code: 200, body: { backend: NAME, outcome: 'confirmed' } }),
     });
     await page.getByRole('button', { name: 'Sign in again' }).click();
     const link = page.getByRole('link', { name: 'Open the sign-in page' });
@@ -230,10 +246,9 @@ test.describe('T7 sign-in refusals show the gateway sentence', () => {
   for (const [code, err] of CONFIRM_REFUSALS) {
     test(`T7 confirm ${code} ${err}`, async ({ page }) => {
       const seen = await actions(page, OAUTH(), {
-        backend: (method, path) => (path.endsWith('/signin') ? START_OK : { code, body: { error: err, message: `msg-${err}` } }),
+        backend: signInFake({ code, body: { error: err, message: `msg-${err}` } }),
       });
-      await page.getByRole('button', { name: 'Sign in again' }).click();
-      await page.getByRole('button', { name: 'Finish sign-in' }).click();
+      await startAndFinish(page);
       await expect(page.locator('.sp-error')).toHaveText(`msg-${err}`);
       if (err === 'sign_in_not_ready') {
         await expect(page.getByRole('button', { name: 'Cancel sign-in' })).toBeVisible();
@@ -241,6 +256,10 @@ test.describe('T7 sign-in refusals show the gateway sentence', () => {
         await expect.poll(() => posts(seen, '/signin/confirm').length).toBe(2);
         expect(posts(seen, '/signin/confirm').map((r) => r.body.attempt_id)).toEqual(['att-1', 'att-1']);
         expect(posts(seen, '/signin')).toHaveLength(1);
+      } else {
+        // A final refusal ends this attempt: its buttons go and the start can be pressed again.
+        await expect(page.getByRole('button', { name: 'Finish sign-in' })).toHaveCount(0);
+        await expect(page.getByRole('button', { name: 'Sign in again' })).toBeEnabled();
       }
     });
   }
@@ -288,7 +307,7 @@ test.describe('T9c every request path that carries the name is encoded (PR A sit
 
   test('T9c the sign-in start and confirm POSTs', async ({ page }) => {
     const seen = await actions(page, entry(HARD, 'needs_sign_in', { sign_in: { state: 'expired' }, running: false }), {
-      backend: (method, path) => (path.endsWith('/signin') ? START_OK : { code: 200, body: { outcome: 'cancelled' } }),
+      backend: signInFake({ code: 200, body: { outcome: 'cancelled' } }),
     });
     await page.getByRole('button', { name: 'Sign in again' }).click();
     await page.getByRole('button', { name: 'Cancel sign-in' }).click();
@@ -296,5 +315,78 @@ test.describe('T9c every request path that carries the name is encoded (PR A sit
     expect(posts(seen, '/signin').map((r) => r.path)).toEqual([`/ui/api/backends/${HARD_ENC}/signin`]);
     expect(posts(seen, '/signin/confirm').map((r) => r.path)).toEqual([`/ui/api/backends/${HARD_ENC}/signin/confirm`]);
     expect(posts(seen, '/signin/confirm')[0].body).toEqual({ decision: 'cancel', attempt_id: 'att-1' });
+  });
+});
+
+const PAGE_FILE = /^server-page\.[0-9a-f]{12}\.js$/;
+const goTo = (page, path) => shellCall(page, (m, p) => m.go(p), path);
+// One macrotask after an answer lands, so a late callback has had its turn before a row looks.
+const settle = (page) => page.evaluate(() => new Promise((ok) => setTimeout(ok, 50)));
+
+test.describe('review round 1: the replay contract, stale actions, final sign-in refusals', () => {
+  test('T5 Restart opens its confirm with replay safe (source)', () => {
+    const { name, text } = served(PAGE_FILE);
+    expect(text, name).toMatch(/key: `revive:\$\{name\}`[^\n]*replay: 'safe'/);
+  });
+
+  test('T4 Remove opens no confirm when the user left while the keys were read', async ({ page }) => {
+    const hold = gate();
+    await actions(page, entry(NAME, 'running'), { keys: { code: 200, body: { keys: [] }, hold: hold.shut } });
+    await page.locator('#content').getByRole('button', { name: `Remove ${NAME}` }).click();
+    await goTo(page, `/ui/servers/${ENC}/status`);
+    await expect(page.locator('dl.sp-facts')).toHaveCount(1);
+    const answered = page.waitForResponse('**/ui/api/keys');
+    hold.open();
+    await answered;
+    await settle(page);
+    await expect(dialog(page)).toHaveCount(0);
+  });
+
+  test('T6 a decision answered after the user left does not bring the Actions tab back', async ({ page }) => {
+    const hold = gate();
+    await actions(page, OAUTH(), { backend: signInFake({ code: 200, body: { outcome: 'confirmed' }, hold: hold.shut }) });
+    await startAndFinish(page);
+    await goTo(page, `/ui/servers/${ENC}/status`);
+    await expect(page.locator('dl.sp-facts')).toHaveCount(1);
+    const answered = page.waitForResponse('**/signin/confirm');
+    hold.open();
+    await answered;
+    await settle(page);
+    await expect(page).toHaveURL(new RegExp(`/ui/servers/${ENC}/status$`));
+  });
+});
+
+test.describe('T11 the open confirm, the keyboard and reduced motion', () => {
+  for (const scheme of ['light', 'dark']) {
+    for (const width of WIDTHS) {
+      test(`T11 the open Remove confirm at ${width} px, ${scheme}: no blocking violations`, async ({ page }) => {
+        await page.emulateMedia({ colorScheme: scheme });
+        await page.setViewportSize({ width, height: 900 });
+        await actions(page, entry(NAME, 'running'));
+        await page.getByRole('button', { name: `Remove ${NAME}` }).click();
+        await expect(dialog(page)).toBeVisible();
+        expect(await blockingViolations(page)).toEqual([]);
+      });
+    }
+  }
+
+  test('T11 Tab reaches every action on the tab', async ({ page }) => {
+    await actions(page, OAUTH());
+    const want = [`Restart ${NAME}`, 'Sign in again', `Remove ${NAME}`];
+    const reached = new Set();
+    for (let i = 0; i < 60 && reached.size < want.length; i += 1) {
+      await page.keyboard.press('Tab');
+      const label = await page.evaluate(() => document.activeElement?.textContent ?? '');
+      if (want.includes(label)) reached.add(label);
+    }
+    expect([...reached].sort()).toEqual([...want].sort());
+  });
+
+  test('T11 under reduced motion nothing runs an animation, the open confirm included', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await actions(page, entry(NAME, 'running'));
+    await page.getByRole('button', { name: `Remove ${NAME}` }).click();
+    await expect(dialog(page)).toBeVisible();
+    expect(await page.evaluate(() => document.getAnimations().filter((a) => a.playState === 'running').length)).toBe(0);
   });
 });

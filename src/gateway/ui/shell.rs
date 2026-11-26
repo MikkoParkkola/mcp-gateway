@@ -65,8 +65,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/overview.a8b9bc366173.css"),
     ),
     (
-        "server-page.2e8d0121b38d.js",
-        include_bytes!("shell/server-page.2e8d0121b38d.js"),
+        "server-page.3f2c01dcf941.js",
+        include_bytes!("shell/server-page.3f2c01dcf941.js"),
     ),
     (
         "server-paths.15a075bb0cb1.js",
@@ -77,8 +77,8 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/servers.547fc403e9c7.css"),
     ),
     (
-        "servers.c35a2cebcb1d.js",
-        include_bytes!("shell/servers.c35a2cebcb1d.js"),
+        "servers.862dd600788f.js",
+        include_bytes!("shell/servers.862dd600788f.js"),
     ),
     (
         "shell.23eb92bf6df3.js",
