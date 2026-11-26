@@ -24,6 +24,10 @@ spec.loader.exec_module(c6)
 
 RANK_HEAD = "rank\tstatus\tnamed_path\tfile\tqualified\toccurrence\treason\n"
 REPL_HEAD = "named_path\tslot_rank\trule\tunderstudy_rank\tfile\tqualified\toccurrence\tevidence\n"
+GAP_TABLE = "docs/release/c6-gap/v4.0.0-c6-gap-table.tsv"
+GAP_HEAD = "rank\tpath\tfile\tfunction\tmutant\tdeclared_killer_args\n"
+# The killer the gap row names, at the module path its filter spells.
+KILLER = "#[test]\nfn guard_admits_only_its_host() {}\n"
 GUARD = """impl Guard {
     fn admits(&self, host: &str) -> bool {
         let allowed = host == self.host;
@@ -59,6 +63,9 @@ class Repo:
             c6.REPLACEMENTS: REPL_HEAD,
             f"{c6.PATCHES}/http/1_admits.patch": PATCH,
             "src/guard.rs": GUARD,
+            GAP_TABLE: GAP_HEAD + "1\tHTTP dispatch\tsrc/guard.rs\tGuard::admits\t1_admits.patch\t--lib checks::guard_admits_only_its_host\n",
+            "src/lib.rs": "mod checks;\n",
+            "src/checks.rs": KILLER,
         }
 
     def git(self, *args: str) -> str:
@@ -413,6 +420,77 @@ class RoundThree(unittest.TestCase):
         self.repo.files[c6.REPLACEMENTS] = REPL_HEAD + "HTTP dispatch\t1\tqualify\t\tsrc/guard.rs\tOther::admits\t1\tx\n"
         with self.assertRaisesRegex(LookupError, "only turn a bare name"):
             self.repo.run()
+
+
+class KillerFilters(unittest.TestCase):
+    """The gap row's test filter must name exactly one test in the crate's module tree."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+
+    def tearDown(self) -> None:
+        self.repo.close()
+
+    def filter(self, args: str) -> None:
+        table = self.repo.files[GAP_TABLE]
+        self.repo.files[GAP_TABLE] = table.replace("--lib checks::guard_admits_only_its_host", args)
+
+    def test_a_test_moved_to_another_module_is_refused_naming_where_it_is(self) -> None:
+        self.repo.files["src/checks.rs"] = "mod host;\n"
+        self.repo.files["src/checks/host.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("test filter checks::guard_admits_only_its_host does not match the module tree: "
+                      "fn guard_admits_only_its_host is checks::host::guard_admits_only_its_host at src/checks/host.rs:2", out)
+
+    def test_a_bare_name_defined_twice_is_refused_naming_both(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = "mod host;\n" + KILLER
+        self.repo.files["src/checks/host.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("fn guard_admits_only_its_host is defined 2 times: ", out)
+        self.assertIn("checks::guard_admits_only_its_host at src/checks.rs:3", out)
+        self.assertIn("checks::host::guard_admits_only_its_host at src/checks/host.rs:2", out)
+
+    def test_a_filter_naming_no_fn_is_refused(self) -> None:
+        self.filter("--lib checks::guard_refuses_a_foreign_host")
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("no fn guard_refuses_a_foreign_host in the crate rooted at src/lib.rs", out)
+
+    def test_a_path_mounted_module_resolves_to_its_declared_name(self) -> None:
+        self.repo.files["src/lib.rs"] = '#[cfg(test)]\n#[path = "guard_checks.rs"]\nmod checks;\n'
+        self.repo.files.pop("src/checks.rs")
+        self.repo.files["src/guard_checks.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_inline_modules_add_their_names_and_their_directories(self) -> None:
+        self.filter("--lib checks::inner::deep::guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = "mod inner {\n    mod deep;\n}\n"
+        self.repo.files["src/checks/inner/deep.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_an_unmounted_copy_does_not_count(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/old/checks.rs"] = KILLER  # no `mod` loads it: not part of the crate
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_an_integration_test_target_is_its_own_crate(self) -> None:
+        self.filter("--test acs issuer::guard_admits_only_its_host")
+        self.repo.files["tests/acs.rs"] = "mod issuer;\n"
+        self.repo.files["tests/issuer.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_declared_module_with_no_file_is_unreadable_not_skipped(self) -> None:
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod gone;\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("mod gone in src/lib.rs: none of src/gone.rs, src/gone/mod.rs", out)
 
 
 class TheReleaseLine(unittest.TestCase):
