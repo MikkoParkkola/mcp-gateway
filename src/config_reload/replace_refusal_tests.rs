@@ -14,7 +14,12 @@ use crate::config_persistence::writer_seams::{self as seams, Seams};
 /// are left (no journal, staged original or scratch).
 #[tokio::test]
 async fn a_writer_refusal_keeps_the_other_writers_bytes_and_no_journal() {
-    for code in ["foreign-owner", "target-changed", "acl-not-kept"] {
+    for code in [
+        "foreign-owner",
+        "target-changed",
+        "acl-not-kept",
+        "label-not-kept",
+    ] {
         let (dir, path, ctx) = setup();
         let other = format!("{START}# another writer\n");
         let mut put = Some(other.clone());
