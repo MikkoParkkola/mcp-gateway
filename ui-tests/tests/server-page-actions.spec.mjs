@@ -96,18 +96,18 @@ test.describe('T4 Remove: in progress, refused, done', () => {
     await page.getByRole('button', { name: `Remove ${NAME}` }).click();
     await dialog(page).getByRole('button', { name: `Remove ${NAME}` }).click();
     await expect(page).toHaveURL(/\/ui\/servers\/status$/);
-    await expect(page.getByText(`${NAME} was removed.`)).toBeVisible();
+    await expect(page.locator('.done-title')).toContainText(`${NAME} was removed.`);
     answer = { code: 200, body: { note: 'note-sentinel-comments' } };
     await page.goto(`/ui/servers/${ENC}/actions`);
     await shellReady(page);
     await page.getByRole('button', { name: `Remove ${NAME}` }).click();
     await dialog(page).getByRole('button', { name: `Remove ${NAME}` }).click();
-    await expect(page.getByText(/note-sentinel-comments/)).toBeVisible();
+    await expect(page.locator('.done-title')).toContainText('note-sentinel-comments');
   });
 
   test('T4 Cancel sends nothing and gives focus back to Remove', async ({ page }) => {
     const seen = await actions(page, entry(NAME, 'running'));
-    const opener = page.getByRole('button', { name: `Remove ${NAME}` });
+    const opener = page.locator('#content').getByRole('button', { name: `Remove ${NAME}` });
     await opener.click();
     await dialog(page).getByRole('button', { name: `Cancel ${NAME}` }).click();
     await expect(opener).toBeFocused();
@@ -117,7 +117,7 @@ test.describe('T4 Remove: in progress, refused, done', () => {
 test.describe('T5 Restart', () => {
   test('T5 the press opens the confirm and sends nothing; Cancel sends nothing', async ({ page }) => {
     const seen = await actions(page, entry(NAME, 'running'));
-    const opener = page.getByRole('button', { name: `Restart ${NAME}` });
+    const opener = page.locator('#content').getByRole('button', { name: `Restart ${NAME}` });
     await opener.click();
     await expect(dialog(page).locator('li')).toHaveText([
       'Calls in flight are cut.', 'The failure pause is reset.', 'Its tools stay listed.',
@@ -135,7 +135,7 @@ test.describe('T5 Restart', () => {
     await page.getByRole('button', { name: `Restart ${NAME}` }).click();
     await dialog(page).getByRole('button', { name: `Restart ${NAME}` }).click();
     await expect(page).toHaveURL(new RegExp(`/ui/servers/${ENC}/status$`));
-    await expect(page.getByText(`${NAME} was restarted.`)).toBeVisible();
+    await expect(page.locator('.done-title')).toContainText(`${NAME} was restarted.`);
     expect(posts(seen, '/revive').map((r) => r.path)).toEqual([`/ui/api/backends/${ENC}/revive`]);
   });
 
@@ -145,7 +145,7 @@ test.describe('T5 Restart', () => {
     });
     await page.getByRole('button', { name: `Restart ${NAME}` }).click();
     await dialog(page).getByRole('button', { name: `Restart ${NAME}` }).click();
-    await expect(page.getByText(`${NAME} did not restart: the gateway is shutting down.`)).toBeVisible();
+    await expect(page.locator('.done-title')).toContainText(`${NAME} did not restart: the gateway is shutting down.`);
   });
 
   test('T5 a held POST is a disabled progress button; a 404 shows its reason and the dialog stays', async ({ page }) => {
