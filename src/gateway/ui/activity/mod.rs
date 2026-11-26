@@ -28,8 +28,9 @@ mod strict_scan;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use axum::extract::{Extension, Path, Query, State};
+use axum::extract::{Extension, FromRequestParts, Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -62,6 +63,7 @@ pub(super) fn activity_router() -> Router<Arc<AppState>> {
     Router::new()
         .route(routes::UI_ACTIVITY, get(list))
         .route(routes::UI_ACTIVITY_EXPORT, get(export_route))
+        .route(routes::UI_ACTIVITY_COUNTS, get(counts::counts_route))
         .route(routes::UI_ACTIVITY_RECEIPT, get(receipt_route))
         .route(routes::UI_KEY_SERVER_LOOKUP_EMAIL, post(key_lookup::lookup))
 }
@@ -168,6 +170,41 @@ fn admit(
     Ok((access, logs))
 }
 
+/// An Activity request admitted as each Activity route admits it. The pinned
+/// generation, the guard and then the route's own input `T` (its query or its
+/// path) are taken in that order, so a malformed query is still refused before
+/// [`admit`] decides the caller's access.
+struct Admitted<T> {
+    access: Access,
+    logs: Logs,
+    input: T,
+}
+
+impl<T: FromRequestParts<Arc<AppState>>> FromRequestParts<Arc<AppState>> for Admitted<T> {
+    type Rejection = Response;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &Arc<AppState>,
+    ) -> Result<Self, Response> {
+        let Extension(generation) = Extension::<Arc<Generation>>::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let guard = Guard::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let input = T::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let (access, logs) = admit(state, &generation, &guard).map_err(|r| *r)?;
+        Ok(Self {
+            access,
+            logs,
+            input,
+        })
+    }
+}
+
 /// Run a blocking read off the async runtime, holding one of `reads`' slots
 /// (the state's [`ProcessFacts::activity_reads`]); a read beyond the limit waits
 /// its turn. The slot moves into the blocking closure, so it is held until the
@@ -229,21 +266,16 @@ pub(in crate::gateway::ui) async fn stream_read<T: Send + 'static>(
     .map_err(|_| std::io::Error::other("the activity read did not finish"))?
 }
 
-async fn list(
-    State(state): State<Arc<AppState>>,
-    Extension(generation): Extension<Arc<Generation>>,
-    guard: Guard,
-    Query(query): Query<ListQuery>,
-) -> Response {
-    match admit(&state, &generation, &guard) {
-        Ok((access, logs)) => {
-            blocking(state.process.activity_reads(), move || {
-                list_page(&logs, &access, &query)
-            })
-            .await
-        }
-        Err(r) => *r,
-    }
+async fn list(State(state): State<Arc<AppState>>, read: Admitted<Query<ListQuery>>) -> Response {
+    let Admitted {
+        access,
+        logs,
+        input: Query(query),
+    } = read;
+    blocking(state.process.activity_reads(), move || {
+        list_page(&logs, &access, &query)
+    })
+    .await
 }
 
 fn not_kept() -> Response {
@@ -252,14 +284,13 @@ fn not_kept() -> Response {
 
 async fn receipt_route(
     State(state): State<Arc<AppState>>,
-    Extension(generation): Extension<Arc<Generation>>,
-    guard: Guard,
-    Path(id): Path<String>,
+    read: Admitted<Path<String>>,
 ) -> Response {
-    let (access, logs) = match admit(&state, &generation, &guard) {
-        Ok(admitted) => admitted,
-        Err(r) => return *r,
-    };
+    let Admitted {
+        access,
+        logs,
+        input: Path(id),
+    } = read;
     let Some(id) = receipt::parse_id(&id) else {
         return not_kept();
     };
@@ -468,14 +499,13 @@ fn filters_sent(q: &ListQuery) -> Value {
 
 async fn export_route(
     State(state): State<Arc<AppState>>,
-    Extension(generation): Extension<Arc<Generation>>,
-    guard: Guard,
-    Query(query): Query<ExportQuery>,
+    read: Admitted<Query<ExportQuery>>,
 ) -> Response {
-    let (access, logs) = match admit(&state, &generation, &guard) {
-        Ok(admitted) => admitted,
-        Err(r) => return *r,
-    };
+    let Admitted {
+        access,
+        logs,
+        input: Query(query),
+    } = read;
     let signer = state.meta_mcp.public_provenance_signer();
     blocking(state.process.activity_reads(), move || {
         export_response(&logs, &access, &query, signer.as_deref())
@@ -666,6 +696,10 @@ mod answer_unattributed_tests;
 #[cfg(test)]
 #[path = "answer_window_tests.rs"]
 mod answer_window_tests;
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "counts_tests.rs"]
+mod counts_tests;
 #[cfg(tp5)]
 #[cfg(test)]
 #[path = "decision_export_tests.rs"]

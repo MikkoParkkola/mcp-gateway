@@ -13,6 +13,7 @@ const CP_AUTHORITY: &str = "tests/e2min_control_plane_authority.rs";
 const ACTIVITY_LIST: &str = "src/gateway/ui/activity/list_tests.rs";
 const ACTIVITY_EXPORT: &str = "src/gateway/ui/activity/export_tests.rs";
 const ACTIVITY_RECEIPT: &str = "src/gateway/ui/activity/receipt_tests.rs";
+const ACTIVITY_COUNTS: &str = "src/gateway/ui/activity/counts_tests.rs";
 const HISTORY_ROUTES: &str = "src/gateway/router/history_route_tests.rs";
 const HISTORY_PARAMS: &str = "src/gateway/ui/history_tests.rs";
 const EDITOR: &str = "tests/webui_management_tests/capability_editor.rs";
@@ -311,6 +312,14 @@ const SERVED_BY: &[(&str, Method, &[Citation])] = &[
         &[(
             ACTIVITY_RECEIPT,
             "c3_links_mid_segment_and_across_a_seam_verify",
+        )],
+    ),
+    (
+        "/ui/api/activity/counts",
+        Method::GET,
+        &[(
+            ACTIVITY_COUNTS,
+            "c1_counts_equal_the_rows_the_list_returns_per_outcome",
         )],
     ),
     (
