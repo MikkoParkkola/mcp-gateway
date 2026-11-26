@@ -180,7 +180,7 @@ const NEEDS = {
   }),
   refused: ({ subject, detail: d = {} }) => (subject === 'config'
     ? { glyph: '⊘', title: CONFIG_NOT_APPLIED, href: '/ui/gateway/status', go: 'Gateway status ›', lines: [str(d.cause), str(d.fix)] }
-    : { glyph: '⊘', title: `${str(subject)} was not started`, href: serverPath(str(subject)), go: 'Open the server ›', lines: [str(d.cause), str(d.fix)] }),
+    : { glyph: '⊘', title: `${str(subject)} was not started`, href: `/ui/servers/${encodeURIComponent(str(subject))}/status`, go: 'Open the server ›', lines: [str(d.cause), str(d.fix)] }),
   limit_80: ({ detail: d = {} }) => {
     const key = d.scope === 'key';
     const who = d.scope === 'global' ? 'The gateway' : str(d.name);
