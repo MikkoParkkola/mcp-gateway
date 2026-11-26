@@ -441,18 +441,18 @@ fn audit_verify_errors_before_a_verdict_print_no_document() {
         (
             config.clone(),
             missing_s.clone(),
-            format!("Error: transparency log not found at {missing_s}\n"),
+            format!("error: transparency log not found at {missing_s}\n"),
         ),
         (
             broken.to_str().expect("utf-8").to_owned(),
             small.to_str().expect("utf-8").to_owned(),
-            "Error: could not load gateway config for signed verification: ".to_owned(),
+            "error: could not load gateway config for signed verification: ".to_owned(),
         ),
         (
             config,
             signed_s.clone(),
             format!(
-                "Error: log at {signed_s} has signed entries but no shared secret is configured"
+                "error: log at {signed_s} has signed entries but no shared secret is configured"
             ),
         ),
     ];
@@ -534,7 +534,9 @@ fn audit_show_missing_log_prints_nothing_on_stdout() {
         (
             Some(1),
             "",
-            &*format!("Error: transparency log not found at {log}\n")
+            &*format!(
+                "error: transparency log not found at {log}\nCheck that {log} exists, or pass --path naming the log.\n"
+            )
         )
     );
 }
