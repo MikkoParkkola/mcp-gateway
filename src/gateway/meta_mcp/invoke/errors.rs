@@ -118,6 +118,7 @@ pub(super) fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) 
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
         Error::BackendTimeout(msg) => (ErrorCategory::Timeout, msg.clone()),
+        Error::ResponseTooLarge { .. } => (ErrorCategory::ResponseTooLarge, error.to_string()),
         Error::BackendUnavailable(msg) | Error::Transport(msg) | Error::TransportConnect(msg) => {
             (ErrorCategory::BackendError, msg.clone())
         }

@@ -55,6 +55,9 @@ pub enum ErrorCategory {
     RateLimited,
     /// The backend did not respond within the configured timeout.
     Timeout,
+    /// The backend answered, but its answer was over the gateway's limit.
+    /// Asking again gets the same answer, so it is never retried as is.
+    ResponseTooLarge,
 }
 
 /// Machine-readable error codes embedded in recovery hints.
@@ -73,6 +76,8 @@ pub mod error_codes {
     pub const BACKEND_TIMEOUT: &str = "BACKEND_TIMEOUT";
     /// The backend returned an error response.
     pub const BACKEND_ERROR: &str = "BACKEND_ERROR";
+    /// The backend's answer was over the gateway's per-answer limit.
+    pub const RESPONSE_TOO_LARGE: &str = "RESPONSE_TOO_LARGE";
 }
 
 /// Recovery guidance attached to a failed tool-call response.
@@ -317,6 +322,20 @@ pub(crate) fn recovery_for_surface(
             fix_example: None,
             related_tools: ctx.related_tools,
             retry: true,
+        },
+
+        ErrorCategory::ResponseTooLarge => RecoveryHint {
+            error_code: error_codes::RESPONSE_TOO_LARGE.to_string(),
+            message: ctx.detail.map_or_else(
+                || format!("Backend '{backend_label}' answered '{tool_label}' over the size limit"),
+                str::to_string,
+            ),
+            suggest: "Ask for less: a narrower query, fewer items or a smaller page. \
+                      The same request gets the same answer, so do not retry it as is."
+                .to_string(),
+            fix_example: None,
+            related_tools: ctx.related_tools,
+            retry: false,
         },
     }
 }
