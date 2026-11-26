@@ -151,6 +151,15 @@ async fn w4_an_unwritable_existing_log_refuses_turning_auth_on() {
     std::fs::create_dir_all(in_locked.parent().expect("a dir")).expect("dir");
     std::fs::write(&in_locked, b"").expect("the file");
     locked(in_locked.parent().expect("a dir"));
+    // The temp dir's cleanup cannot remove a file from a dir it cannot
+    // write: give the write bit back when the row ends, a panic included.
+    struct Unlock(PathBuf);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.0, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    let _unlock = Unlock(in_locked.parent().expect("a dir").to_path_buf());
     for (row, path) in [("W4.5", &read_only), ("W4.6", &in_locked)] {
         load_log(&route, &format!("    path: '{}'\n", path.display())).await;
         let before = route.text();
