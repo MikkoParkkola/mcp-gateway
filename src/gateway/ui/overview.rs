@@ -13,13 +13,13 @@
 //! read at one instant. With no store they are absent. With a store but an
 //! unreadable clock they are absent and named in `degraded`.
 //!
+//! The open-decisions count comes from the decision set's held snapshot,
+//! never a scan. With a decision source unreadable it is left out and
+//! `needs_you.decisions` goes into `degraded`.
+//!
 //! Not available in this version, and so absent:
 //! - `checklist.client_connected`: a caller label exists only once it has
-//!   made a call, so it would repeat `tool_tried` as a second fact;
-//! - the needs-you sign-in row: nothing yet lets the operator sign a server
-//!   back in, so the row would lead nowhere;
-//! - the pending-decisions count: its only source runs a discovery scan per
-//!   request.
+//!   made a call, so it would repeat `tool_tried` as a second fact.
 
 use std::collections::HashMap;
 use std::io;
@@ -101,13 +101,13 @@ pub(super) async fn overview(
     // One instant for the counter reads and the server states alike.
     let at = crate::clock::system_time_or_before_epoch();
     let source = Source::open(&state, at);
-    let (mut kpi, servers, denied) = kpi_and_servers(&state, &source, at);
+    let (mut kpi, servers, denied, sign_ins) = kpi_and_servers(&state, &source, at);
     source.add_totals(&mut kpi);
     body.insert("kpi".into(), kpi.into());
     body.insert("servers".into(), servers);
     body.insert(
         "needs_you".into(),
-        needs_you((&state, &generation), &denied),
+        needs_you((&state, &generation), (&denied, sign_ins), &mut degraded),
     );
     source.add_flows(&mut body);
     if let Some(log) = &state.transparency_log {
@@ -148,15 +148,15 @@ fn backends_by_name(state: &AppState) -> Vec<Arc<Backend>> {
     backends
 }
 
-/// The KPI strip, the server list and the startup refusals, from one pass
-/// over the backends. A server is up when it is running. Rows are best first
-/// by calls (by name when calls are not counted); the rest fold into `more`
-/// with their up and down counts.
+/// The KPI strip, the server list, the startup refusals and the sign-in rows
+/// (in name order), from one read of the backends. A server is up when it is
+/// running. Rows are best first by calls (by name when calls are not
+/// counted); the rest fold into `more` with their up and down counts.
 fn kpi_and_servers(
     state: &AppState,
     source: &Source,
     at: SystemTime,
-) -> (Map<String, Value>, Value, Vec<Refusal>) {
+) -> (Map<String, Value>, Value, Vec<Refusal>, Vec<Value>) {
     let backends = backends_by_name(state);
     // Not `status()`: it also sorts latency samples this view never shows.
     let up: HashMap<&str, bool> = backends
@@ -168,6 +168,11 @@ fn kpi_and_servers(
         .iter()
         .filter_map(|b| Some(startup_refusal(&b.name, b.startup_denial()?)))
         .collect();
+    let sign_ins = backends
+        .iter()
+        .filter(|b| b.needs_sign_in())
+        .map(|b| sign_in_row(&b.name))
+        .collect();
     let mut kpi = Map::new();
     kpi.insert("servers_total".into(), backends.len().into());
     kpi.insert(
@@ -177,7 +182,24 @@ fn kpi_and_servers(
     kpi.insert("tools_total".into(), tools.into());
     kpi.insert("uptime_secs".into(), state.process.uptime_secs().into());
     kpi.insert("version".into(), env!("CARGO_PKG_VERSION").into());
-    (kpi, server_list(source, &backends, &up, at), denied)
+    (
+        kpi,
+        server_list(source, &backends, &up, at),
+        denied,
+        sign_ins,
+    )
+}
+
+/// A server a person must sign in to. The name is clipped, and `clipped`
+/// says so when the cut removed anything.
+fn sign_in_row(name: &str) -> Value {
+    let subject = clip(name);
+    let detail = if subject.len() < name.len() {
+        json!({ "clipped": true })
+    } else {
+        json!({})
+    };
+    json!({ "kind": "sign_in", "subject": subject, "detail": detail })
 }
 
 /// The server rows and what folded. Servers are ranked first; only the rows
@@ -413,10 +435,13 @@ fn marker_rows(store: &CounterStore, now: u64) -> Value {
 }
 
 /// What needs the operator, highest priority first, capped with `more`: the
-/// newest invalid config, then every refusal, then budgets near their limit.
+/// newest invalid config, the open decisions, every refusal, each server a
+/// person must sign in to, then budgets near their limit. `more.by_kind`
+/// counts what folded, per kind, when anything did.
 fn needs_you(
     (state, generation): (&AppState, &crate::config_reload::Generation),
-    startup: &[Refusal],
+    (startup, sign_ins): (&[Refusal], Vec<Value>),
+    degraded: &mut Vec<&'static str>,
 ) -> Value {
     let (invalid, mut rows) = ledger_rows(state);
     // A denied server has no ledger entry and never ages out, so it leads.
@@ -424,10 +449,34 @@ fn needs_you(
         .iter()
         .map(|refusal| refused_row(refusal, &refusal_detail(refusal)));
     rows.splice(0..0, denied);
+    rows.splice(0..0, decisions_row(state, degraded));
     rows.splice(0..0, invalid);
+    rows.extend(sign_ins);
     rows.extend(limit_rows(state, generation));
-    let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS)).len();
-    json!({ "rows": rows, "more": { "count": folded } })
+    let folded = rows.split_off(rows.len().min(NEEDS_YOU_ROWS));
+    let mut more = json!({ "count": folded.len() });
+    let mut by_kind = std::collections::BTreeMap::<&str, usize>::new();
+    for row in &folded {
+        *by_kind
+            .entry(row["kind"].as_str().unwrap_or(""))
+            .or_default() += 1;
+    }
+    if !by_kind.is_empty() {
+        more["by_kind"] = json!(by_kind);
+    }
+    json!({ "rows": rows, "more": more })
+}
+
+/// The open-decisions row, from the decision set's held snapshot: none with
+/// no set or nothing open. An unreadable source gives no row, never a zero,
+/// and its name goes into `degraded`.
+fn decisions_row(state: &AppState, degraded: &mut Vec<&'static str>) -> Option<Value> {
+    let Some((count, revision)) = state.meta_mcp.decisions()?.snapshot() else {
+        degraded.push("needs_you.decisions");
+        return None;
+    };
+    let detail = json!({ "count": count, "revision": revision });
+    (count > 0).then(|| json!({ "kind": "decisions", "subject": "decisions", "detail": detail }))
 }
 
 /// The newest active invalid-config reload refusal as its own row (never

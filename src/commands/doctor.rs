@@ -218,9 +218,10 @@ pub async fn run_doctor_command(
         };
         results.push(CheckResult::pass("admin-token", detail).with_category("secrets"));
     }
+    // The report is the answer; a config that does not load is one of its failed checks.
     let Some(config) = config else {
         print_results(&results, format);
-        return ExitCode::FAILURE;
+        return super::verdict(1);
     };
     if let Some(path) = resolve_config_path(config_path) {
         results.extend(hidden_keys::check_hidden_keys(&path));
@@ -287,7 +288,7 @@ pub async fn run_doctor_command(
         .filter(|r| r.status == CheckStatus::Fail)
         .count();
     if failed > 0 {
-        ExitCode::FAILURE
+        super::verdict(1)
     } else {
         ExitCode::SUCCESS
     }

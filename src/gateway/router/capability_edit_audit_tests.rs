@@ -245,6 +245,86 @@ async fn caped11_a_pinned_save_records_the_pin_change() {
     fx.assert_no_content();
 }
 
+/// CAPED.4: the admin's approval is shown in Activity. A pinned save lists two
+/// rows, the editor's naming the change and the layer's naming the request,
+/// and neither carries a file hash.
+#[tokio::test]
+async fn caped4_a_pinned_save_lists_two_activity_rows() {
+    use crate::capability::{compute_capability_hash, rewrite_with_pin};
+    let unpinned = capability(CANARY_BEFORE);
+    let pinned = rewrite_with_pin(&unpinned, &compute_capability_hash(&unpinned));
+    let fx = fixture(&pinned, AuditFailurePolicy::FailClosed).await;
+    let (status, body) = fx
+        .send(request(
+            "PUT",
+            "/ui/api/capabilities/kept",
+            &sha256_hex(pinned.as_bytes()),
+            &pinned.replace(CANARY_BEFORE, CANARY_AFTER),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    // Exactly these two admin actions are in the log, so the list reads only them.
+    assert_eq!(fx.edits().len(), 1, "{}", fx.raw());
+    assert_eq!(fx.actions("admin_ui").len(), 1, "{}", fx.raw());
+    let admin_actions = fx
+        .raw()
+        .lines()
+        .filter(|l| {
+            serde_json::from_str::<Value>(l).expect("an audit line is JSON")["event"]
+                == "admin_action"
+        })
+        .count();
+    assert_eq!(admin_actions, 2, "no third admin action: {}", fx.raw());
+
+    let list = axum::http::Request::builder()
+        .method("GET")
+        .uri("/ui/api/activity")
+        .header("authorization", format!("Bearer {KEY}"))
+        .extension(axum::extract::ConnectInfo(std::net::SocketAddr::from((
+            [127, 0, 0, 1],
+            52_346,
+        ))))
+        .body(axum::body::Body::empty())
+        .expect("a request");
+    let (status, body) = fx.send(list).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let answer: Value = serde_json::from_str(&body).expect("the list is JSON");
+    let rows = answer["rows"].as_array().expect("the list has rows");
+    assert_eq!(rows.len(), 2, "{rows:#?}");
+    let mut surfaces: Vec<&str> = rows.iter().filter_map(|r| r["surface"].as_str()).collect();
+    surfaces.sort_unstable();
+    assert_eq!(surfaces, ["admin_ui", "capability_editor"], "{rows:#?}");
+    let on = |surface: &str| {
+        rows.iter()
+            .find(|r| r["surface"] == surface)
+            .unwrap_or_else(|| panic!("no {surface} row: {rows:#?}"))
+    };
+
+    let editor = on("capability_editor");
+    assert_eq!(editor["action"], "save", "{editor}");
+    assert_eq!(editor["capability"], "kept", "{editor}");
+    assert_eq!(editor["pin"], "updated", "{editor}");
+    assert_eq!(editor["who"]["account"], KEY_NAME, "{editor}");
+    for hash in ["sha256_before", "sha256_after"] {
+        assert!(
+            editor.get(hash).is_none(),
+            "{hash} stays in the log: {editor}"
+        );
+    }
+
+    let layer = on("admin_ui");
+    assert_eq!(layer["method"], "PUT", "{layer}");
+    assert_eq!(layer["route"], "/ui/api/capabilities/{name}", "{layer}");
+    assert_eq!(layer["http_status"], 200, "{layer}");
+    assert_eq!(layer["who"]["account"], KEY_NAME, "{layer}");
+    for field in ["action", "capability", "pin"] {
+        assert!(
+            layer.get(field).is_none(),
+            "{field} is the editor's: {layer}"
+        );
+    }
+}
+
 /// CAPED.11: a delete records who, which capability, `delete`, the hash
 /// before and no hash after, and no record carries the content.
 #[tokio::test]
