@@ -256,5 +256,8 @@ pub(super) mod test_seams {
             const { std::cell::Cell::new(None) };
         pub(crate) static FORCE_MISMATCH: std::cell::Cell<bool> =
             const { std::cell::Cell::new(false) };
+        /// The raw OS error the target's metadata read answers, if set.
+        pub(crate) static METADATA_ERROR: std::cell::Cell<Option<i32>> =
+            const { std::cell::Cell::new(None) };
     }
 }

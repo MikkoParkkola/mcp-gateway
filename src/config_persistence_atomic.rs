@@ -103,6 +103,11 @@ fn write_at(
     // target we could not stat is never replaced by a wider default-mode file,
     // while a `Private` write never needed the stat.
     let stat = std::fs::symlink_metadata(target);
+    #[cfg(all(test, windows))]
+    let stat = match windows::test_seams::METADATA_ERROR.with(std::cell::Cell::get) {
+        Some(code) => Err(std::io::Error::from_raw_os_error(code)),
+        None => stat,
+    };
     let target_meta = match stat {
         Ok(meta) if !meta.file_type().is_symlink() => Some(meta),
         Ok(_) => None,
@@ -390,6 +395,12 @@ mod acl_tests;
 #[cfg(all(test, windows))]
 #[path = "config_persistence_winacl_tests.rs"]
 mod winacl_tests;
+
+// WRITER.5: a Windows `Private` save keeps the owner or refuses.
+#[cfg(tp3)]
+#[cfg(all(test, windows))]
+#[path = "config_persistence_winpriv_tests.rs"]
+mod winpriv_tests;
 
 // The same, through each runtime state caller.
 #[cfg(tp3)]

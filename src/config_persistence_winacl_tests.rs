@@ -86,6 +86,12 @@ fn a_new_file_takes_the_folders_access_list() {
 /// A refused save: the error names `code`, the old file is byte-identical,
 /// and the folder holds exactly what it held before (no scratch left).
 fn assert_refused(row: &str, path: &Path, code: &str) {
+    assert_refused_as(row, path, FileMode::Inherit, code);
+}
+
+/// [`assert_refused`] for a save in `mode`; returns the message. Shared with
+/// the `Private` rows.
+pub(super) fn assert_refused_as(row: &str, path: &Path, mode: FileMode, code: &str) -> String {
     let dir = path.parent().unwrap();
     let listing = |d: &Path| {
         let mut names: Vec<_> = std::fs::read_dir(d)
@@ -96,12 +102,10 @@ fn assert_refused(row: &str, path: &Path, code: &str) {
         names
     };
     let before = listing(dir);
-    let err = write_atomic(path, b"new", FileMode::Inherit, Symlink::Replace)
+    let err = write_atomic(path, b"new", mode, Symlink::Replace)
         .expect_err(&format!("{row}: the save was not refused"));
-    assert!(
-        err.to_string().contains(code),
-        "{row}: wanted {code}, got {err}"
-    );
+    let text = err.to_string();
+    assert!(text.contains(code), "{row}: wanted {code}, got {text}");
     assert_eq!(
         std::fs::read(path).unwrap(),
         b"old",
@@ -112,6 +116,7 @@ fn assert_refused(row: &str, path: &Path, code: &str) {
         before,
         "{row}: the folder changed (scratch left?)"
     );
+    text
 }
 
 /// A6: a file carrying an integrity label is refused: the label cannot be
