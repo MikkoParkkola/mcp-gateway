@@ -41,7 +41,7 @@ a.ov-go:hover .ov-label { color: var(--color-text-primary); }
 .ny-line { font: var(--type-small); color: var(--color-text-secondary); overflow-wrap: anywhere; }
 .ny-go, .la-all, .ny-signins, .ck-go, .la-older a { font: var(--type-small); color: var(--color-accent-text); }
 a.ny-row:hover .ny-title { text-decoration: underline; }
-.ny-empty, .ny-more, .la-empty, .la-older { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
+.ny-empty, .ny-more, .la-empty, .la-older, .chart-note, .chart-failed, .chart-uncounted { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
 .la-row { display: grid; grid-template-columns: calc(var(--space-16) + var(--space-8)) minmax(0, 1fr); gap: var(--space-2);
   padding: var(--space-1-5) 0; border-top: var(--size-rule) solid var(--color-border-subtle); }
 .la-time { font: var(--type-small); color: var(--color-text-tertiary); }

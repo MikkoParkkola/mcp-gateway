@@ -33,6 +33,14 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity.fc48bc617d72.js"),
     ),
     (
+        "chart.45f2c430e79f.css",
+        include_bytes!("shell/chart.45f2c430e79f.css"),
+    ),
+    (
+        "chart.5995718eaf1e.js",
+        include_bytes!("shell/chart.5995718eaf1e.js"),
+    ),
+    (
         "BigShoulders-700.5faff1f81ec2.woff2",
         include_bytes!("shell/fonts/BigShoulders-700.5faff1f81ec2.woff2"),
     ),
@@ -57,12 +65,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.999936c78713.js"),
     ),
     (
-        "overview.a8b9bc366173.css",
-        include_bytes!("shell/overview.a8b9bc366173.css"),
+        "overview.1eb6bfb374e7.js",
+        include_bytes!("shell/overview.1eb6bfb374e7.js"),
     ),
     (
-        "overview.f17b10fe1982.js",
-        include_bytes!("shell/overview.f17b10fe1982.js"),
+        "overview.2885e07e2efc.css",
+        include_bytes!("shell/overview.2885e07e2efc.css"),
     ),
     (
         "servers.a2711ee29891.css",

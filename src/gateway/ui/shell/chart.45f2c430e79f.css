@@ -1,0 +1,49 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* The shared chart (chart.js). Colour, space and type are the shell's design tokens only. Series
+   differ by stroke pattern as well as colour: main solid, previous dashed, second dotted, a limit
+   long dash and dot. Nothing moves: a chart is complete on its first paint. */
+
+.chart, .chart * { animation: none; transition: none; }
+.chart { margin: 0; display: grid; gap: var(--space-3); min-width: 0; }
+.chart figcaption { display: grid; gap: var(--space-1); }
+.chart-caption { font: var(--type-body); font-weight: var(--font-weight-bold); color: var(--color-text-primary); }
+.chart-limit, .chart-summary { font: var(--type-small); color: var(--color-text-secondary); margin: 0; }
+.chart-legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: var(--space-3);
+  font: var(--type-small); color: var(--color-text-secondary); }
+.chart-legend li { display: flex; align-items: center; gap: var(--space-1); }
+.chart-swatch { width: var(--space-6); height: var(--space-1); overflow: visible; }
+
+.chart-grid { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: var(--space-2); }
+.chart-y { grid-row: 1; grid-column: 1; display: flex; flex-direction: column; justify-content: space-between;
+  text-align: right; font: var(--type-small); color: var(--color-text-tertiary); }
+.chart-plot { grid-row: 1; grid-column: 2; display: block; width: 100%; height: calc(var(--space-16) * 2.5); overflow: visible;
+  border-bottom: var(--size-rule) solid var(--color-chart-axis); }
+.chart-x { grid-row: 2; grid-column: 2; position: relative; height: var(--space-6); font: var(--type-small); color: var(--color-text-tertiary); }
+.chart-x span { position: absolute; top: var(--space-1); transform: translateX(-50%); white-space: nowrap; }
+.chart-x span:first-child { transform: none; }
+.chart-x span:last-child { transform: translateX(-100%); }
+
+.chart-line { fill: none; stroke-width: var(--size-tick-stroke); vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.chart-main { stroke: var(--color-chart-series-1); }
+.chart-previous { stroke: var(--color-chart-previous);
+  stroke-dasharray: calc(var(--size-tick-stroke) * 4) calc(var(--size-tick-stroke) * 3); }
+.chart-second { stroke: var(--color-chart-series-2); stroke-linecap: round;
+  stroke-dasharray: var(--size-tick-stroke) calc(var(--size-tick-stroke) * 2.5); }
+line.chart-limit { stroke: var(--color-status-warning-fg); stroke-width: var(--size-tick-stroke); vector-effect: non-scaling-stroke;
+  stroke-dasharray: calc(var(--size-tick-stroke) * 8) calc(var(--size-tick-stroke) * 2) var(--size-tick-stroke) calc(var(--size-tick-stroke) * 2); }
+.chart-mark { stroke: var(--color-chart-axis); stroke-width: var(--size-rule); vector-effect: non-scaling-stroke; }
+
+.chart-markers { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-1);
+  font: var(--type-small); color: var(--color-text-secondary); overflow-wrap: anywhere; }
+.chart-numbers summary { font: var(--type-small); color: var(--color-accent-text); cursor: pointer; }
+.chart-numbers table { border-collapse: collapse; margin-top: var(--space-2); font: var(--type-small); color: var(--color-text-secondary); }
+.chart-numbers th, .chart-numbers td { padding: var(--space-0-5) var(--space-2); text-align: left;
+  border-bottom: var(--size-rule) solid var(--color-border-subtle); }
+.chart-numbers td { text-align: right; }
+.chart-empty { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
+
+/* Phones keep three time labels: the first, the middle and the last (chart.js marks them). */
+@media (max-width: 639px) {
+  .chart-x span:not(.chart-x-keep) { display: none; }
+}

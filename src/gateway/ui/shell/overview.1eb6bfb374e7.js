@@ -8,12 +8,12 @@
 // sparkline and the cache ratio fill in as their series return. Costs are never
 // read. A field the API leaves out reads "Not available yet", never a zero.
 // Every value goes in with textContent. Below the tiles, from the same overview
-// read: the first-run checklist, Needs you and Last actions. The flow map and
-// the chart are their own slices; every panel takes its place through place().
+// read: the first-run checklist, Needs you and Last actions. The 24 h calls chart
+// draws from the calls series and the markers with the shared chart module. The
+// flow map is its own slice; every panel takes its place through place().
 import { register, go, el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
+import { chart, spark } from '/ui/assets/chart.5995718eaf1e.js';
 
-// The SVG namespace, read off an element the HTML parser makes, so no asset carries a URL.
-const SVG = document.createRange().createContextualFragment('<svg></svg>').firstChild.namespaceURI;
 const NOT_YET = 'Not available yet';
 const CLOCK = "Not available right now: the counter clock can't be read";
 const UNCOUNTED = 'Not counted on this gateway';
@@ -62,33 +62,6 @@ function compared(kpi, name) {
   return `${d > 0 ? '↗' : '↘'} ${n(Math.abs(d))} ${d > 0 ? 'more' : 'fewer'} than the 24 h before`;
 }
 
-/** A decorative sparkline; null values are gaps, so each run of numbers is its own line. */
-function spark(values) {
-  const nums = values.filter((v) => v !== null);
-  const max = Math.max(...nums, 0);
-  const step = values.length > 1 ? 72 / (values.length - 1) : 0;
-  const svg = document.createElementNS(SVG, 'svg');
-  svg.setAttribute('class', 'ov-spark');
-  svg.setAttribute('viewBox', '0 0 72 18');
-  svg.setAttribute('preserveAspectRatio', 'none');
-  svg.setAttribute('aria-hidden', 'true');
-  let run = [];
-  const flush = () => {
-    if (run.length) {
-      const line = document.createElementNS(SVG, 'polyline');
-      line.setAttribute('points', run.join(' '));
-      svg.append(line);
-    }
-    run = [];
-  };
-  values.forEach((v, i) => {
-    if (v === null) return flush();
-    run.push(`${(i * step).toFixed(1)},${(17 - (max ? (v / max) * 16 : 0)).toFixed(1)}`);
-  });
-  flush();
-  return svg;
-}
-
 /** A tile: its label and number (a link when it has a destination), then its trend and context line. */
 function tileNode(id, label, value, context, href) {
   const head = [h('span', { class: 'ov-label' }, label), h('span', { class: 'ov-num num' })];
@@ -117,7 +90,11 @@ function setNum(tile, text) {
   num.classList.toggle('ov-words', WORDS.test(text));
 }
 const setCtx = (tile, text) => { tile.querySelector('.ov-ctx').textContent = text; };
-const addSpark = (tile, values) => tile.querySelector('.ov-trend').prepend(spark(values));
+/** A tile's sparkline, named by the tile's label and the unit of what it draws. */
+const addSpark = (tile, values, unit) => tile.querySelector('.ov-trend')
+  .prepend(spark(values, { unit, label: tile.querySelector('.ov-label').textContent }));
+const CALLS_UNIT = { words: 'calls per 30 min' };
+const SHARE_UNIT = { words: 'share of calls per 30 min' };
 const trendOff = (tile) => tile.querySelector('.ov-trend').prepend(h('span', { class: 'ov-trend-off' }, TREND_OFF));
 
 const ms = (v) => (v >= 1000 ? `${(v / 1000).toFixed(1)} s` : `${Math.round(v)} ms`);
@@ -401,15 +378,56 @@ function fillCache(tile, data, callsRead, hitsRead) {
   if (c === 0) return setNum(tile, 'No calls in the last 24 h');
   setNum(tile, `${Math.round((k / c) * 100)}%`);
   setCtx(tile, `${n(k)} of ${n(c)} calls`);
-  return addSpark(tile, calls.slice(0, done).map((p, i) => (p.v > 0 ? hits[i].v / p.v : null)));
+  return addSpark(tile, calls.slice(0, done).map((p, i) => (p.v > 0 ? hits[i].v / p.v : null)), SHARE_UNIT);
 }
 
 /** Calls or Firewall: a sparkline from its series, or the trend words when the read failed. */
 function fillTrend(tile, kpi, name, read) {
   if (!isCount(kpi[`${name}_24h`])) return;
   const pts = read === FAIL ? null : pointsOf(read);
-  if (pts) addSpark(tile, pts.map((p) => p.v));
+  if (pts) addSpark(tile, pts.map((p) => p.v), CALLS_UNIT);
   else trendOff(tile);
+}
+
+/** Each marker kind's glyph and words in the frame's form, from its subject (a server name or a version). */
+const MARKER_WORDS = {
+  restart: () => ['↻', 'gateway restarted'],
+  upgrade: (s) => ['↻', `upgraded to ${s}`],
+  config_reload: () => ['↻', 'configuration reloaded'],
+  pause: (s) => ['⏸', `${s} paused`],
+  switch_off: (s) => ['⚠', `${s} off`],
+  switch_on: (s) => ['▶', `${s} on`],
+};
+/** A kind this page does not know reads in fixed words, never as its code. */
+const SOME_EVENT = () => ['•', 'a gateway event'];
+/** The API stamps the previous day's points a day earlier; the chart draws them over this day's. */
+const DAY = 86_400;
+
+/**
+ * The calls chart from the calls read (its body, or FAIL) and the overview's markers. Words about the
+ * panel rather than the plot (since when counting runs, the markers' state, how many are older) are
+ * lines after the figure.
+ */
+function fillChart(section, data, read) {
+  const say = (cls, words) => section.replaceChildren(h('p', { class: cls }, words));
+  if (uncounted(data)) return say('chart-uncounted', UNCOUNTED);
+  const points = read === FAIL ? null : pointsOf(read);
+  if (!points) return say('chart-failed', FAILED);
+  const before = read.previous_complete === true ? pointsOf({ points: read.previous }) : null;
+  const series = [{ name: 'Last 24 h', role: 'main', points }];
+  if (before) series.push({ name: '24 h before', role: 'previous', points: before.map((p) => ({ t: p.t + DAY, v: p.v })) });
+  const sum = (list) => n(list.reduce((a, p) => a + p.v, 0));
+  const summary = before ? `${sum(points)} calls in the last 24 h, ${sum(before)} in the 24 h before.` : `${sum(points)} calls in the last 24 h.`;
+  const rows = Array.isArray(data.markers?.rows) ? data.markers.rows : [];
+  const markers = rows.filter((m) => isCount(m?.t)).map((m) => {
+    const [glyph, words] = (own(MARKER_WORDS, m.kind) ?? SOME_EVENT)(str(m.subject));
+    return { t: m.t, glyph, words };
+  });
+  section.replaceChildren(chart({ caption: 'Calls per 30 min', unit: CALLS_UNIT, series, markers, x: clock, y: n, summary }));
+  if (!before && isCount(read.since)) section.append(h('p', { class: 'chart-note chart-since' }, `counting since ${when(read.since)}`));
+  if (degraded(data, 'markers')) section.append(h('p', { class: 'chart-note' }, CLOCK));
+  const earlier = data.markers?.more?.count;
+  if (isCount(earlier) && earlier > 0) section.append(h('p', { class: 'chart-note chart-more' }, `and ${n(earlier)} earlier`));
 }
 
 const METRICS = ['calls', 'blocks', 'cache_hits'];
@@ -446,7 +464,9 @@ async function statusTab(body, ctx) {
     h('i', { class: 'c1', 'aria-hidden': 'true' }), h('i', { class: 'c2', 'aria-hidden': 'true' }));
   // Every panel is in place before the page counts as painted.
   const root = h('div', { class: 'ov' }, section);
-  for (const p of [checklistPanel(data), needsYouPanel(data), lastActionsPanel(data)]) if (p) place(root, p);
+  // The chart's panel holds its place until the calls read settles.
+  const callsChart = h('section', { class: 'tk ov-panel', 'data-panel': 'calls-chart' }, h('p', { class: 'chart-note' }, '…'));
+  for (const p of [checklistPanel(data), needsYouPanel(data), callsChart, lastActionsPanel(data)]) if (p) place(root, p);
   root.setAttribute('data-overview-painted', '');
   body.append(root);
   arrange(strip, more, t, phone.matches);
@@ -467,6 +487,7 @@ async function statusTab(body, ctx) {
   const [calls, blocks, hits] = reads;
   await Promise.all([
     calls.then((s) => fillTrend(t.calls, kpi, 'calls', s)),
+    calls.then((s) => fillChart(callsChart, data, s)),
     blocks.then((s) => fillTrend(t.blocks, kpi, 'blocks', s)),
     Promise.all([calls, hits]).then(([c, k]) => fillCache(t.cache, data, c, k)),
   ]);
