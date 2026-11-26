@@ -17,7 +17,12 @@ docs/release/c6-gap/v4.0.0-c6-replacements.tsv) it:
   2. re-targets the obligation's patch to that file;
   3. requires every hunk's old-side lines to occur exactly once in the file, inside that
      function's body (a patch that applies is not proof of WHICH function it mutates);
-  4. requires `git apply --check` of the re-targeted patch against REV.
+  4. requires `git apply --check` of the re-targeted patch against REV;
+  5. requires the killer-gap row's test filter to name one test: its last `::` segment is a
+     fn defined exactly once in the crate the arguments select (`--lib` or `--test X`), and
+     a full path is that fn's path in the crate's module tree. Cargo matches a filter as a
+     substring of the test path, so a test moved to another module would match nothing and
+     the row would come back VOID instead of judging its killer.
 Prints one line per obligation and `N framed items unresolved`; exits 1 when N > 0.
 --manifest DIR writes the re-targeted patches and a mutants manifest for the runner.
 Standard library only.
@@ -317,6 +322,7 @@ class Tree:
         self.rev = self._git("rev-parse", "--verify", f"{rev}^{{commit}}").strip()
         self._cache: dict[str, str] = {}
         self._index: dict | None = None
+        self._files: set[str] | None = None
         self._scratch: tempfile.TemporaryDirectory | None = None
 
     def _git(self, *args: str, env: dict | None = None) -> str:
@@ -344,10 +350,30 @@ class Tree:
                               input=patch, capture_output=True, text=True, env=self._index)
         return done.returncode == 0, done.stderr.strip()
 
-    def files_declaring(self, name: str) -> list[str]:
-        """The `src/**.rs` files whose text has `fn <name>`, found by one `git grep`."""
+    def prefetch(self, prefix: str) -> None:
+        """Reads every `.rs` file under `prefix` into the cache with one `git cat-file --batch`
+        (a module walk reads thousands; one `git show` each takes minutes)."""
+        paths = [p for p in self.ls(prefix) if p.endswith(".rs") and p not in self._cache]
+        done = subprocess.run(["git", "cat-file", "--batch"], cwd=self.root, capture_output=True,
+                              input="".join(f"{self.rev}:{p}\n" for p in paths).encode())
+        if done.returncode:
+            raise RuntimeError(f"git cat-file --batch: {done.stderr.decode().strip()}")
+        out, at = done.stdout, 0
+        for p in paths:
+            end = out.index(b"\n", at)
+            size = int(out[at:end].split()[2])  # "<sha> blob <size>"
+            self._cache[p] = out[end + 1:end + 1 + size].decode()
+            at = end + 1 + size + 1
+
+    def exists(self, path: str) -> bool:
+        if self._files is None:
+            self._files = set(self._git("ls-tree", "-r", "--name-only", self.rev).split())
+        return path in self._files
+
+    def files_declaring(self, name: str, under: str = "src") -> list[str]:
+        """The `<under>/**.rs` files whose text has `fn <name>`, found by one `git grep`."""
         done = subprocess.run(["git", "grep", "-l", "-E", rf"(^|[^[:alnum:]_])fn[[:space:]]+{re.escape(name)}([^[:alnum:]_]|$)",
-                               self.rev, "--", "src/*.rs", "src/**/*.rs"],
+                               self.rev, "--", f"{under}/*.rs", f"{under}/**/*.rs"],
                               cwd=self.root, capture_output=True, text=True)
         if done.returncode not in (0, 1):
             raise RuntimeError(f"git grep: {done.stderr.strip()}")
@@ -606,6 +632,116 @@ def resolve(tree: Tree, ob: Obligation, rust_files: set[str]) -> Outcome:
 
 
 # --------------------------------------------------------------------------------------------
+# Killer filters: the module tree of a crate, and the one test a filter names in it.
+# --------------------------------------------------------------------------------------------
+
+GAP_TABLE = "docs/release/c6-gap/v4.0.0-c6-gap-table.tsv"
+_MOD = re.compile(r"\bmod\s+([A-Za-z_]\w*)\s*([;{])")
+_PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]')
+
+
+@dataclass(frozen=True)
+class ModFile:
+    """One file of a crate's module tree: its module path, and its inline `mod x { }` blocks
+    as (open offset, close offset, name), so a fn's path adds the blocks around it."""
+
+    path: str
+    inline: tuple[tuple[int, int, str], ...]
+
+
+def module_tree(tree: Tree, root: str) -> dict[str, ModFile]:
+    """Every file of the crate rooted at `root`, found the way rustc finds it: `mod x;` loads
+    x.rs or x/mod.rs beside a mod-rs file (the root, a mod.rs, a #[path] file), under a
+    directory named for any other file, inside the directories of enclosing inline modules,
+    or the #[path] file named. A declared module whose file is missing is unreadable."""
+    tree.prefetch(os.path.dirname(root))
+    files: dict[str, ModFile] = {}
+    todo = [(root, "", True)]  # (file, module path, children resolve from the file's own directory)
+    while todo:
+        path, module, owns_dir = todo.pop()
+        if path in files:
+            raise Unsupported(f"{path} is mounted twice")
+        source = tree.read(path)
+        code, kept = blank(source), blank(source, Wipe.COMMENTS)
+        line_at = [0] * (len(code) + 1)  # _matching names a line only in its error
+        found = [(m, m.start()) for m in _MOD.finditer(code) if _ident_start(code, m.start())]
+        inline = tuple((m.end() - 1, _matching(code, m.end() - 1, line_at), m.group(1))
+                       for m, _ in found if m.group(2) == "{")
+        files[path] = ModFile(module, inline)
+        here = os.path.dirname(path)
+        base = here if owns_dir else os.path.join(here, Path(path).stem)
+        for m, at in found:
+            if m.group(2) != ";":
+                continue
+            name, around = m.group(1), [n for o, c, n in inline if o < at < c]
+            # The attributes of this item: everything since the previous item or block boundary.
+            attrs = kept[max(code.rfind(ch, 0, at) for ch in ";{}") + 1:at]
+            attr = _PATH_ATTR.findall(attrs)
+            if attr:
+                child = os.path.normpath(os.path.join(os.path.join(base, *around) if around else here, attr[-1]))
+                owns = True
+            else:
+                d = os.path.join(base, *around)
+                tried = [f"{d}/{name}.rs", f"{d}/{name}/mod.rs"]
+                hit = [t for t in tried if tree.exists(t)]
+                if not hit:
+                    raise Unsupported(f"mod {name} in {path}: none of {', '.join(tried)}")
+                child, owns = hit[0], hit[0].endswith("/mod.rs")
+            if not tree.exists(child):
+                raise Unsupported(f"mod {name} in {path}: no file {child}")
+            todo.append((child, "::".join(p for p in (module, *around, name) if p), owns))
+    return files
+
+
+def filter_refusal(tree: Tree, args: str, crates: dict[str, dict[str, ModFile]]) -> str | None:
+    """Why the killer arguments' test filter does not name exactly one test, or None.
+    `crates` caches each crate's module tree across rows."""
+    words = args.split()
+    if words[:1] == ["--lib"] and len(words) == 2:
+        root = "src/lib.rs"
+    elif words[:1] == ["--test"] and len(words) == 3:
+        roots = [r for r in (f"tests/{words[1]}.rs", f"tests/{words[1]}/main.rs") if tree.exists(r)]
+        if not roots:
+            return f"killer arguments {args!r}: no test target {words[1]}"
+        root = roots[0]
+    else:
+        return f"killer arguments {args!r} are not `--lib FILTER` or `--test TARGET FILTER`"
+    wanted = words[-1]
+    name = wanted.rsplit("::", 1)[-1]
+    try:
+        mods = crates.get(root) or crates.setdefault(root, module_tree(tree, root))
+        defs = []
+        for path in tree.files_declaring(name, os.path.dirname(root)):
+            if path in mods:
+                mod = mods[path]
+                for d in declarations(tree.read(path)):
+                    if d.name == name:
+                        around = [n for o, c, n in mod.inline if o < d.at < c]
+                        defs.append(("::".join(p for p in (mod.path, *around, name) if p), f"{path}:{d.start}"))
+    except Unsupported as unreadable:
+        return f"test filter {wanted}: cannot read the crate's module tree with certainty: {unreadable}"
+    if not defs:
+        return f"test filter {wanted}: no fn {name} in the crate rooted at {root}"
+    if len(defs) > 1:
+        return f"test filter {wanted}: fn {name} is defined {len(defs)} times: " + ", ".join(f"{p} at {w}" for p, w in defs)
+    if "::" in wanted and defs[0][0] != wanted:
+        return f"test filter {wanted} does not match the module tree: fn {name} is {defs[0][0]} at {defs[0][1]}"
+    return None
+
+
+def _gap_rows(tree: Tree, outcomes: list[Outcome]) -> list[tuple[dict[str, str], Outcome]]:
+    """Each killer-gap row with the active obligation it belongs to, in the table's order. A row
+    no active obligation uses (a slot an understudy replaced) is left out."""
+    by_patch = {(o.obligation.path, Path(o.obligation.patch).name): o for o in outcomes}
+    rows = []
+    for row in _rows(tree.read(GAP_TABLE)):
+        o = by_patch.get((row["path"], Path(row["mutant"].split(":", 1)[0]).name))
+        if o is not None:
+            rows.append((row, o))
+    return rows
+
+
+# --------------------------------------------------------------------------------------------
 # Command line.
 # --------------------------------------------------------------------------------------------
 
@@ -614,14 +750,10 @@ def write_manifest(tree: Tree, outcomes: list[Outcome], out: Path) -> None:
     them: one row per obligation, in the killer-gap table's row order, with that table's killer
     arguments. The freeze-day batches are cut from this file (round robin), so the order is the
     batch plan and every obligation in it is exactly the set resolved here."""
-    by_patch = {(o.obligation.path, Path(o.obligation.patch).name): o for o in outcomes}
     out.mkdir(parents=True, exist_ok=True)
     lines, placed = [f"head_sha\t{tree.rev}"], set()
-    for row in _rows(tree.read("docs/release/c6-gap/v4.0.0-c6-gap-table.tsv")):
+    for row, o in _gap_rows(tree, outcomes):
         name = Path(row["mutant"].split(":", 1)[0]).name
-        o = by_patch.get((row["path"], name))
-        if o is None:
-            continue  # a row no active obligation uses (a slot an understudy replaced)
         d = PATCH_DIR[row["path"]]
         (out / f"{d}_{name}").write_text(o.patch or "")
         lines.append(f"{d.upper()}_{int(row['rank']):02d}\tlinux\t{d}_{name}\t{row['declared_killer_args']}")
@@ -661,6 +793,11 @@ def _run(tree: Tree, args: argparse.Namespace) -> int:
                 twin.status = "unresolved"
                 twin.detail = (f"{first.obligation.path} rank {first.obligation.rank} and "
                                f"{o.obligation.path} rank {o.obligation.rank} resolve to one function at {o.file}")
+    # A row whose test filter names no test, or several, would not judge its killer.
+    crates: dict[str, dict[str, ModFile]] = {}
+    for row, o in _gap_rows(tree, outcomes):
+        if o.status != "unresolved" and (why := filter_refusal(tree, row["declared_killer_args"], crates)):
+            o.status, o.detail = "unresolved", why
     for o in outcomes:
         ob = o.obligation
         where = f"{ob.path} rank {ob.rank} {ob.qualified}"
