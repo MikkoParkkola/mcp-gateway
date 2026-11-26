@@ -743,6 +743,7 @@ test('A31f leaving the tab aborts the counts read that is out', async ({ page })
   page.on('requestfailed', (req) => { if (new URL(req.url()).pathname === '/ui/api/activity/counts') failed.push(req.url()); });
   await open(page, urls, '/ui/activity/status');
   await expect.poll(() => urls.counts.length).toBe(1);
-  await page.locator('nav.tabs a').filter({ hasNotText: 'Status' }).first().click();
+  // Leave Activity for another page in the sidebar, as the list's own leave rows do.
+  await page.getByRole('link', { name: 'Tools', exact: true }).first().click();
   await expect.poll(() => failed).toEqual([urls.counts[0]]);
 });

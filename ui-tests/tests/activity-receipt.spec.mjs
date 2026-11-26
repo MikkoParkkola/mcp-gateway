@@ -197,6 +197,8 @@ class Receipts {
         this.lists.push(new URL(href));
         return route.fulfill({ json: list(href) });
       }
+      // The list page reads its Outcome counts here; these rows mock no counts.
+      if (pathname === '/ui/api/activity/counts') return route.fulfill({ status: 404, json: {} });
       return new Promise((done) => {
         const settleWith = async (reply) => {
           await route.fulfill(reply).catch(() => {});
