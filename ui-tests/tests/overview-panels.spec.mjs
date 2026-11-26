@@ -286,13 +286,19 @@ test('L1 side by side when wide, stacked on a phone, and the tiles keep their ar
   await show(page, BOTH, 1440);
   await expect(panel(page, 'needs-you')).toHaveCount(1);
   await expect(panel(page, 'last-actions')).toHaveCount(1);
-  // Layout settles after a resize: poll, never read once.
-  const tops = async () => [await top(panel(page, 'needs-you')), await top(panel(page, 'last-actions'))];
-  await expect.poll(async () => { const [a, b] = await tops(); return a === b; }).toBe(true);
+  // Layout settles after a resize: poll, never read once. Needs you shares its row with one panel when
+  // wide (whichever the page order puts beside it) and with none on a phone.
+  const beside = () => page.evaluate(() => {
+    const top = (s) => s.getBoundingClientRect().top;
+    const all = [...document.querySelectorAll('#content .ov > .ov-panel')];
+    const ny = all.find((s) => s.dataset.panel === 'needs-you');
+    return all.filter((s) => s !== ny && top(s) === top(ny)).length;
+  });
+  await expect.poll(beside).toBe(1);
   await expect(page.locator('#content .ov-strip [data-tile]')).toHaveCount(6);
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect.poll(async () => { const [a, b] = await tops(); return a < b; }).toBe(true);
+  await expect.poll(beside).toBe(0);
   await expect(page.locator('#content .ov-strip [data-tile]')).toHaveCount(3);
   await expect(page.locator('#content details.ov-more summary')).toHaveText('More numbers (3)');
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -309,6 +315,8 @@ test('L2 one panel order, whichever panel arrives first', async ({ page }) => {
       const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/ui\/assets\/overview\.[0-9a-f]+\.js$/.test(n));
       const { place } = await import(url);
       const root = document.querySelector('#content .ov');
+      // The real chart steps aside for its stand-in, so the order holds one of each.
+      root.querySelector(':scope > [data-panel="calls-chart"]')?.remove();
       const made = ['flow-map', 'calls-chart'].map((id) => Object.assign(document.createElement('section'), { className: 'tk' }));
       made.forEach((s, i) => { s.dataset.panel = ['flow-map', 'calls-chart'][i]; s.style.minHeight = '40px'; });
       const mine = [...root.querySelectorAll('[data-panel="needs-you"], [data-panel="last-actions"]')];
