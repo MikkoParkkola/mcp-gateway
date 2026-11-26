@@ -167,7 +167,7 @@ function signInPath(name, clipped) {
 /** A key's page, or the Access list when its name may be cut or is "." or "..", as serverPath() does. */
 function keyPath(name) {
   if (name === '.' || name === '..' || new TextEncoder().encode(name).length >= MAYBE_CUT_BYTES) return '/ui/access/status';
-  return `/ui/access/${encodeURIComponent(name)}/status`;
+  return `/ui/access/${name}/status`;
 }
 /** `table[key]` only when the table itself holds it, so a value such as "constructor" reads as unknown. */
 const own = (table, key) => (typeof key === 'string' && Object.hasOwn(table, key) ? table[key] : undefined);
