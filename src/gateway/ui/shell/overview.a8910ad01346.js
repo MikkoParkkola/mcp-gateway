@@ -12,7 +12,7 @@
 // draws from the calls series and the markers with the shared chart module. The
 // flow map is its own slice; every panel takes its place through place().
 import { register, go, el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
-import { chart, spark } from '/ui/assets/chart.5995718eaf1e.js';
+import { chart, spark } from '/ui/assets/chart.d67f9b90c255.js';
 
 const NOT_YET = 'Not available yet';
 const CLOCK = "Not available right now: the counter clock can't be read";
@@ -465,7 +465,7 @@ async function statusTab(body, ctx) {
   // Every panel is in place before the page counts as painted.
   const root = h('div', { class: 'ov' }, section);
   // The chart's panel holds its place until the calls read settles.
-  const callsChart = h('section', { class: 'tk ov-panel', 'data-panel': 'calls-chart' }, h('p', { class: 'chart-note' }, '…'));
+  const callsChart = h('section', { class: 'tk ov-panel', 'data-panel': 'calls-chart' }, h('p', { class: 'chart-note chart-wait' }, '…'));
   for (const p of [checklistPanel(data), needsYouPanel(data), callsChart, lastActionsPanel(data)]) if (p) place(root, p);
   root.setAttribute('data-overview-painted', '');
   body.append(root);

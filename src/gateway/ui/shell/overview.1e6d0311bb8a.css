@@ -3,6 +3,11 @@
 /* The Overview's KPI tiles and its panels. Colour, space and type are the shell's design
    tokens only; the card (.tk) and .num come from the shell. */
 
+/* The shared chart's sheet, loaded with this one, so the calls chart is styled on its first paint. */
+@import url("/ui/assets/chart.45f2c430e79f.css");
+/* The chart panel keeps about a chart's height while its read is out, so the panels below stay put. */
+.chart-wait { min-height: calc(var(--space-16) * 4.5); }
+
 /* Desktop, as frame 40 draws it: six tiles in one row. */
 .ov { display: grid; gap: var(--space-4); }
 .ov-kpis { padding: 0; }

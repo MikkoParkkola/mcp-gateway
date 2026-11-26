@@ -6,12 +6,10 @@
 // builds its nodes and returns them. A unit is required by both, so no chart
 // can be drawn without saying what it counts. Another drawing (a strip of up
 // and down time, say) is one more exported function here, under the same rule.
+// Its stylesheet, chart.css, is imported by each charting screen's own stylesheet,
+// which the shell loads before the screen draws: a sheet the module linked itself
+// would land after the first paint and move the chart under the reader.
 import { el as h } from '/ui/assets/shell.eb4a79cf1d0c.js';
-
-// The stylesheet comes with the module, as tooltip.js does it: only pages that chart need it.
-if (!document.querySelector('link[data-chart-css]')) {
-  document.body.append(h('link', { rel: 'stylesheet', href: '/ui/assets/chart.45f2c430e79f.css', 'data-chart-css': '' }));
-}
 
 /** The unit's words, or a TypeError: a chart that cannot say what it counts is not drawn. */
 function unitWords(unit, who) {
@@ -104,14 +102,16 @@ export function chart({ caption, unit, series, markers = [], limit = null, x, y,
   const id = `chart-summary-${++made}`;
   const fig = h('figure', { class: 'chart', 'data-unit': words });
   const caption2 = limit ? [h('span', { class: 'chart-limit' }, `${limit.words}: ${yWords(limit.value)}`)] : [];
-  fig.append(h('figcaption', {}, h('span', { class: 'chart-caption' }, caption), ...caption2,
-    h('p', { class: 'chart-summary', id }, summary),
-    h('ul', { class: 'chart-legend', role: 'list' }, ...lines.map((s) => h('li', { 'data-role': s.role }, swatch(s.role), s.name)))));
+  const cap = h('figcaption', {}, h('span', { class: 'chart-caption' }, caption), ...caption2,
+    h('p', { class: 'chart-summary', id }, summary));
+  fig.append(cap);
   const values = lines.flatMap((s) => s.points.map((p) => p.v)).filter(isValue);
   if (!main?.points.length || !values.length) {
     fig.append(h('p', { class: 'chart-empty' }, NOTHING));
     return fig;
   }
+  // A legend only for lines that are drawn.
+  cap.append(h('ul', { class: 'chart-legend', role: 'list' }, ...lines.map((s) => h('li', { 'data-role': s.role }, swatch(s.role), s.name))));
   const t0 = main.points[0].t;
   const step = main.points.length > 1 ? main.points[1].t - t0 : 1;
   const buckets = main.points.length;

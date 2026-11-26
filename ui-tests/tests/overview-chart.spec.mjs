@@ -23,8 +23,6 @@ const chartPanel = (page) => page.locator('#content [data-panel="calls-chart"]')
 const plot = (page) => chartPanel(page).locator('svg.chart-plot');
 /** The x of each point of a polyline. */
 const xs = (pts) => pts.trim().split(/\s+/).map((p) => Number(p.split(',')[0]));
-/** Wait for the chart's stylesheet, which the module links itself, before reading a computed style. */
-const chartCss = (page) => page.waitForFunction(() => [...document.styleSheets].some((s) => /\/chart\.[0-9a-f]{12}\.css$/.test(s.href ?? '')));
 
 /** Open the Overview with `markers` in its body and `callsBody` as the calls read. */
 async function showChart(page, { markers = { rows: [], more: { count: 0 } }, callsBody = calls([100, 200, 0, 50], [10, 20, 30, 40]), width } = {}) {
@@ -255,7 +253,6 @@ test('K11 a gap is never bridged, a quiet series lies on the baseline, and an em
 
 test('K12 the two days differ by stroke pattern, not only by colour', async ({ page }) => {
   await showChart(page);
-  await chartCss(page);
   const dash = (loc) => loc.evaluate((e) => getComputedStyle(e).strokeDasharray);
   const fig = chartPanel(page).locator('figure.chart');
   const main = await dash(plot(page).locator('polyline[data-role="main"]'));
@@ -286,7 +283,6 @@ test('K14 the module alone: a second series, a limit, and a day across a clock c
   await serve(page);
   await open(page);
   const src = chartSrc();
-  await chartCss(page);
   const out = await page.evaluate(async ([src, t, day]) => {
     const { chart } = await import(src);
     const pts = (vs, at = t) => vs.map((v, i) => ({ t: at[i], v }));

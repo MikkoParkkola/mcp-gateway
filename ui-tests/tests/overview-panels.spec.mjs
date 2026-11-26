@@ -343,14 +343,15 @@ for (const scheme of ['dark', 'light']) {
 
 test('A2 Tab from the last tile link reaches every panel link in page order', async ({ page }) => {
   await show(page, { ...BOTH, ...setup(3, { has_key: false, tool_tried: false, client_seen: false }) }, 1440);
-  const want = await page.locator('#content [data-panel]:not([data-panel="kpis"]) a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
-  // The checklist's two open steps, the one Needs you row, then All in Activity.
-  expect(want).toEqual(['/ui/tools/actions', '/ui/gateway/settings', `/ui/servers/${'n'.repeat(200)}/status`, '/ui/activity/status']);
+  await expect(panel(page, 'calls-chart').locator('figure.chart')).toHaveCount(1);
+  const want = await page.locator('#content [data-panel]:not([data-panel="kpis"]) :is(a, summary)').evaluateAll((es) => es.map((e) => e.getAttribute('href') ?? e.textContent));
+  // The checklist's two open steps, the one Needs you row, the chart's numbers toggle, then All in Activity.
+  expect(want).toEqual(['/ui/tools/actions', '/ui/gateway/settings', `/ui/servers/${'n'.repeat(200)}/status`, 'The numbers', '/ui/activity/status']);
   await page.locator('#content [data-tile="tools"] a').focus();
   const got = [];
   for (let i = 0; i < want.length; i += 1) {
     await page.keyboard.press('Tab');
-    got.push(await page.evaluate(() => document.activeElement?.getAttribute('href')));
+    got.push(await page.evaluate(() => document.activeElement?.getAttribute('href') ?? document.activeElement?.textContent ?? null));
   }
   expect(got).toEqual(want);
 });
