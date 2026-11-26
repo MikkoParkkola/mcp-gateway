@@ -11,7 +11,7 @@
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
 import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.23eb92bf6df3.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.2e8d0121b38d.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.3f2c01dcf941.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -221,6 +221,7 @@ function focusKey(root) {
   const at = document.activeElement;
   if (!at || !root.contains(at)) return null;
   if (at.dataset.group) return `button[data-group="${CSS.escape(at.dataset.group)}"]`;
+  if (at.matches('th a.lnk')) return `th a.lnk[href="${CSS.escape(at.getAttribute('href'))}"]`; // a server-name link
   const holder = at.closest('.has-tip[data-tip]');
   if (holder) return `.has-tip[data-tip="${CSS.escape(holder.dataset.tip)}"] button`;
   if (at.matches('.sv-scroll')) return `.sv-scroll[aria-label="${CSS.escape(at.getAttribute('aria-label'))}"]`;
