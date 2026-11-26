@@ -12,6 +12,8 @@ use super::{HANDSHAKE_CAP, Sink, SseChannel};
 use crate::protocol::RequestId;
 use crate::transport::upstream_tap::{TAP_CAPACITY, UpstreamNote};
 
+const DEFAULT: usize = crate::transport::DEFAULT_MAX_FRAME_BYTES;
+
 type Feed = Arc<Mutex<Option<mpsc::UnboundedReceiver<String>>>>;
 
 /// A server whose one GET streams what the row sends on the returned sender.
@@ -44,13 +46,14 @@ async fn stream_server() -> (String, mpsc::UnboundedSender<String>) {
 }
 
 async fn open(url: &str, sink: Option<Sink>) -> crate::Result<Arc<SseChannel>> {
-    open_budgeted(url, sink, None).await
+    open_budgeted(url, sink, None, DEFAULT).await
 }
 
 async fn open_budgeted(
     url: &str,
     sink: Option<Sink>,
     budget: Option<Arc<super::super::budget::ByteBudget>>,
+    limit: usize,
 ) -> crate::Result<Arc<SseChannel>> {
     let response = reqwest::get(url).await.expect("GET");
     SseChannel::open(
@@ -58,7 +61,7 @@ async fn open_budgeted(
         |data| Ok(format!("resolved:{data}")),
         sink,
         budget,
-        16 << 20, // the default per-answer limit
+        limit,
     )
     .await
 }
@@ -273,7 +276,9 @@ async fn a_budgeted_stream_past_its_total_fails_the_waiting_request() {
     tx.send("event: endpoint\ndata: /m\n\n".into())
         .expect("send");
     let budget = Arc::new(super::super::budget::ByteBudget::new(1024, 2048));
-    let channel = open_budgeted(&url, None, Some(budget)).await.expect("open");
+    let channel = open_budgeted(&url, None, Some(budget), DEFAULT)
+        .await
+        .expect("open");
     let waiting = channel.register(&RequestId::Number(1)).expect("register");
     // Notifications under the frame limit, past the total.
     let note = format!(
@@ -296,7 +301,9 @@ async fn a_budgeted_stream_refuses_a_frame_past_the_response_limit() {
     tx.send("event: endpoint\ndata: /m\n\n".into())
         .expect("send");
     let budget = Arc::new(super::super::budget::ByteBudget::new(1024, 1 << 20));
-    let channel = open_budgeted(&url, None, Some(budget)).await.expect("open");
+    let channel = open_budgeted(&url, None, Some(budget), DEFAULT)
+        .await
+        .expect("open");
     let waiting = channel.register(&RequestId::Number(1)).expect("register");
     tx.send(format!("event: message\ndata: {}", "a".repeat(2000)))
         .expect("send");
@@ -308,4 +315,39 @@ async fn a_budgeted_stream_refuses_a_frame_past_the_response_limit() {
     // reading as silence.
     assert!(error.to_string().contains("over the preview's"), "{error}");
     assert!(crate::transport::is_budget_refusal(&error), "{error}");
+}
+
+/// Review r2: the session stream takes the backend's own limit. Under a lowered
+/// one an answer exactly at it is served; one byte over fails, typed.
+#[tokio::test]
+async fn a_lowered_limit_bounds_a_session_answer_exactly() {
+    const AT: usize = 256 * 1024 + 67; // the block `event` makes of a 256 KiB text
+    let (url, tx) = stream_server().await;
+    tx.send("event: endpoint\ndata: /m\n\n".into())
+        .expect("send");
+    let channel = open_budgeted(&url, None, None, AT).await.expect("open");
+    let waiting = channel.register(&RequestId::Number(1)).expect("register");
+    let other = channel.register(&RequestId::Number(2)).expect("register");
+    let big = "x".repeat(256 * 1024);
+    tx.send(event(
+        &json!({"jsonrpc": "2.0", "id": 1, "result": {"text": big}}),
+    ))
+    .expect("send");
+    let response = waiting.response().await.expect("answered");
+    assert_eq!(
+        response.result.expect("result")["text"]
+            .as_str()
+            .map(str::len),
+        Some(256 * 1024)
+    );
+    let big = "x".repeat(256 * 1024 + 1);
+    tx.send(event(
+        &json!({"jsonrpc": "2.0", "id": 2, "result": {"text": big}}),
+    ))
+    .expect("send");
+    let err = other.response().await.expect_err("one byte over");
+    assert!(
+        matches!(err, crate::Error::ResponseTooLarge { limit: AT }),
+        "{err:?}"
+    );
 }

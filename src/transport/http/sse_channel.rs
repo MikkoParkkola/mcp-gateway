@@ -58,7 +58,15 @@ pub(crate) struct SseChannel {
     ended: Ended,
 }
 
-type Ended = Arc<Mutex<Option<String>>>;
+type Ended = Arc<Mutex<Option<End>>>;
+
+/// Why a stream ended on purpose. An event over the answer limit stays typed,
+/// so a waiting request gets the same refusal a body answer would.
+#[derive(Clone)]
+enum End {
+    TooLarge(usize),
+    Refused(String),
+}
 
 impl Drop for SseChannel {
     fn drop(&mut self) {
@@ -87,13 +95,10 @@ impl Waiting {
         let Some(rx) = self.rx.take() else {
             return Err(Error::Transport("SSE response already taken".to_owned()));
         };
-        rx.await.map_err(|_| {
-            Error::Transport(
-                self.ended
-                    .lock()
-                    .clone()
-                    .unwrap_or_else(|| "SSE stream ended before the response".to_owned()),
-            )
+        rx.await.map_err(|_| match self.ended.lock().clone() {
+            Some(End::TooLarge(limit)) => Error::ResponseTooLarge { limit },
+            Some(End::Refused(text)) => Error::Transport(text),
+            None => Error::Transport("SSE stream ended before the response".to_owned()),
         })
     }
 }
@@ -188,7 +193,10 @@ impl SseChannel {
                     let events = match next {
                         Ok(events) => events,
                         Err(error) => {
-                            *ended.lock() = Some(error.to_string());
+                            *ended.lock() = Some(match error {
+                                Error::ResponseTooLarge { limit } => End::TooLarge(limit),
+                                other => End::Refused(other.to_string()),
+                            });
                             return;
                         }
                     };
@@ -244,12 +252,9 @@ impl SseChannel {
 
 /// Under a budget, an event past the decoder's cap is the budget's own
 /// per-response refusal, so a caller can tell it from a dead stream.
-///
-/// ponytail: matched on the decoder's message; give `SseDecoder` a typed
-/// oversize error if a second caller needs to tell them apart.
 fn over_budget(budget: Option<&super::budget::ByteBudget>, error: Error) -> Error {
     match budget {
-        Some(budget) if error.to_string().contains("SSE event exceeded") => {
+        Some(budget) if matches!(error, Error::ResponseTooLarge { .. }) => {
             budget.response_refusal()
         }
         _ => error,
