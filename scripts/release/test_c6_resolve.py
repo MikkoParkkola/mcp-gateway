@@ -547,7 +547,7 @@ class KillerFilters(unittest.TestCase):
 
 class TheReleaseLine(unittest.TestCase):
     """The resolver on this repository's own tree: the 68 obligations, their manifest ids in
-    killer-gap order, and the three freeze-day batches the procedure documents."""
+    killer-gap order, and the six freeze-day batches the procedure documents."""
 
     def test_every_obligation_resolves_and_the_batches_are_the_documented_ones(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:
@@ -559,11 +559,15 @@ class TheReleaseLine(unittest.TestCase):
             rows = (Path(scratch) / "manifest.tsv").read_text().splitlines()[1:]
         ids = [row.split("\t")[0] for row in rows]
         self.assertEqual(len(ids), 68)
-        batches = [[i for k, i in enumerate(ids) if k % 3 == b] for b in range(3)]
-        self.assertEqual(batches[2][:6], ["HTTP_03", "HTTP_06", "HTTP_09", "HTTP_12", "HTTP_15", "ACCT_02"])
-        self.assertIn("STARTUP_09", batches[2])
+        # The procedure's six hosted batches: the manifest's rows dealt round robin.
+        batches = [[i for k, i in enumerate(ids) if k % 6 == b] for b in range(6)]
+        self.assertEqual([len(b) for b in batches], [12, 12, 11, 11, 11, 11])
+        self.assertEqual(sorted(i for b in batches for i in b), sorted(ids))
+        self.assertEqual(batches[4][:6], ["HTTP_05", "HTTP_11", "ACCT_01", "ACCT_07", "ACCT_13", "OAUTH_03"])
+        # Batch 5 carries the three rows whose patches once had a tracker id in their context.
+        self.assertTrue({"HTTP_11", "OAUTH_03", "STARTUP_03"} <= set(batches[4]))
+        self.assertIn("STARTUP_09", ids)
         self.assertNotIn("STARTUP_01", ids)  # replaced under G11
-        self.assertEqual([len(b) for b in batches], [23, 23, 22])
 
 
 

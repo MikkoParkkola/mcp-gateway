@@ -414,7 +414,9 @@ def fetch_check() -> list[str]:
                 if marker is not None:
                     os.environ["GITHUB_ACTIONS"] = marker
                 os.chdir(clone)
+                boundaries = Path(".git", "shallow")
                 try:
+                    before = sorted(boundaries.read_text(encoding="utf-8").split()) if boundaries.exists() else []
                     fetch_release_line()
                     got = git("rev-parse", "--is-shallow-repository")
                     if got != want:
@@ -422,10 +424,12 @@ def fetch_check() -> list[str]:
                     got = git("rev-list", "--count", "FETCH_HEAD")
                     if got != history:
                         errors.append(f"{clone.name} clone: FETCH_HEAD history {got} commit(s), expected {history}")
-                    boundaries = Path(".git", "shallow")
-                    marks = boundaries.read_text(encoding="utf-8").split() if boundaries.exists() else []
+                    marks = sorted(boundaries.read_text(encoding="utf-8").split()) if boundaries.exists() else []
                     if marker is None and tip in marks:
                         errors.append(f"{clone.name} clone: a local fetch made the tip a shallow boundary")
+                    # A local fetch keeps the shallow points it found, no more and no fewer.
+                    if marker is None and marks != before:
+                        errors.append(f"{clone.name} clone: a local fetch changed the shallow boundaries {before} -> {marks}")
                 except Abort as exc:
                     errors.append(f"{clone.name} clone: {exc}")
                 finally:

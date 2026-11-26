@@ -647,6 +647,13 @@ GAP_TABLE = "docs/release/c6-gap/v4.0.0-c6-gap-table.tsv"
 _MOD = re.compile(r"\bmod\s+([A-Za-z_]\w*)\s*([;{])")
 _MOD_WORD = re.compile(r"\bmod\b")
 _PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]')
+_PATH_WORD = re.compile(r"#\[\s*path\b")
+_MACRO_DEF = re.compile(r"\bmacro_rules\s*!\s*[A-Za-z_]\w*\s*[({\[]")
+# `fn <name>` in raw text, comments allowed between (`fn /* x */ name`): a superset of the
+# declarations, which declarations() then narrows to code.
+_FN_RAW = re.compile(r"\bfn(?:\s|/\*.*?\*/|//[^\n]*)+([A-Za-z_]\w*)", re.S)
+# A test attribute directly on a fn: #[test], #[tokio::test], #[tokio::test(...)]; not #[cfg(test)].
+_TEST_ATTR = re.compile(r"#\[\s*(?:[A-Za-z_]\w*::)*test\b")
 
 
 @dataclass(frozen=True)
@@ -657,6 +664,9 @@ class ModFile:
     path: str
     inline: tuple[tuple[int, int, str], ...]
 
+
+# Per crate root: its module tree and fn-name index, or the reason it cannot be read.
+Crates = dict[str, "tuple[dict[str, ModFile], dict[str, list[str]]] | Unsupported"]
 
 def module_tree(tree: Tree, root: str) -> dict[str, ModFile]:
     """Every file of the crate rooted at `root`, found the way rustc finds it: `mod x;` loads
@@ -676,9 +686,12 @@ def module_tree(tree: Tree, root: str) -> dict[str, ModFile]:
             continue
         code = blank(source)
         # Literals are kept only to read a #[path]; a file that names none needs no second pass.
-        kept = blank(source, Wipe.COMMENTS) if "#[path" in source else code
+        kept = blank(source, Wipe.COMMENTS) if _PATH_WORD.search(source) else code
         line_at = [0] * (len(code) + 1)  # _matching names a line only in its error
-        found = [(m, m.start()) for m in _MOD.finditer(code) if _ident_start(code, m.start())]
+        # A macro_rules! body is token trees, not items: a `mod` in it declares nothing.
+        macros = [(m.end() - 1, _matching(code, m.end() - 1, line_at)) for m in _MACRO_DEF.finditer(code)]
+        found = [(m, m.start()) for m in _MOD.finditer(code)
+                 if _ident_start(code, m.start()) and not any(o < m.start() < c for o, c in macros)]
         inline = tuple((m.end() - 1, _matching(code, m.end() - 1, line_at), m.group(1))
                        for m, _ in found if m.group(2) == "{")
         files[path] = ModFile(module, inline)
@@ -721,7 +734,7 @@ def _declared_test_path(tree: Tree, target: str) -> str | None:
     return None
 
 
-def filter_refusal(tree: Tree, args: str, crates: dict[str, tuple[dict[str, ModFile], dict[str, list[str]]]]) -> str | None:
+def filter_refusal(tree: Tree, args: str, crates: Crates) -> str | None:
     """Why the killer arguments' test filter does not name exactly one test, or None.
     `crates` caches each crate's module tree and fn-name index across rows."""
     words = args.split()
@@ -739,24 +752,32 @@ def filter_refusal(tree: Tree, args: str, crates: dict[str, tuple[dict[str, ModF
     wanted = words[-1]
     name = wanted.rsplit("::", 1)[-1]
     try:
+        if isinstance(crates.get(root), Unsupported):
+            raise crates[root]  # one unreadable crate is read once, not once per row
         if root not in crates:
-            mods = module_tree(tree, root)
+            try:
+                mods = module_tree(tree, root)
+            except Unsupported as unreadable:
+                crates[root] = unreadable
+                raise
             # Which crate files spell `fn <name>`, for every name at once: one pass over the
             # cached text instead of one `git grep` per row. Comments and strings still match
             # here; declarations() below keeps only code.
             index: dict[str, list[str]] = {}
             for path in mods:
-                for found in sorted(set(_FN.findall(tree.read(path)))):
+                for found in sorted(set(_FN_RAW.findall(tree.read(path)))):
                     index.setdefault(found, []).append(path)
             crates[root] = (mods, index)
         mods, index = crates[root]
-        defs = []
-        for path in index.get(name, ()):
-            mod = mods[path]
-            for d in declarations(tree.read(path)):
-                if d.name == name:
-                    around = [n for o, c, n in mod.inline if o < d.at < c]
-                    defs.append(("::".join(p for p in (mod.path, *around, name) if p), f"{path}:{d.start}"))
+        defs = [(p, w) for p, w, _ in _fn_paths(tree, mods, index.get(name, ()), lambda n: n == name)]
+        if len(defs) == 1 and ("::" not in wanted or defs[0][0] == wanted):
+            # Cargo runs every test whose path CONTAINS the filter. The filter's last segment
+            # lies inside one segment of any path it matches (a module, an inline module or the
+            # fn): the files where that segment could be are the only ones to read.
+            near = {p for k, ps in index.items() if name in k for p in ps}
+            near |= {p for p, m in mods.items() if name in m.path or any(name in n for _, _, n in m.inline)}
+            runs = [p for p, _, is_test in _fn_paths(tree, mods, sorted(near), lambda n: True)
+                    if is_test and wanted in p]
     except Unsupported as unreadable:
         return f"test filter {wanted}: cannot read the crate's module tree with certainty: {unreadable}"
     if not defs:
@@ -765,7 +786,26 @@ def filter_refusal(tree: Tree, args: str, crates: dict[str, tuple[dict[str, ModF
         return f"test filter {wanted}: fn {name} is defined {len(defs)} times: " + ", ".join(f"{p} at {w}" for p, w in defs)
     if "::" in wanted and defs[0][0] != wanted:
         return f"test filter {wanted} does not match the module tree: fn {name} is {defs[0][0]} at {defs[0][1]}"
+    if runs != [defs[0][0]]:
+        return f"test filter {wanted} matches {len(runs)} tests: {', '.join(sorted(runs))}"
     return None
+
+
+def _fn_paths(tree: Tree, mods: dict[str, ModFile], paths, wanted) -> list[tuple[str, str, bool]]:
+    """(module path, file:line, has a test attribute) of each fn in `paths` whose name `wanted`
+    accepts. The attribute is read from the item's own text since the previous `;`, `{` or `}`."""
+    out = []
+    for path in paths:
+        source, mod = tree.read(path), mods[path]
+        code = None
+        for d in declarations(source):
+            if wanted(d.name):
+                code = code if code is not None else blank(source)
+                around = [n for o, c, n in mod.inline if o < d.at < c]
+                attrs = code[max(code.rfind(ch, 0, d.at) for ch in ";{}") + 1:d.at]
+                out.append(("::".join(p for p in (mod.path, *around, d.name) if p), f"{path}:{d.start}",
+                            bool(_TEST_ATTR.search(attrs))))
+    return out
 
 
 def _gap_rows(tree: Tree, outcomes: list[Outcome]) -> list[tuple[dict[str, str], Outcome]]:
@@ -833,7 +873,7 @@ def _run(tree: Tree, args: argparse.Namespace) -> int:
                 twin.detail = (f"{first.obligation.path} rank {first.obligation.rank} and "
                                f"{o.obligation.path} rank {o.obligation.rank} resolve to one function at {o.file}")
     # A row whose test filter names no test, or several, would not judge its killer.
-    crates: dict[str, tuple[dict[str, ModFile], dict[str, list[str]]]] = {}
+    crates: Crates = {}
     for row, o in _gap_rows(tree, outcomes):
         if o.status != "unresolved" and (why := filter_refusal(tree, row["declared_killer_args"], crates)):
             o.status, o.detail = "unresolved", why
