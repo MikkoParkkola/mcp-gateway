@@ -224,6 +224,23 @@ pub const MIN_MAX_FRAME_BYTES: usize = 64 * 1024;
 /// Largest `max_frame_bytes` a backend may ask for (1 GiB).
 pub const CEILING_MAX_FRAME_BYTES: usize = 1024 * 1024 * 1024;
 
+/// A frame over the limit, typed so the reader tells it from other read
+/// errors without matching text. The cut bytes stay in the caller's buffer.
+#[derive(Debug)]
+pub(in crate::transport) struct FrameTooLarge(pub(in crate::transport) usize);
+
+impl std::fmt::Display for FrameTooLarge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "stdio frame over {} bytes; raise this backend's max_frame_bytes if the response is legitimate",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for FrameTooLarge {}
+
 /// Read one newline-terminated frame (without its `\n` or `\r\n`).
 /// `Ok(None)` at end of stream; an error for a frame over
 /// `max` bytes or one that is not UTF-8.
@@ -249,9 +266,7 @@ pub(in crate::transport) async fn read_frame<R: tokio::io::AsyncBufRead + Unpin>
     if frame.len() > max {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            format!(
-                "stdio frame over {max} bytes; raise this backend's max_frame_bytes if the response is legitimate"
-            ),
+            FrameTooLarge(max),
         ));
     }
     String::from_utf8(std::mem::take(frame))

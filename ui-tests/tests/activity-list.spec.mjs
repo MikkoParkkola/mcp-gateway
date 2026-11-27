@@ -8,22 +8,12 @@
 //       Node from the very bytes the gateway serves;
 //   LE  the real shell and screen in Chromium, list answers held in routes and
 //       activity frames sent on the fixture server's held stream.
-import { readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { shellReady, heldStream, frame, countListeners } from './shell.mjs';
+import { served } from './copy-check.mjs';
 
 test.use({ timezoneId: 'UTC' });
-
-const SHELL_DIR = fileURLToPath(new URL('../../src/gateway/ui/shell/', import.meta.url));
-
-/** The single served file whose name fits `pattern`: its name and text. */
-function served(pattern) {
-  const hits = readdirSync(SHELL_DIR).filter((f) => pattern.test(f));
-  if (hits.length !== 1) throw new Error(`want exactly one ${pattern} in src/gateway/ui/shell, have ${hits.length}`);
-  return { name: hits[0], text: readFileSync(SHELL_DIR + hits[0], 'utf8') };
-}
 
 let corePromise = null;
 /**

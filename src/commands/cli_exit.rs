@@ -546,6 +546,28 @@ pub(crate) fn verdict(code: u8) -> std::process::ExitCode {
     std::process::ExitCode::from(code)
 }
 
+/// The two ways a [`crate::cli::output::Printed`] result leaves with a non-zero code, kept beside `fail` and
+/// `verdict` so they share its folding.
+impl crate::cli::output::Printed {
+    /// A local failure as a built result: the two error lines on stderr, the kind's code.
+    pub(crate) fn error(kind: CliExit, message: &str, remedy: &str) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: error_outcome(kind, message, remedy).stderr,
+            exit: kind.code(),
+        }
+    }
+
+    /// A finished command's negative answer: what it printed, and its code.
+    pub(crate) fn verdict(code: u8, stdout: String, stderr: String) -> Self {
+        Self {
+            stdout,
+            stderr,
+            exit: code,
+        }
+    }
+}
+
 #[cfg(tp2)]
 #[cfg(test)]
 #[path = "cli_exit_tests.rs"]

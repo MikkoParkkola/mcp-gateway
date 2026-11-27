@@ -7,9 +7,10 @@
 //! What it reports: the `FAILURE` constant of `ExitCode`; any `ExitCode::from(..)` call; a `process::exit` whose
 //! argument is not a plain `0`; an `exit` field in a struct being built, written out or shorthand, unless it is a
 //! plain `0`; an `eprintln!` opening with `Error` or `error:`; and the first three again when they sit in a macro.
-//! What it allows, by file and function: the whole shared exit module; three `Printed` methods in the output
-//! module; serve's two start functions with exactly four each (their fatal-line contract); and the remote
-//! dashboard-link command's own exit, exactly one.
+//! What it allows, by file and function: the whole shared exit module (which also holds `Printed`'s two failing
+//! constructors); `Printed::emit` in the output module; serve's two start functions with exactly four each (their
+//! fatal-line contract); and the remote dashboard-link command's own exit, exactly one. Every other command file
+//! is held to the rule; there is no list of files still to convert.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -26,25 +27,6 @@ struct Hit {
     owner: String,
     what: &'static str,
 }
-
-/// Command files still to convert (the second half of the work deletes this list once they are done).
-const ALLOW: [&str; 15] = [
-    "src/commands/accounts.rs",
-    "src/commands/add_remove.rs",
-    "src/commands/audit.rs",
-    "src/commands/cap.rs",
-    "src/commands/cap/server_scan.rs",
-    "src/commands/hash_key.rs",
-    "src/commands/kubernetes.rs",
-    "src/commands/skills.rs",
-    "src/commands/tool.rs",
-    "src/commands/trust.rs",
-    "src/commands/trust/lab.rs",
-    "src/commands/trust/output.rs",
-    "src/trust/export_verify.rs",
-    "src/trust/provenance_public_cli.rs",
-    "src/validator/cli_handler.rs",
-];
 
 /// Functions allowed a fixed number of raw exits: (file, function, how many).
 const COUNTED: [(&str, &str, usize); 3] = [
@@ -257,12 +239,7 @@ fn unallowed(hits: &[Hit]) -> Vec<Hit> {
         if hit.path == "src/commands/cli_exit.rs" {
             continue;
         }
-        if hit.path == "src/cli/output.rs"
-            && matches!(
-                hit.owner.as_str(),
-                "Printed::emit" | "Printed::error" | "Printed::verdict"
-            )
-        {
+        if hit.path == "src/cli/output.rs" && hit.owner == "Printed::emit" {
             continue;
         }
         let place = COUNTED
@@ -278,15 +255,6 @@ fn unallowed(hits: &[Hit]) -> Vec<Hit> {
         out.push(hit.clone());
     }
     out
-}
-
-/// The entries of `allow` that no hit names.
-fn stale(allow: &[&str], hits: &[Hit]) -> Vec<String> {
-    allow
-        .iter()
-        .filter(|path| !hits.iter().any(|h| h.path == **path))
-        .map(|path| (*path).to_owned())
-        .collect()
 }
 
 /// The command tree under `root`, sorted and relative to it: Rust files below the two command directories and the
@@ -455,6 +423,17 @@ fn allowed_places_are_exact() {
         1,
         "(d) another fn"
     );
+    // The two failing constructors live in the shared exit module, so the same names in output.rs are hits.
+    for method in ["error", "verdict"] {
+        let body = format!(
+            "impl Printed {{\n    fn {method}() -> ExitCode {{\n        {failing}\n    }}\n}}"
+        );
+        assert_eq!(
+            count("src/cli/output.rs", &body),
+            1,
+            "(e) Printed::{method}"
+        );
+    }
 }
 
 /// F4: an unparseable file fails the scan and names the file.
@@ -463,26 +442,6 @@ fn an_unparseable_file_fails_the_scan() {
     let error =
         scan_source("src/commands/broken.rs", "fn half( {").expect_err("never an empty list");
     assert!(error.contains("src/commands/broken.rs"), "{error}");
-}
-
-/// F5: an allow entry that no hit names is stale.
-#[test]
-fn a_stale_allow_entry_fails() {
-    let elsewhere = Hit {
-        path: "src/commands/other.rs".into(),
-        line: 1,
-        owner: String::new(),
-        what: "ExitCode::FAILURE",
-    };
-    assert_eq!(
-        stale(&["src/commands/clean.rs"], std::slice::from_ref(&elsewhere)),
-        ["src/commands/clean.rs"]
-    );
-    let own = Hit {
-        path: "src/commands/clean.rs".into(),
-        ..elsewhere
-    };
-    assert!(stale(&["src/commands/clean.rs"], &[own]).is_empty());
 }
 
 /// F6: on a fixture tree, exactly the command files are scanned.
@@ -521,7 +480,7 @@ fn the_scanned_set_is_exact() {
     assert!(error.contains("src/trust/export_verify.rs"), "{error}");
 }
 
-/// S1: the real tree holds no raw failing exit or error print outside the allowed places and `ALLOW`.
+/// S1: the real tree holds no raw failing exit or error print outside the allowed places.
 #[test]
 fn no_raw_failing_exit_in_command_code() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -536,15 +495,6 @@ fn no_raw_failing_exit_in_command_code() {
         assert!(files.iter().any(|f| f == arrival), "{arrival} not scanned");
     }
     assert!(files.len() >= 80, "only {} files scanned", files.len());
-    let mut sorted = ALLOW;
-    sorted.sort_unstable();
-    assert_eq!(sorted, ALLOW, "ALLOW is kept sorted");
-    for path in ALLOW {
-        assert!(
-            files.iter().any(|f| f == path),
-            "ALLOW names {path}, which is not scanned"
-        );
-    }
     let mut hits = Vec::new();
     for file in &files {
         let text =
@@ -553,7 +503,6 @@ fn no_raw_failing_exit_in_command_code() {
     }
     let bad: Vec<String> = unallowed(&hits)
         .into_iter()
-        .filter(|h| !ALLOW.contains(&h.path.as_str()))
         .map(|h| format!("{}:{} {} (in {})", h.path, h.line, h.what, h.owner))
         .collect();
     assert!(
@@ -561,11 +510,6 @@ fn no_raw_failing_exit_in_command_code() {
         "{} raw failing exit(s) or error print(s) in command code; use fail, usage or verdict:\n{}",
         bad.len(),
         bad.join("\n")
-    );
-    let stale_entries = stale(&ALLOW, &hits);
-    assert!(
-        stale_entries.is_empty(),
-        "ALLOW entries with no hit: {stale_entries:?}"
     );
     for (file, owner, count) in COUNTED {
         let held = hits

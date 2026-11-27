@@ -31,6 +31,8 @@ const CORE_JS_STEMS: &[&str] = &[
     "chart",
     "gateway",
     "overview",
+    "server-page",
+    "server-paths",
     "servers",
     "shell",
     "tools",

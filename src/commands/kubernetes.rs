@@ -23,6 +23,8 @@ use mcp_gateway::{
     },
 };
 
+use super::{CliExit, fail, usage, verdict};
+
 /// Run Kubernetes enterprise commands.
 pub fn run_kubernetes_command(command: KubernetesCommand) -> ExitCode {
     match command {
@@ -34,15 +36,12 @@ pub fn run_kubernetes_command(command: KubernetesCommand) -> ExitCode {
             Ok(plan) => {
                 print_plan(&plan, format);
                 if plan.status == KubernetesPlanStatus::Blocked {
-                    ExitCode::FAILURE
+                    verdict(1)
                 } else {
                     ExitCode::SUCCESS
                 }
             }
-            Err(error) => {
-                eprintln!("Error: {error}");
-                ExitCode::FAILURE
-            }
+            Err(error) => resources_failure(&resources, &error),
         },
         KubernetesCommand::Controller {
             resources,
@@ -73,21 +72,18 @@ pub fn run_kubernetes_command(command: KubernetesCommand) -> ExitCode {
                     if report.status == KubernetesClusterExecutionStatus::Succeeded {
                         ExitCode::SUCCESS
                     } else {
-                        ExitCode::FAILURE
+                        verdict(1)
                     }
                 } else {
                     print_cluster_apply_plan(&plan, format);
                     if plan.status == KubernetesPlanStatus::Blocked {
-                        ExitCode::FAILURE
+                        verdict(1)
                     } else {
                         ExitCode::SUCCESS
                     }
                 }
             }
-            Err(error) => {
-                eprintln!("Error: {error}");
-                ExitCode::FAILURE
-            }
+            Err(error) => resources_failure(&resources, &error),
         },
     }
 }
@@ -184,8 +180,10 @@ fn run_controller_command(
 ) -> ExitCode {
     if watch {
         if interval_seconds == 0 {
-            eprintln!("Error: --watch requires --interval-seconds greater than 0");
-            return ExitCode::FAILURE;
+            return usage(
+                "kubernetes controller",
+                "--watch requires --interval-seconds greater than 0",
+            );
         }
 
         loop {
@@ -209,13 +207,10 @@ fn run_controller_command(
                         print_controller_report(&report, format);
                     }
                     if blocked {
-                        return ExitCode::FAILURE;
+                        return verdict(1);
                     }
                 }
-                Err(error) => {
-                    eprintln!("Error: {error}");
-                    return ExitCode::FAILURE;
-                }
+                Err(error) => return resources_failure(resources, &error),
             }
             thread::sleep(Duration::from_secs(interval_seconds));
         }
@@ -231,16 +226,25 @@ fn run_controller_command(
             let blocked = report.status == KubernetesPlanStatus::Blocked;
             print_controller_report(&report, format);
             if blocked {
-                ExitCode::FAILURE
+                verdict(1)
             } else {
                 ExitCode::SUCCESS
             }
         }
-        Err(error) => {
-            eprintln!("Error: {error}");
-            ExitCode::FAILURE
-        }
+        Err(error) => resources_failure(resources, &error),
     }
+}
+
+/// The resources file could not be read or planned: the remedy names it.
+fn resources_failure(resources: &Path, error: &str) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        error,
+        &format!(
+            "Check that {} exists and holds the Kubernetes resources to plan.",
+            resources.display()
+        ),
+    )
 }
 
 fn print_plan(plan: &KubernetesReconcilePlan, format: OutputFormat) {

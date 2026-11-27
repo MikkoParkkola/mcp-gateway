@@ -44,8 +44,6 @@ T	src/cli/output.rs	print_tool_list	-	CLI output helpers
 T	src/cli/output.rs	Printed::emit	-	CLI output helpers
 T	src/commands/accounts.rs	print_migrated	-	CLI subcommand output (accounts.rs)
 T	src/commands/accounts.rs	print_report	-	CLI subcommand output (accounts.rs)
-T	src/commands/accounts.rs	run_init_store	-	CLI subcommand output (accounts.rs)
-T	src/commands/accounts.rs	run_migrate_credentials	-	CLI subcommand output (accounts.rs)
 T	src/commands/add_remove.rs	run_add_command	-	CLI subcommand output (add_remove.rs)
 T	src/commands/add_remove.rs	run_get_command	-	CLI subcommand output (add_remove.rs)
 T	src/commands/add_remove.rs	run_list_available_command	-	CLI subcommand output (add_remove.rs)
@@ -90,7 +88,6 @@ T	src/commands/kubernetes.rs	print_cluster_execution_report	-	CLI subcommand out
 T	src/commands/kubernetes.rs	print_controller_report	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	print_plan	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/kubernetes.rs	run_controller_command	-	CLI subcommand output (kubernetes.rs)
-T	src/commands/kubernetes.rs	run_kubernetes_command	-	CLI subcommand output (kubernetes.rs)
 T	src/commands/mod.rs	print_init_success	-	CLI subcommand output (mod.rs)
 T	src/commands/mod.rs	run_init_command	-	CLI subcommand output (mod.rs)
 T	src/commands/mod.rs	tls_init_ca	-	CLI subcommand output (mod.rs)
@@ -119,11 +116,7 @@ T	src/commands/skills.rs	run_skills_remove	-	CLI subcommand output (skills.rs)
 T	src/commands/skills.rs	run_skills_search	-	CLI subcommand output (skills.rs)
 T	src/commands/skills.rs	run_skills_show	-	CLI subcommand output (skills.rs)
 T	src/commands/stats.rs	run_stats_command	-	CLI subcommand output (stats.rs)
-T	src/commands/tool.rs	catalogue	-	CLI subcommand output (tool.rs)
-T	src/commands/tool.rs	none_found	-	CLI subcommand output (tool.rs)
 T	src/commands/tool.rs	tool_completions	-	CLI subcommand output (tool.rs)
-T	src/commands/tool.rs	tool_inspect	-	CLI subcommand output (tool.rs)
-T	src/commands/tool.rs	tool_invoke	-	CLI subcommand output (tool.rs)
 T	src/commands/tool.rs	tool_list	-	CLI subcommand output (tool.rs)
 T	src/commands/trust.rs	run_trust_command	-	CLI subcommand output (trust.rs)
 T	src/commands/trust.rs	run_trust_lab_command	-	CLI subcommand output (trust.rs)
@@ -142,6 +135,5 @@ T	src/commands/upgrade.rs	run_upgrade_command	-	CLI subcommand output (upgrade.r
 T	src/config_persistence.rs	say_waiting	-	reached only through cli_lock, a CLI config write
 T	src/registry/mod.rs	Registry::build_index	-	only production callers are commands/cap.rs:431 and :465 (the cap subcommand)
 T	src/trust/provenance_public_cli.rs	emit_line	-	the provenance public-key subcommand
-T	src/trust/provenance_public_cli.rs	run_public_key	-	the provenance public-key subcommand
 T	src/validator/cli_handler.rs	collect_capability_files	-	the validate subcommand
 T	src/validator/cli_handler.rs	run_validate_command	-	the validate subcommand
