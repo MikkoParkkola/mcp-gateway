@@ -28,7 +28,7 @@ for b in $SLOT; do
   [ -n "$pin" ] && [ "$(printf '%s\n' "$pin" | wc -l)" -eq 1 ] ||
     { echo "STOP: mutants.yml must pin exactly one toolchain; found: ${pin:-none}" | tr '\n' ' ' >&2; echo >&2; exit 1; }
   export RUSTUP_TOOLCHAIN=$pin
-  rustup toolchain install "$pin" --profile minimal > /dev/null || { echo "STOP: cannot install Rust $pin" >&2; exit 1; }
+  rustup toolchain install "$pin" --profile minimal --no-self-update > /dev/null || { echo "STOP: cannot install Rust $pin" >&2; exit 1; }
   case "$(rustc -V)" in "rustc $pin "*) ;; *) echo "STOP: rustc is $(rustc -V), not $pin" >&2; exit 1 ;; esac
   echo "batch $b start $(date -u +%FT%TZ) batch_sha $(git rev-parse HEAD)" | tee "$d/run.log"
   { echo "host $(hostname) arch $(uname -m) cores $(nproc)"; rustc -V; cargo -V; } 2>&1 | tee -a "$d/run.log"

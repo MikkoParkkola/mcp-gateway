@@ -46,7 +46,7 @@ sys.exit(int(os.environ.get("FAKE_EXIT_" + os.environ["GITHUB_REF"].rsplit("-", 
 PINS_AS_CI = "jobs:\n" + "".join(f"  {j}:\n    with:\n      toolchain: 1.99.1\n" for j in ("hosted", "trusted", "windows"))
 
 STUBS = {
-    "rustup": "#!/bin/sh\nexit 0\n",
+    "rustup": '#!/bin/sh\necho "$*" >> "$HOME/rustup-calls.txt"\nexit 0\n',
     "rustc": '#!/bin/sh\necho "rustc ${FAKE_RUSTC:-1.99.1} (stub 2026-01-01)"\n',
     "cargo": '#!/bin/sh\necho "cargo ${FAKE_RUSTC:-1.99.1} (stub 2026-01-01)"\n',
     "nproc": "#!/bin/sh\necho 4\n",
@@ -131,6 +131,12 @@ class Host(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("not 1.99.1", r.stderr)
         self.assertFalse((self.batch_dir("1") / "out").exists())
+
+    def test_the_install_never_updates_rustup_on_the_shared_host(self) -> None:
+        self.assertEqual(self.run_host("1").returncode, 0)
+        calls = (self.home / "rustup-calls.txt").read_text()
+        self.assertIn("toolchain install 1.99.1", calls)
+        self.assertIn("--no-self-update", calls)
 
     def test_the_script_is_executable_as_the_procedure_calls_it(self) -> None:
         self.assertTrue(os.access(SCRIPT, os.X_OK), f"{SCRIPT} has no executable bit; the procedure calls it by path")
