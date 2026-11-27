@@ -160,6 +160,11 @@ fn a_scratch_that_stays_replaces_the_refusal() {
 #[test]
 fn a_refusal_that_leaves_its_scratch_is_not_a_writer_refusal() {
     use super::unix::seams::{self, Seams};
+    // Root deletes from a read-only folder; the row needs permissions to bind
+    // (the repo's pattern, as in serve_session_tests and reader_lock_tests).
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state.json");
     std::fs::write(&path, b"old").unwrap();
@@ -181,4 +186,10 @@ fn a_refusal_that_leaves_its_scratch_is_not_a_writer_refusal() {
     let error = result.expect_err("the save refuses");
     assert!(super::writer_refusal(&error).is_none(), "{error}");
     assert_eq!(std::fs::read(&path).unwrap(), b"old");
+    // The removal really failed: a scratch stands beside the target.
+    let left = std::fs::read_dir(dir.path()).unwrap().count();
+    assert!(
+        left > 1,
+        "the scratch was removed after all ({left} entries)"
+    );
 }
