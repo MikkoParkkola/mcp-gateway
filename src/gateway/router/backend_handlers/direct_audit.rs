@@ -101,6 +101,16 @@ pub(super) fn direct_outcome(status: StatusCode, body: &Value) -> AuditOutcome {
     }
 }
 
+/// The call's audit input: a response-firewall refusal noted at the scan is
+/// classed as `from_result` classes `Err(ResponseFirewallRefused)`: `denied`
+/// with its code. Otherwise the answer's class.
+fn answered_outcome(status: StatusCode, body: &Value, notes: &DispatchNotes) -> AuditOutcome {
+    if notes.response_refused() {
+        return AuditOutcome::Denied(crate::Error::ResponseFirewallRefused.to_rpc_code());
+    }
+    direct_outcome(status, body)
+}
+
 /// What the inner handler learns that the read verdict needs (MIK-7116.MIN.2):
 /// the caller, formed only when the verdict is on, and the request params.
 /// Also the caller's name and the tool the delivery record names (MIK-7669),
@@ -352,7 +362,10 @@ pub(super) async fn record(
         .tool
         .as_deref()
         .and_then(|tool| crate::gateway::meta_mcp::visible::memo::denial_code(server, tool))
-        .map_or_else(|| direct_outcome(*status, body), AuditOutcome::Denied);
+        .map_or_else(
+            || answered_outcome(*status, body, &notes),
+            AuditOutcome::Denied,
+        );
     // A withheld call's record carries the memo's code, so its check.
     let mut notes = notes;
     if let Some(refusal) = call
@@ -367,9 +380,10 @@ pub(super) async fn record(
     let answered = outcome;
     let outcome = notes.outcome(outcome);
     // D4: counted before the log check, so auth off still counts.
-    let firewall = body
-        .get("error")
-        .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal);
+    let firewall = notes.response_refused()
+        || body
+            .get("error")
+            .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal);
     if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body, firewall)
     {
         use crate::security::security_metrics::{DenialReason, DenialRoute, denied};

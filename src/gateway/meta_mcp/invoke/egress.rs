@@ -107,6 +107,7 @@ impl MetaMcp {
         }
         if outcome == EgressOutcome::Refused {
             crate::gateway::delivery_facts::raise(ResponseEffect::Refused);
+            super::audit::note_response_refused();
             *frame =
                 JsonRpcResponse::delivery_refusal_error(frame.id.take(), INVALID_REQUEST, REFUSAL);
         }

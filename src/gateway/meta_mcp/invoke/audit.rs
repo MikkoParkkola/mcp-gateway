@@ -101,6 +101,8 @@ pub(crate) struct DispatchNotes {
     backend: Option<(std::time::Duration, crate::counters::End)>,
     /// MIK-8914.API2A.1: which check decided this call.
     decision: crate::security::decision_record::Noted,
+    /// The response firewall refused this call's answer.
+    response_refused: bool,
 }
 
 /// A backend send of this call took `elapsed` and ended `end`. A
@@ -120,6 +122,11 @@ impl DispatchNotes {
         &self,
     ) -> Option<(std::time::Duration, crate::counters::End)> {
         self.backend
+    }
+
+    /// Whether the response firewall refused this call's answer.
+    pub(crate) const fn response_refused(&self) -> bool {
+        self.response_refused
     }
 }
 
@@ -177,6 +184,11 @@ tokio::task_local! {
 /// Outside [`with_dispatch_scope`] (upstream task recovery) this does nothing.
 fn note(f: impl FnOnce(&mut DispatchNotes)) {
     let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));
+}
+
+/// Note that the response firewall refused this call's answer.
+pub(crate) fn note_response_refused() {
+    note(|notes| notes.response_refused = true);
 }
 
 /// Note that this call's dispatch missed a backend its gate found absent.
