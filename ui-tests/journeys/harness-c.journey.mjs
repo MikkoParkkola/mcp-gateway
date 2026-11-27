@@ -115,7 +115,7 @@ test.describe('seed silentStub (C-H3, J4)', () => {
   test('S5 the J4 seed turns health checks off in init\'s config and the gateway serves both stubs with it', async ({ gw }) => {
     expect(await readFile(gw.configPath, 'utf8')).toMatch(/^failsafe:\n {2}health_check:\n {4}enabled: false$/m);
     expect(await readFile(gw.configPath, 'utf8')).toMatch(/^ {2}tide:\n {4}command: .*\n {4}timeout: 2s$/m);
-    const servers = JSON.stringify(await (await gw.api('/ui/api/backends')).json());
+    const servers = await gw.serverNames();
     for (const name of ['tide', 'harbour']) expect(servers).toContain(name);
   });
 });
@@ -124,7 +124,7 @@ test.describe('seed firstRun (C-H3, J1)', () => {
   test.use({ seed: 'firstRun' });
   test('S6 discovery offers ebb and flood to adopt, and neither is a backend yet', async ({ gw }) => {
     const adopt = JSON.stringify((await (await gw.api('/ui/api/decisions')).json()).decisions.filter((d) => d.kind === 'adopt'));
-    const backends = JSON.stringify(await (await gw.api('/ui/api/backends')).json());
+    const backends = await gw.serverNames();
     for (const name of ['ebb', 'flood']) {
       expect(adopt).toContain(name);
       expect(backends).not.toContain(name);
@@ -137,7 +137,7 @@ test.describe('seed addable (C-H3, J3)', () => {
   test('S7 drift is ready to add: its command names its own stub, and the gateway does not know it', async ({ gw }) => {
     expect(gw.data.add.command).toContain('stub-drift.log');
     expect(await readFile(gw.configPath, 'utf8')).not.toContain('drift');
-    expect(JSON.stringify(await (await gw.api('/ui/api/backends')).json())).not.toContain('drift');
+    expect(await gw.serverNames()).not.toContain('drift');
   });
 });
 
