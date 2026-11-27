@@ -7,6 +7,7 @@
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { until } from './gateway.mjs';
 
 const STUB = join(dirname(fileURLToPath(import.meta.url)), 'stub-mcp.mjs');
 
@@ -59,7 +60,11 @@ const SEEDS = {
     return {
       ...seeded,
       ready: async (gw, deadline) => {
-        await mcpCall(gw, { server: 'tide', tool: 'tide_secret', arguments: {} });
+        const reply = await gw.mcp({ key: gw.adminKey, method: 'tools/call',
+          params: { name: 'gateway_invoke', arguments: { server: 'tide', tool: 'tide_secret', arguments: {} } } });
+        if (reply.status < 200 || reply.status > 299) {
+          throw new Error(`the seeding MCP call was refused (${reply.status}): ${JSON.stringify(reply.body).slice(0, 300)}`);
+        }
         await until(deadline, 'no blocked tide_secret call in Activity', async () => {
           const { rows } = await (await gw.api('/ui/api/activity?server=tide')).json();
           return rows.some((r) => r.tool === 'tide_secret' && r.outcome === 'blocked');
@@ -69,33 +74,35 @@ const SEEDS = {
   },
 };
 
-/** One real MCP client exchange on POST /mcp with the test's bearer: initialize, initialized, then gateway_invoke
- * of the given call. Each HTTP answer must succeed; the call's own result may be the policy refusal it seeds. */
-async function mcpCall({ origin, adminKey }, call) {
-  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream',
-    authorization: `Bearer ${adminKey}` };
+/**
+ * One MCP client exchange on POST /mcp (part C, C-H2; gw.mcp): initialize (keeping its mcp-session-id),
+ * notifications/initialized, then `method`, each with `Authorization: Bearer <key>` (none when `key` is omitted).
+ * Resolves to the { status, body } of the first answer that is not 2xx, else of the request's own answer: a refusal
+ * is a status the caller reads, never a throw. Not a key-acceptance read: /mcp is public on init's starter config.
+ */
+export async function mcpExchange(origin, { key, method, params }) {
+  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+  if (key) headers.authorization = `Bearer ${key}`;
   const post = async (body, extra = {}) => {
     const res = await fetch(`${origin}/mcp`, { method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(body),
       signal: AbortSignal.timeout(5_000) });
-    const text = await res.text();
-    if (!res.ok) throw new Error(`POST /mcp ${body.method} answered ${res.status}: ${text.slice(0, 300)}`);
-    return { res, text };
+    return { res, reply: { status: res.status, body: rpcBody(await res.text()) } };
   };
   const init = await post({ jsonrpc: '2.0', id: 1, method: 'initialize',
     params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'journey-seed', version: '1' } } });
-  if (/"error"\s*:/.test(init.text)) throw new Error(`initialize was refused: ${init.text.slice(0, 300)}`);
+  if (!init.res.ok) return init.reply;
   const session = init.res.headers.get('mcp-session-id');
   const withSession = session ? { 'mcp-session-id': session } : {};
-  await post({ jsonrpc: '2.0', method: 'notifications/initialized' }, withSession);
-  await post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'gateway_invoke', arguments: call } }, withSession);
+  const noted = await post({ jsonrpc: '2.0', method: 'notifications/initialized' }, withSession);
+  if (!noted.res.ok) return noted.reply;
+  return (await post({ jsonrpc: '2.0', id: 2, method, ...(params === undefined ? {} : { params }) }, withSession)).reply;
 }
 
-async function until(deadline, what, probe) {
-  for (;;) {
-    if (await probe().catch(() => false)) return;
-    if (Date.now() > deadline) throw new Error(what);
-    await new Promise((done) => setTimeout(done, 250));
-  }
+/** The JSON-RPC message of an MCP answer: the body itself, or the last `data:` line of an event stream; else the text. */
+function rpcBody(text) {
+  const json = text.trimStart().startsWith('{') ? text
+    : text.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5)).pop();
+  try { return JSON.parse(json); } catch { return text; }
 }
 
 export async function applySeed(name, ctx) {

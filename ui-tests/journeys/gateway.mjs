@@ -6,7 +6,7 @@
 // the stub servers, both homes, the port and the teardown; no journey manages them itself.
 // Inputs: JOURNEYS_GATEWAY_BIN only. Unset, missing or not executable fails the run; nothing here ever skips.
 import { spawn, spawnSync } from 'node:child_process';
-import { constants, openSync, closeSync } from 'node:fs';
+import { constants, openSync, closeSync, realpathSync } from 'node:fs';
 import { access, appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
@@ -14,7 +14,7 @@ import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test as base, expect } from '../tests/base.mjs';
-import { applySeed } from './seeds.mjs';
+import { applySeed, mcpExchange } from './seeds.mjs';
 
 export { expect };
 
@@ -121,7 +121,16 @@ function runInit(bin, env, configPath) {
   if (r.status !== 0) throw new Error(`mcp-gateway init failed (exit ${r.status}): ${r.stderr || r.stdout}`);
 }
 
-async function until(deadline, what, probe) {
+/** init writes `  port: 39400` under `server:`; the test's port replaces it, so every start reads it from the config. */
+async function setPort(configPath, port) {
+  const text = await readFile(configPath, 'utf8');
+  if (!/^ {2}port: 39400$/m.test(text)) throw new Error(`${configPath} has no init "port: 39400" line to put the test's port in`);
+  await writeFile(configPath, text.replace(/^ {2}port: 39400$/m, `  port: ${port}`), { mode: 0o600 });
+}
+
+/** Polls `probe` until it returns something truthy (returned) or `deadline` passes (throws `what`). A probe that
+ * throws counts as "not yet", unless its error is marked `fatal`. Shared by the fixture, the seeds and the rows. */
+export async function until(deadline, what, probe) {
   for (;;) {
     const got = await probe().catch((e) => { if (e?.fatal) throw e; return null; });
     if (got) return got;
@@ -161,29 +170,41 @@ async function start({ seed, port, onSpawn }, owned) {
   const marker = `jh-${randomBytes(6).toString('hex')}`;
   await mkdir(join(home, '.config', 'mcp'), { recursive: true });
   await writeFile(join(home, '.config', 'mcp', 'h-planted.json'), JSON.stringify({ mcpServers: { 'h-planted': { command: 'npx', args: ['h'] } } }));
+  // The port lives in the config: the start command the gateway shows names none (part C, C-H1).
+  const chosen = port ?? await freePort();
+  await setPort(configPath, chosen);
   const seeded = await applySeed(seed ?? 'fresh', { home, configPath, marker });
   const seedMs = Date.now() - t0;
 
-  const chosen = port ?? await freePort();
   if (await answers(chosen)) throw new Error(`port ${chosen} already has a listener: refusing to start (a journey never attaches to a gateway it did not start)`);
   const logPath = join(home, 'gateway.log');
-  const logFd = openSync(logPath, 'a');
-  const t1 = Date.now();
-  const child = spawn(bin, ['-c', configPath, '-p', String(chosen), 'serve'], { env, detached: true, stdio: ['ignore', logFd, logFd] });
-  closeSync(logFd);
-  onSpawn?.();
-  live.add(child.pid);
+  const exe = realpathSync(bin);
+  let child = null;
   let exited = null;
-  child.on('exit', (code, signal) => { exited = { code, signal }; live.delete(child.pid); });
+  // One gateway process for this home: its absolute real path, no shell and so no PATH lookup, output appended.
+  const launch = (args) => {
+    const out = openSync(logPath, 'a');
+    const proc = spawn(exe, args, { env, detached: true, stdio: ['ignore', out, out] });
+    closeSync(out);
+    onSpawn?.();
+    child = proc;
+    exited = null;
+    live.add(proc.pid);
+    proc.on('exit', (code, signal) => { live.delete(proc.pid); if (child === proc) exited = { code, signal }; });
+  };
+  const t1 = Date.now();
+  launch(['serve', '--config', configPath]);
 
   const origin = `http://127.0.0.1:${chosen}`;
   const api = (p, { key = adminKey } = {}) => fetch(origin + p, { signal: AbortSignal.timeout(REQUEST_MS), headers: key ? { Authorization: `Bearer ${key}` } : {} });
   const handle = {
-    origin, port: chosen, pid: child.pid, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
+    origin, port: chosen, get pid() { return child.pid; }, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
     stubs: seeded.stubs ?? [], api,
+    mcp: (request) => mcpExchange(origin, request),
     listenerPids: () => listenerPids(chosen),
     stubLog: (name) => readFile(join(home, `stub-${name}.log`), 'utf8').catch(() => ''),
-    stop: async () => {
+    // Harness-internal (restart and stop use it): ends the current child and proves its port refuses again.
+    kill: async () => {
       if (!exited) {
         try { process.kill(-child.pid, 'SIGTERM'); } catch { /* gone */ }
         const end = Date.now() + STOP_MS;
@@ -195,6 +216,9 @@ async function start({ seed, port, onSpawn }, owned) {
       }
       live.delete(child.pid);
       if (await answers(chosen)) throw new Error(`port ${chosen} still answers after the gateway was stopped`);
+    },
+    stop: async () => {
+      await handle.kill();
       const after = await fingerprint(decoy);
       await rm(home, { recursive: true, force: true });
       await rm(decoy, { recursive: true, force: true });
@@ -211,22 +235,26 @@ async function start({ seed, port, onSpawn }, owned) {
     throw err;
   };
 
+  // The running child is up, serves this test's marker, is the only listener and reads H (design 6a-6d). The first
+  // start and every restart run it; it throws the harness's own diagnostic.
+  const prove = async () => {
+  const since = Date.now();
   try {
-    await until(t1 + HEALTH_MS, `gateway not healthy within ${HEALTH_MS} ms`, async () => {
+    await until(since + HEALTH_MS, `gateway not healthy within ${HEALTH_MS} ms`, async () => {
       if (exited) throw Object.assign(new Error('exited'), { fatal: true });
       return (await fetch(`${origin}/health`, { signal: AbortSignal.timeout(REQUEST_MS) })).status === 200;
     });
   } catch (e) {
-    return fail(exited ? `gateway exited before it was healthy (${JSON.stringify(exited)}); gateway not healthy within ${HEALTH_MS} ms` : e.message);
+    throw new Error(exited ? `gateway exited before it was healthy (${JSON.stringify(exited)}); gateway not healthy within ${HEALTH_MS} ms` : e.message);
   }
   const served = await (await api('/ui/api/gateway')).json().catch(() => ({}));
-  if (served?.environment?.name !== marker) return fail(`the gateway does not serve this test's marker ${marker} (got ${JSON.stringify(served?.environment)})`);
+  if (served?.environment?.name !== marker) throw new Error(`the gateway does not serve this test's marker ${marker} (got ${JSON.stringify(served?.environment)})`);
   const pids = listenerPids(chosen);
-  if (!listenerIsChild(pids, child.pid)) return fail(`the listener on ${chosen} is ${JSON.stringify(pids)}, not the child ${child.pid}`);
-  try {
-    await until(Date.now() + SETTLE_MS, 'the gateway never listed h-planted: it is not reading the test home', async () =>
+  if (!listenerIsChild(pids, child.pid)) throw new Error(`the listener on ${chosen} is ${JSON.stringify(pids)}, not the child ${child.pid}`);
+  await until(Date.now() + SETTLE_MS, 'the gateway never listed h-planted: it is not reading the test home', async () =>
       JSON.stringify(await (await api('/ui/api/discovery')).json()).includes('h-planted'));
-  } catch (e) { return fail(e.message); }
+  };
+  try { await prove(); } catch (e) { return fail(e.message); }
   const seen = JSON.stringify(await (await api('/ui/api/discovery')).json()) + JSON.stringify(await (await api('/ui/api/backends')).json());
   if (seen.includes('decoy-planted')) return fail('the gateway read the decoy home: decoy-planted is listed');
   if ((await api('/ui/api/status', { key: decoyKey })).status !== 401) return fail('the decoy home\'s key is accepted');
