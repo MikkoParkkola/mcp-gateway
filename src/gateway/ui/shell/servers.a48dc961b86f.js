@@ -12,7 +12,7 @@
 import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.8b83e3c661ed.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
 import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.08f18cca622a.js';
-import { addCard } from '/ui/assets/server-add.754677e6a196.js';
+import { addCard } from '/ui/assets/server-add.57b8be26acdd.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {

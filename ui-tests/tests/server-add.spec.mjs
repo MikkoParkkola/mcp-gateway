@@ -153,3 +153,21 @@ test.describe('K1 the value rows follow the kind', () => {
     expect(seen.previews[1]).toEqual({ name: 'fetch', command: 'uvx mcp-server-fetch', env: { Authorization: 'Bearer k-123' } });
   });
 });
+
+test.describe('A1 axe in the card\'s states (slice: input and described)', () => {
+  for (const width of WIDTHS) {
+    for (const colorScheme of ['dark', 'light']) {
+      test(`${width} px, ${colorScheme}`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme });
+        await addPage(page, { preview: () => described({ withheld: { env: [], headers: ['Authorization'], oauth: false, secrets: 0, identity_propagation: false, account: false } }) });
+        await field(page).fill(HTTPS);
+        await card(page).getByRole('button', { name: 'Add a value' }).click();
+        expect(await blockingViolations(page, '.add-server'), 'input state').toEqual([]);
+        await previewButton(page).click();
+        await expect(card(page).getByRole('region', { name: 'Nothing has run yet' })).toBeVisible();
+        expect(await blockingViolations(page, '.add-server'), 'described state').toEqual([]);
+      });
+    }
+  }
+});

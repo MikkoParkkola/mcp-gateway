@@ -92,11 +92,11 @@ export function addCard(body, ctx) {
   const rowsErr = el('p', { class: 'add-err', id: `${uid}-rows-err`, hidden: true });
   const addRow = el('button', { type: 'button', class: 'btn quiet' }, 'Add a value');
   const rowsNote = el('p', { class: 't3' }, WORDS.rowsNote);
-  const rowsSet = el('fieldset', { class: 'add-rows', 'aria-describedby': `${uid}-rows-err` }, legend, rowsErr, rowList, addRow, rowsNote);
+  const rowsSet = el('fieldset', { class: 'add-rows sp-card', 'aria-describedby': `${uid}-rows-err` }, legend, rowsErr, rowList, addRow, rowsNote);
   const stage = el('div', { class: 'add-stage' });
   const previewBtn = el('button', { type: 'button', class: 'btn primary' }, 'Start once to preview');
   const acts = el('div', { class: 'acts' }, previewBtn);
-  const section = el('section', { class: 'add-server', role: 'region', 'aria-labelledby': `${uid}-title` },
+  const section = el('section', { class: 'add-server sp', role: 'region', 'aria-labelledby': `${uid}-title` },
     title, modes, el('label', { for: `${uid}-field` }, 'Command or URL'), field, fieldErr, hint, nameLine, nameErr, rowsSet, stage, acts);
   body.append(section);
 
@@ -209,7 +209,7 @@ export function addCard(body, ctx) {
   /** A panel in the stage: a region whose heading takes focus when it appears (rule 10). */
   const panel = (heading, ...children) => {
     const h = el('h3', { id: `${uid}-panel`, tabindex: '-1' }, heading);
-    const node = el('section', { class: 'add-panel', role: 'region', 'aria-labelledby': h.id }, h, ...children);
+    const node = el('section', { class: 'add-panel sp-card', role: 'region', 'aria-labelledby': h.id }, h, ...children);
     stage.replaceChildren(node);
     h.focus({ preventScroll: true });
     return node;
@@ -289,7 +289,7 @@ export function addCard(body, ctx) {
     st.confirm = answer?.confirm ?? null;
     const held = [...(p.withheld?.env ?? []), ...(p.withheld?.headers ?? [])].filter((n) => typeof n === 'string');
     st.withheld = held.length > 0;
-    const facts = el('dl', { class: 'add-facts' },
+    const facts = el('dl', { class: 'sp-facts' },
       ...fact('Runs from', `${location.host}, the gateway's own host`),
       ...fact('Transport', String(p.transport ?? '')),
       ...(p.url ? fact('Address', String(p.url)) : []));
