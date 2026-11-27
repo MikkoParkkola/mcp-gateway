@@ -255,6 +255,7 @@ fn exits_that_were_two_stay_two() {
     ]);
     let mut env_case = wrong_call("add", env_args.clone(), Pin::Starts("error: "));
     env_case.second = Pin::Has(env_file.clone());
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut cases = vec![
         (
             "too long",
