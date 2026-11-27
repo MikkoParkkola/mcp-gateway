@@ -26,9 +26,9 @@ fn run_with_stdin(args: &[String], stdin: &[u8]) -> std::process::Output {
 }
 
 /// Fails with every miss of every case, each named.
-fn check(cases: Vec<(&str, std::process::Output, Case)>) {
+fn check(cases: &[(&str, std::process::Output, Case)]) {
     let mut misses = Vec::new();
-    for (label, out, case) in &cases {
+    for (label, out, case) in cases {
         misses.extend(two_lines(label, out, case));
     }
     assert!(misses.is_empty(), "{}", misses.join("\n"));
@@ -163,7 +163,7 @@ fn wrong_invocations_exit_two() {
             Pin::Starts("error: "),
         ),
     ];
-    let results = cases
+    let results: Vec<_> = cases
         .into_iter()
         .map(|(leaf, args, first)| {
             let out = run(&args);
@@ -176,7 +176,7 @@ fn wrong_invocations_exit_two() {
         "trust lab evaluate wrote {} before refusing",
         baseline.display()
     );
-    check(results);
+    check(&results);
 }
 
 /// B1, B2: `tool invoke`'s other argument refusals share the `--args` error arm but stay exit 1.
@@ -196,7 +196,7 @@ fn tool_invoke_bad_stdin_and_pairs_stay_one() {
     };
     let stdin_args = strings(&["tool", "invoke", "zz", "-C", &dir]);
     let pair_args = strings(&["tool", "invoke", "zz", "-C", &dir, "novalue"]);
-    check(vec![
+    check(&[
         (
             "stdin not JSON",
             run_with_stdin(&stdin_args, b"{"),
@@ -313,7 +313,7 @@ fn exits_that_were_two_stay_two() {
             wrong_call("hash-key", hash_key.clone(), Pin::Starts("error: ")),
         ));
     }
-    check(cases);
+    check(&cases);
 }
 
 /// X1: hash-key with a terminal on stdin (no piped key) is a wrong invocation, exit 2.
@@ -332,7 +332,7 @@ fn hash_key_on_a_terminal_is_a_wrong_call() {
         .expect("open the follower");
     let hash_key = strings(&["hash-key"]);
     let out = super::run_env(&hash_key, &[], std::process::Stdio::from(follower));
-    check(vec![(
+    check(&[(
         "a terminal on stdin",
         out,
         wrong_call("hash-key", hash_key, Pin::Starts("error: ")),
@@ -356,7 +356,7 @@ fn a_line_break_in_a_built_error_keeps_two_lines() {
         second: Pin::NonEmpty,
         env: Vec::new(),
     };
-    check(vec![("cap test (line break)", out, case)]);
+    check(&[("cap test (line break)", out, case)]);
 }
 
 /// L2: a note printed before a failure stays, and the error and its remedy are the last two lines.
