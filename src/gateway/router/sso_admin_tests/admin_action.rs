@@ -360,11 +360,7 @@ async fn ui_delete_writes_admin_action() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
     let uri = "/ui/api/backends/alpha";
     let (status, body) = fx.send(ui("DELETE", uri, &fx.alice(), &json!({}))).await;
-    assert_eq!(
-        status,
-        StatusCode::CONFLICT,
-        "no config path: {body}"
-    );
+    assert_eq!(status, StatusCode::CONFLICT, "no config path: {body}");
     let records = fx.admin_actions();
     assert_eq!(records.len(), 1, "{records:#?}");
     assert_record(&records[0], "admin_ui", "error", Some(-32603));
@@ -382,11 +378,7 @@ async fn ui_patch_writes_admin_action() {
     let uri = "/ui/api/backends/alpha";
     let body = json!({"url": format!("wss://{BODY_CANARY}.example/mcp")});
     let (status, answer) = fx.send(ui("PATCH", uri, &fx.alice(), &body)).await;
-    assert_eq!(
-        status,
-        StatusCode::CONFLICT,
-        "no config path: {answer}"
-    );
+    assert_eq!(status, StatusCode::CONFLICT, "no config path: {answer}");
     let (status, answer) = fx.send(ui("PATCH", uri, STANDARD_KEY, &body)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
     let records = fx.admin_actions();
