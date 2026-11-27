@@ -16,6 +16,8 @@ test('harness smoke: try a tool', async ({ page, gw }) => {
   await page.locator('#signin-form input').first().fill(gw.adminKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await page.getByRole('link', { name: 'Tools' }).first().click();
+  // Tools opens on its Status tab; trying a tool is on the Actions tab (/ui/tools/actions).
+  await page.getByRole('navigation', { name: 'Tabs' }).getByRole('link', { name: 'Actions' }).click();
 
   const picker = page.locator('#try-tool');
   // Both stubs serve tide_table; the option label is "<tool> <server> · ...", so pick tide's own.
