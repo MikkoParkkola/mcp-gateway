@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -577,7 +577,7 @@
+   });
+ }
+ /** A line's width: 1 to 8 px by its calls against the column's busiest; no number gives the neutral 1. */
+-const width = (calls, max) => (calls === null || !max ? 1 : Math.round((1 + (7 * calls) / max) * 100) / 100);
++const width = (calls, max) => (calls === null ? 4.5 : !max ? 1 : Math.round((1 + (7 * calls) / max) * 100) / 100);
+ /** The x where each column's lines meet the hub, in the 0-100 box the svg spans. */
+ const EDGE = { agents: 37.5, servers: 62.5 };
+ 

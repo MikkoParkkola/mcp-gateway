@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -582,7 +582,7 @@
+ const EDGE = { agents: 37.5, servers: 62.5 };
+ 
+ /** A caller's link to its calls in Activity, by account, built so any character stays one value. */
+-const callsOfCaller = (account) => `/ui/activity/status?${new URLSearchParams({ key: account })}`;
++const callsOfCaller = (account) => `/ui/activity/status?${new URLSearchParams({ key: account, outcome: 'blocked' })}`;
+ 
+ /** One row's nodes: the item, its link or box, name, second line and calls. */
+ function rowNodes(side) {

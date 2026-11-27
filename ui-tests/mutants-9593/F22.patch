@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -615,7 +615,7 @@
+   const was = nodes.was ?? {};
+   const set = (k, v, write) => { if (was[k] !== v) { write(v); was[k] = v; } };
+   set('up', String(Boolean(row.up)), (v) => { nodes.li.dataset.up = v; });
+-  set('name', row.name, (v) => { nodes.name.textContent = v; nodes.name.title = v; });
++  set('name', row.name, (v) => { nodes.name.innerHTML = v; nodes.name.title = v; });
+   if (side === 'servers' && !row.fold) set('state', row.state, (v) => nodes.sub.replaceChildren(serverBadge(v, { plain: true })));
+   else set('sub', row.sub, (v) => { was.state = undefined; nodes.sub.textContent = v; });
+   set('calls', row.calls === null ? '' : n(row.calls), (v) => { nodes.calls.textContent = v; });

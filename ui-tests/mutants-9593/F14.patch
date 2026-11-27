@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -718,7 +718,7 @@
+   let again = false;
+   let lastGood = Date.now() / 1000;
+   const gone = () => {
+-    if (root.isConnected) return false;
++    if (true) return false;
+     removeEventListener('gateway-status', onEvent);
+     removeEventListener('gateway-reload', onEvent);
+     clearTimeout(timer);

@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -675,6 +675,7 @@
+     const max = Math.max(0, ...rows.filter((r) => !r.fold && r.calls !== null).map((r) => r.calls));
+     rows.forEach((row, i) => {
+       let nodes = held.get(row.key);
++      if (nodes) { nodes.li.remove(); nodes.path.remove(); nodes = null; }
+       if (!nodes) {
+         nodes = rowNodes(side);
+         held.set(row.key, nodes);

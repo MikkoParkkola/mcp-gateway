@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/overview.0582c8181411.css b/src/gateway/ui/shell/overview.0582c8181411.css
+--- a/src/gateway/ui/shell/overview.0582c8181411.css
++++ b/src/gateway/ui/shell/overview.0582c8181411.css
+@@ -104,7 +104,6 @@
+   /* A 12 px dot in a 24 px target (the minimum for a fine pointer): the padding is part of the hit area. */
+   box-sizing: content-box; padding: var(--space-1-5); background-clip: content-box; }
+ /* The card's own display rules would otherwise outrank the hidden attribute. */
+-.ov-flow [hidden] { display: none; }
+ .ov-map-note, .ov-map-empty { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
+ @media (pointer: coarse) { .ov-dot { min-width: var(--size-touch); min-height: var(--size-touch); background-clip: content-box; padding: var(--space-4); } }
+ 
