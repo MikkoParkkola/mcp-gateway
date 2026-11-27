@@ -583,9 +583,11 @@ const FREEZE_SLICE: Duration = Duration::from_millis(700);
 /// How long the snapshot before a stop may read: the first-snapshot p99
 /// target. A reading cut short only seeds; it prunes nothing.
 const SNAPSHOT_SLICE: Duration = Duration::from_millis(5);
-/// How many slices one snapshot may read when its readings are cut: every
-/// cut seen on Spark (5.9 to 7.0 ms, 3 in 110 runs, t9477rp2 and t9477abr)
-/// would have completed in the second slice; four bound a snapshot at 20 ms.
+/// How many readings one snapshot may take when they are cut. Each reading
+/// has one slice plus the read in flight when the slice passes, so a host
+/// stall stretches it: 80 runs on Spark (t9477snap7c) saw three cuts in a
+/// row twice, the fourth reading completing, 38.8 ms for the whole snapshot.
+/// The time is charged to the stop's plan (`plan::ending_around_snapshot`).
 const SNAPSHOT_SLICES: u32 = 4;
 /// The wait between two polls of a frozen process's state, and the first
 /// pause between two unsettled readings (design delta D5'''').

@@ -323,7 +323,8 @@ impl super::StopDeadline {
 }
 
 /// A handover's budget is fixed before its stop snapshot runs (a cut snapshot
-/// may read for up to 20 ms), so the snapshot's time comes off before the
+/// reads up to four times, each a slice plus the read in flight: 38.8 ms seen
+/// under host stalls), so the snapshot's time comes off before the
 /// plan: 3 s past the kill reserve with a 1 s snapshot leaves waits of 2 s,
 /// and with no snapshot time the waits stay 3 s. Red if the snapshot's time
 /// is not subtracted (waits of 3 s both times).
