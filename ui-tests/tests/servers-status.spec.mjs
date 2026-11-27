@@ -146,7 +146,7 @@ test.describe('precedence: one screen per status answer', () => {
     await openScreen(page);
     const empty = content(page).locator('[data-state="empty"]');
     await expect(empty).toBeVisible();
-    await expect(empty.getByRole('link', { name: 'Add a server' })).toHaveAttribute('href', '/ui/classic');
+    await expect(empty.getByRole('link', { name: 'Add a server' })).toHaveAttribute('href', '/ui/servers/settings');
     await expect(statusRow(block(page, 'Not behind the gateway'), 'stray claude_desktop')).toBeVisible();
     expect(reads).toEqual({ status: 1, registry: 1, discovery: 1 });
   });
