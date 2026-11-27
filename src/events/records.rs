@@ -562,13 +562,66 @@ pub(super) fn rename(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 pub(crate) fn sync_dir(dir: &Path) -> std::io::Result<()> {
-    #[cfg(windows)]
-    {
-        crate::private_fs::sync_dir(dir)
+    #[cfg(test)]
+    if sync_fault::take(dir) {
+        return Err(std::io::Error::other("injected directory sync failure"));
     }
+    #[cfg(windows)]
+    let synced = crate::private_fs::sync_dir(dir);
     #[cfg(not(windows))]
-    {
-        std::fs::File::open(dir)?.sync_all()
+    let synced = std::fs::File::open(dir).and_then(|f| f.sync_all());
+    #[cfg(test)]
+    if synced.is_ok() {
+        sync_fault::count(dir);
+    }
+    synced
+}
+
+/// Test builds only: make the next directory syncs of one path fail, and count
+/// the ones that succeed. Keyed by path, not thread: the RPC runs the store on a
+/// blocking worker, where a thread-local armed on the test thread never fires.
+#[cfg(test)]
+pub(crate) mod sync_fault {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, PoisonError};
+
+    /// Per directory: (failures still armed, successful syncs).
+    static SLOTS: Mutex<Option<HashMap<PathBuf, (u32, u32)>>> = Mutex::new(None);
+
+    fn with<T>(dir: &Path, f: impl FnOnce(&mut (u32, u32)) -> T) -> T {
+        let mut slots = SLOTS.lock().unwrap_or_else(PoisonError::into_inner);
+        f(slots
+            .get_or_insert_with(HashMap::new)
+            .entry(dir.to_path_buf())
+            .or_default())
+    }
+
+    /// The next `n` syncs of `dir` fail.
+    pub(crate) fn arm(dir: &Path, n: u32) {
+        with(dir, |slot| slot.0 += n);
+    }
+
+    /// Failures armed on `dir` and not yet spent.
+    pub(crate) fn armed(dir: &Path) -> u32 {
+        with(dir, |slot| slot.0)
+    }
+
+    /// Successful syncs of `dir` so far.
+    pub(crate) fn synced(dir: &Path) -> u32 {
+        with(dir, |slot| slot.1)
+    }
+
+    pub(super) fn take(dir: &Path) -> bool {
+        with(dir, |slot| {
+            let armed = slot.0 > 0;
+            slot.0 = slot.0.saturating_sub(1);
+            armed
+        })
+    }
+
+    pub(super) fn count(dir: &Path) {
+        with(dir, |slot| slot.1 += 1);
     }
 }
 
