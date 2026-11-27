@@ -507,6 +507,19 @@ def _hunks(patch: str) -> list[list[tuple[str, str]]]:
     return hunks
 
 
+def _splice(lines: list[str], edits: list[tuple[int, int, list[str]]]) -> str | None:
+    """`lines` (kept ends) with each edit (first old line index, old line count, new lines)
+    put in, as one text; None when two edits overlap."""
+    out, cursor = [], 0
+    for first, count, new in sorted(edits):
+        if first < cursor:
+            return None
+        out.extend(lines[cursor:first])
+        out.extend(new)
+        cursor = first + count
+    return "".join(out + lines[cursor:])
+
+
 def _contained(source: str, decl: Decl, patch: str) -> str | None:
     """None when every hunk anchors to exactly one place in the file and the patched file differs
     from `source` only inside `decl`: the text before its `fn` and after its closing brace stay
@@ -525,13 +538,9 @@ def _contained(source: str, decl: Decl, patch: str) -> str | None:
         if all(mark == " " for mark, _ in hunk):
             return f"hunk {k} changes nothing"
         edits.append((hits[0], len(old), [text + "\n" for mark, text in hunk if mark != "-"]))
-    patched, cursor = [], 0
-    for first, count, replacement in sorted(edits):
-        if first < cursor:
-            return "two hunks overlap"
-        patched += lines[cursor:first] + replacement
-        cursor = first + count
-    patched_text = "".join(patched + lines[cursor:])
+    patched_text = _splice(lines, edits)
+    if patched_text is None:
+        return "two hunks overlap"
     before, after = source[:decl.at], source[decl.stop + 1:]
     if not patched_text.startswith(before):
         return f"it changes text before {decl.name} (line {decl.start})"
@@ -839,8 +848,10 @@ def _gap_rows(tree: Tree, outcomes: list[Outcome]) -> list[tuple[dict[str, str],
 # inside the killer (or the helper the row names), in the file as the mutant run compiles it.
 # It cannot prove the killer panics there; only the gate-day log does, through G7.
 
-# `<file>:<line> <text> [stmt:<8 hex>]`, then free annotations; `[via F]` names a helper.
-_SITE = re.compile(r"^(\S+):(\d+) (.+?) \[stmt:([0-9a-f]{8})\](.*)$")
+# `<file>:<line> <text> [stmt:<8 hex>]`, then free annotations; `[via F]` names a helper. The
+# text may itself hold a `[stmt:...]`, so the marker is chosen against the judged line.
+_SITE = re.compile(r"^(\S+):(\d+) (.+)$")
+_STMT = re.compile(r" \[stmt:([0-9a-f]{8})\]")
 _VIA = re.compile(r"\[via ([A-Za-z_]\w*)\]")
 
 
@@ -851,23 +862,25 @@ def _collapse(text: str) -> str:
 def _apply_reanchored(source: str, patch: str) -> str:
     """`source` with `patch` applied by its hunk headers. Only for a patch `_reanchor` wrote,
     whose headers name exactly where each old side sits in `source`."""
-    lines, out, cursor = source.splitlines(keepends=True), [], 0
-    for header, hunk in zip(re.findall(r"^@@ -(\d+),(\d+) ", patch, flags=re.M), _hunks(patch)):
-        first, count = int(header[0]) - 1, int(header[1])
-        out += lines[cursor:first] + [text + "\n" for mark, text in hunk if mark != "-"]
-        cursor = first + count
-    return "".join(out + lines[cursor:])
+    lines = source.splitlines(keepends=True)
+    edits = [(int(head[0]) - 1, int(head[1]), [text + "\n" for mark, text in hunk if mark != "-"])
+             for head, hunk in zip(re.findall(r"^@@ -(\d+),(\d+) ", patch, flags=re.M), _hunks(patch))]
+    text = _splice(lines, edits)
+    if text is None:
+        raise Unsupported("the row's patch has overlapping hunks")
+    return text
 
 
-def _statement(source: str, code: str, line: int) -> str:
-    """The statement that starts at 1-based `line`, whitespace-collapsed: from the line's first
-    non-blank character, reading brackets in the blanked `code`, up to a `;` or `,` at depth 0
-    (kept), a closer that would take the depth below 0 (left out), or a line end at depth 0."""
-    src, blanked = source.splitlines(), code.splitlines()
+def _statement(src: list[str], blanked: list[str], line: int) -> str:
+    """The statement that starts at 1-based `line`, whitespace-collapsed, from the source lines
+    `src` and the same lines blanked: from the source line's first non-blank character (a
+    literal or comment there still counts), reading brackets only in the blanked text, up to a
+    `;` or `,` at depth 0 (kept), a closer that would take the depth below 0 (left out), or a
+    line end at depth 0."""
     depth, parts = 0, []
     for k in range(line - 1, len(blanked)):
         text = blanked[k]
-        start = len(text) - len(text.lstrip()) if k == line - 1 else 0
+        start = len(src[k]) - len(src[k].lstrip()) if k == line - 1 else 0
         end, done = len(text), False
         for i in range(start, len(text)):
             ch = text[i]
@@ -890,12 +903,12 @@ def _statement(source: str, code: str, line: int) -> str:
 def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: str) -> str | None:
     """Why the row's declared_assertion would not be the site G7 matches, or None."""
     m = _SITE.match(row.get("declared_assertion", "").strip())
-    if not m:
+    marks = list(_STMT.finditer(m.group(3))) if m else []
+    if not marks or not marks[0].start():
         return "declared assertion does not open with file:line, text and [stmt:<8 hex>]"
-    path, line, text, digest, tail = m.group(1), int(m.group(2)), m.group(3), m.group(4), m.group(5)
+    path, line, rest = m.group(1), int(m.group(2)), m.group(3)
     site = f"declared assertion {path}:{line}"
     killer = row["declared_killer_args"].split()[-1].rsplit("::", 1)[-1]
-    via = _VIA.search(tail)
 
     def judged(file: str) -> str:
         # The file the mutant run compiled: the row's own patch applied when it edits that file.
@@ -906,18 +919,22 @@ def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: 
         return f"{site}: no such file"
     try:
         source = judged(path)
-        code = blank(source)
         decls = declarations(source)
         killer_src = source if killer_file == path else judged(killer_file)
         killer_decls = [d for d in (decls if killer_file == path else declarations(killer_src)) if d.name == killer]
     except Unsupported as unreadable:
         return f"{site}: cannot read the source with certainty: {unreadable}"
-    count = len(source.splitlines())
+    src, blanked = source.splitlines(), blank(source).splitlines()
+    count = len(src)
     if not 1 <= line <= count:
         return f"{site} is outside the file's {count} lines"
     if len(killer_decls) != 1:
         return f"{site}: {killer} is declared {len(killer_decls)} times in {killer_file}"
     kdecl = killer_decls[0]
+    # The digest marker is the one whose text before it is the judged line; else the first.
+    wanted = _collapse(src[line - 1])
+    pick = next((mk for mk in marks if _collapse(rest[:mk.start()]) == wanted), marks[0])
+    text, digest, via = rest[:pick.start()], pick.group(1), _VIA.search(rest[pick.end():])
     if via:
         helper = via.group(1)
         holders = [d for d in decls if d.start <= line <= d.end]
@@ -933,13 +950,13 @@ def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: 
         if path != killer_file or not kdecl.start <= line <= kdecl.end:
             return f"{site} is not inside {killer}"
         span = kdecl
-    if _collapse(source.splitlines()[line - 1]) != _collapse(text):
+    if _collapse(src[line - 1]) != _collapse(text):
         return f"{site} does not carry the recorded text"
-    statement = _statement(source, code, line)
+    statement = _statement(src, blanked, line)
     actual = hashlib.sha256(statement.encode()).hexdigest()[:8]
     if actual != digest:
         return f"{site} statement digest is {actual}, recorded {digest}"
-    same = sum(_statement(source, code, k) == statement for k in range(span.start, span.end + 1))
+    same = sum(_statement(src, blanked, k) == statement for k in range(span.start, span.end + 1))
     if same != 1:
         return f"statement at {path}:{line} occurs {same} times in {span.name}"
     return None
