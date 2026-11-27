@@ -311,7 +311,7 @@ export const SERVER_STATES = {
     glyph: 'ⓘ',
     tone: 'neutral',
     banner: (s) => `${s.name} is on this machine but not behind the gateway.`,
-    next: () => 'Add it from the Servers Actions tab.',
+    next: () => 'Add it from Servers › Settings.',
   },
   // Switched off by its owner: nothing is wrong, so the quiet glyph and tone.
   off: { glyph: 'ⓘ', tone: 'neutral', banner: (s) => OFF_BANNER(s.name), next: () => OFF_NEXT },
@@ -548,6 +548,15 @@ function pump() {
 
 /** Whether the page and identity a message was asked for are still the ones shown. */
 const guardHolds = (guard) => guard.epoch === authEpoch && (guard.seq === null || guard.seq === renderSeq);
+
+/** The session a screen's request starts in; hand it to `sessionHolds` when the answer arrives. */
+export const sessionNow = () => authEpoch;
+
+/**
+ * Whether the session `epoch` names is still the one on screen: nobody else signed in
+ * since, and the sign-in view is not showing (a 401 opens it without a new epoch).
+ */
+export const sessionHolds = (epoch) => epoch === authEpoch && !document.body.classList.contains('signed-out');
 
 /** `text` ending as a sentence, so a batch reads as separate sentences. */
 const sentence = (text) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
