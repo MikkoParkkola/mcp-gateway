@@ -250,6 +250,22 @@ pub fn answers_livez(port: u16) -> bool {
         && answer.starts_with("HTTP/1.1 200")
 }
 
+/// Starts the gateway on `config` from the working directory `cwd`, with
+/// `home` as its isolated home and `state` as `MCP_GATEWAY_CONFIG_DIR`, both
+/// of its output streams going to the file `log`. The child is killed if the
+/// returned owner drops while it still runs. A pure addition: no existing
+/// caller changes.
+pub fn spawn_logged(home: &Path, state: &Path, config: &Path, cwd: &Path, log: &Path) -> Reaped {
+    let stdout = std::fs::File::create(log).expect("the gateway's log file");
+    let stderr = stdout.try_clone().expect("a second handle on the log file");
+    let mut gateway = tokio::process::Command::from(command(home, Inherit::Environment));
+    gateway.env("MCP_GATEWAY_CONFIG_DIR", state);
+    gateway.current_dir(cwd).arg("--config").arg(config);
+    gateway.stdin(std::process::Stdio::null()).stdout(stdout).stderr(stderr);
+    gateway.kill_on_drop(true);
+    Reaped::new(gateway.spawn().expect("the gateway binary spawns"))
+}
+
 /// A spawned gateway together with every folder it, or a backend it started,
 /// writes into. Folders are removed only after the gateway drained on a
 /// SIGTERM and exited by itself: then its own shutdown has ended its
