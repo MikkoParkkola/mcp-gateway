@@ -163,6 +163,9 @@ async function fingerprint(dir) {
     for (const e of await readdir(d, { withFileTypes: true })) {
       const p = join(d, e.name);
       if (e.isDirectory()) await walk(p);
+      // A socket, pipe or link is recorded by its kind, never read: reading a socket another process left (a browser
+      // the gateway launched with HOME = D) crashed the check instead of reporting the changed decoy.
+      else if (!e.isFile()) out[relative(dir, p)] = `not a file: ${e.isSymbolicLink() ? 'link' : e.isSocket() ? 'socket' : 'other'}`;
       else out[relative(dir, p)] = createHash('sha256').update(await readFile(p)).digest('hex');
     }
   }
