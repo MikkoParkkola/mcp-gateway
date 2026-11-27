@@ -97,11 +97,7 @@ fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
             &format!("{PROVENANCE_SEED_ENV} is not set"),
             &format!("Set it and {PROVENANCE_KEY_ID_ENV} to export the public key."),
         ),
-        Err(error) => fail(
-            CliExit::LocalFailure,
-            &error,
-            &write_remedy(config),
-        ),
+        Err(error) => fail(CliExit::LocalFailure, &error, &write_remedy(config)),
     }
 }
 

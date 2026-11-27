@@ -185,11 +185,7 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
             println!("   sha256: {hash}");
             ExitCode::SUCCESS
         }
-        Ok(Err(error)) => fail(
-            CliExit::LocalFailure,
-            &error,
-            &check_capability_file(&file),
-        ),
+        Ok(Err(error)) => fail(CliExit::LocalFailure, &error, &check_capability_file(&file)),
         Err(join) => fail(
             CliExit::LocalFailure,
             &format!("Pinning {} stopped: {join}", file.display()),
