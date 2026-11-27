@@ -358,13 +358,14 @@ impl super::MetaMcp {
         // composite carries on past never marks what the composite delivers.
         // The trace is noted inside that cell, as the one the step's record
         // carries, for a settlement that joins the step the plan ended on.
-        let sourced = crate::gateway::delivery_facts::step(async {
-            let trace_id = crate::gateway::trace::generate();
-            crate::gateway::delivery_facts::note_step_trace(&trace_id);
-            self.invoke_tool_with_source(args, session_id, caller, trace_id)
-                .await
-        })
-        .await;
+        let sourced =
+            crate::gateway::delivery_facts::step(super::invoke::audit_owner::inline(async {
+                let trace_id = crate::gateway::trace::generate();
+                crate::gateway::delivery_facts::note_step_trace(&trace_id);
+                self.invoke_tool_with_source(args, session_id, caller, trace_id)
+                    .await
+            }))
+            .await;
         match sourced {
             Ok(super::invoke::SourcedOutcome::Live((value, _, _))) => Ok(value),
             // A nested invocation's key never matches a deferred entry

@@ -264,6 +264,7 @@ async fn an_unavailable_audit_log_classes_and_counts_nothing() {
         "trace-r5",
         Err(Error::AuditUnavailable),
         super::super::audit::DispatchNotes::default(),
+        None,
     ));
     assert!(matches!(result, Err(Error::AuditUnavailable)), "{result:?}");
     // No file is no record; any other read error must not pass as one.

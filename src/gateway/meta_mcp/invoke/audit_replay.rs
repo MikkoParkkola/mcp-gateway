@@ -106,11 +106,12 @@ impl MetaMcp {
                 log,
                 &envelope,
                 session_id,
-                caller,
+                crate::security::audit::AuditWho::from_caller(caller),
                 &trace_id,
                 &facts,
                 attribution,
                 decision,
+                super::super::super::grant_audit::open_slot_recorded(),
             )
             .await
         {

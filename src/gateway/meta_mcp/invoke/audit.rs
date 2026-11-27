@@ -55,6 +55,43 @@ pub(crate) enum SettlementJoin {
     TaskId,
 }
 
+/// What a delivered call notes about its reads once its record is written:
+/// the dispatch's reading and whether a backend answered. `None` notes nothing.
+pub(crate) type DeliveredReading =
+    Option<(Option<crate::security::tenant_reads::ReadAttribution>, bool)>;
+
+/// The scan's verdict on the answer a record describes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AnswerVerdict {
+    /// Delivered as dispatched, or rewritten but still delivered.
+    Delivered,
+    /// Refused by the response firewall.
+    Refused,
+}
+
+/// One call's invocation record, built where the call finished and owned
+/// until it is written: everything read from the call's scopes and its
+/// caller is taken here, so the write needs neither.
+pub(crate) struct InvocationRecord {
+    withheld: Option<AuditOutcome>,
+    /// The class of the dispatch's own result, before any scan verdict.
+    answered: Option<AuditOutcome>,
+    denial: Option<crate::security::security_metrics::DenialReason>,
+    firewall: bool,
+    response_hash: Option<String>,
+    /// The delivered value, kept only for a cache or replay attribution.
+    delivered: Option<Value>,
+    succeeded: bool,
+    args: Value,
+    session_id: Option<String>,
+    trace_id: String,
+    who: AuditWho,
+    credential_kind: crate::security::audit::CredentialKind,
+    recorded: Option<super::super::grant_audit::RecordedSet>,
+    reading: DeliveredReading,
+    notes: DispatchNotes,
+}
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
@@ -186,9 +223,12 @@ fn note(f: impl FnOnce(&mut DispatchNotes)) {
     let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));
 }
 
-/// Note that the response firewall refused this call's answer.
+/// Note that the response firewall refused this call's answer: in the
+/// call's own notes (the direct route scans inside them) and in the open
+/// audit owner (the meta route scans after they ended).
 pub(crate) fn note_response_refused() {
     note(|notes| notes.response_refused = true);
+    super::audit_owner::answer_refused();
 }
 
 /// Note that this call's dispatch missed a backend its gate found absent.
@@ -596,13 +636,19 @@ fn sha256_of(value: &Value) -> String {
 
 impl MetaMcp {
     /// Record `result` and hand it on, or withhold it when the record cannot be
-    /// written under [`AuditFailurePolicy::FailClosed`] (D1-f).
+    /// written under [`AuditFailurePolicy::FailClosed`] (D1-f). Under an open
+    /// [`super::audit_owner`] (HTTP `/mcp`) `result` passes straight on and the
+    /// owner writes the record after the answer's scan (D2.3).
     ///
     /// `request_hash` covers `args` as the caller sent them, gateway directives
     /// included; `response_hash` covers the value returned to the caller
     /// (D1-d.1). A failed call has no response hash. `notes` carries
     /// the backend failure code a call converted to a tool result, and the
     /// tenant attribution its gates saw.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call's finished parts, before they become one owned record"
+    )]
     pub(super) async fn audit_invocation(
         &self,
         args: &Value,
@@ -610,22 +656,83 @@ impl MetaMcp {
         caller: &MetaMcpCallerContext<'_>,
         trace_id: &str,
         result: Result<Value>,
-        mut notes: DispatchNotes,
+        notes: DispatchNotes,
+        reading: DeliveredReading,
     ) -> Result<Value> {
+        let record = InvocationRecord {
+            withheld: super::denial::withheld(args, notes.not_found),
+            answered: AuditOutcome::from_result(&result),
+            denial: crate::security::security_metrics::meta_denial(&result),
+            firewall: matches!(result, Err(Error::ResponseFirewallRefused)),
+            response_hash: result.as_ref().ok().map(sha256_of),
+            delivered: notes.cached.and(result.as_ref().ok()).cloned(),
+            succeeded: result.is_ok(),
+            args: args.clone(),
+            session_id: session_id.map(str::to_owned),
+            trace_id: trace_id.to_owned(),
+            who: AuditWho::from_caller(caller),
+            credential_kind: caller.credential_kind,
+            recorded: super::super::grant_audit::open_slot_recorded(),
+            reading,
+            notes,
+        };
+        let Some(record) = super::audit_owner::defer(record) else {
+            return result;
+        };
+        self.write_record(record, AnswerVerdict::Delivered, caller.execution)
+            .await
+            .and(result)
+    }
+
+    /// Write `record` once, under the verdict of the answer's scan. A refused
+    /// answer is classed as `Err(ResponseFirewallRefused)`: `denied`, no
+    /// response hash, a block and a firewall catch on the counters.
+    pub(crate) async fn write_record(
+        &self,
+        record: InvocationRecord,
+        verdict: AnswerVerdict,
+        lease: Option<&super::super::admission::SyncLease>,
+    ) -> Result<()> {
+        let InvocationRecord {
+            withheld,
+            mut answered,
+            mut denial,
+            mut firewall,
+            mut response_hash,
+            mut delivered,
+            succeeded,
+            args,
+            session_id,
+            trace_id,
+            who,
+            credential_kind,
+            recorded,
+            reading,
+            mut notes,
+        } = record;
+        if verdict == AnswerVerdict::Refused {
+            let refusal: Result<Value> = Err(Error::ResponseFirewallRefused);
+            answered = AuditOutcome::from_result(&refusal);
+            denial = crate::security::security_metrics::meta_denial(&refusal);
+            (firewall, response_hash, delivered) = (true, None, None);
+        }
+        let reading = (verdict == AnswerVerdict::Delivered && succeeded)
+            .then_some(reading)
+            .flatten();
+        let (args, session_id, trace_id) = (&args, session_id.as_deref(), trace_id.as_str());
         // D4: counted before the log check, so auth off still counts.
         // The record's class is worked out once, the refusal
         // rule applied, and both counts take it.
-        let withheld = super::denial::withheld(args, notes.not_found);
-        let class = withheld
-            .or_else(|| AuditOutcome::from_result(&result))
-            .map(|outcome| notes.outcome(outcome));
-        super::denial::count_meta_denial(withheld.is_some(), class, &result);
-        self.count_invocation(args, caller, &result, &notes, class);
+        let class = withheld.or(answered).map(|outcome| notes.outcome(outcome));
+        super::denial::count_meta_denial(withheld.is_some(), class, denial);
+        self.count_invocation(args, &who, firewall, &notes, class);
         let Some(log) = self.transparency_logger.as_ref() else {
-            return result;
+            self.note_reading(args, reading);
+            return Ok(());
         };
         let Some(outcome) = class else {
-            return result;
+            self.note_reading(args, reading);
+            return Ok(());
         };
         // A withheld target's record carries the memo's code, so its check.
         if withheld.is_some()
@@ -640,38 +747,49 @@ impl MetaMcp {
             notes.refused_by_memo(refusal);
         }
         // Boxed: held across the write, it would grow every dispatch future.
-        let decision = Box::new(notes.decided(self, outcome, caller.credential_kind));
+        let decision = Box::new(notes.decided(self, outcome, credential_kind));
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
         let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
         let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
-        let mut attribution = notes.attribution(self, tenants, result.as_ref().ok());
+        let mut attribution = notes.attribution(self, tenants, delivered.as_ref());
         if let Some(id) = notes.upstream_task {
             attribution.insert("task_id".into(), id.into());
         }
-        let facts =
-            super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
-                .with_request_hash(sha256_of(args));
+        let facts = super::super::admission::ReplayAudit::new(outcome, response_hash)
+            .with_request_hash(sha256_of(args));
         let written = self
             .write_invocation(
                 log,
                 args,
                 session_id,
-                caller,
+                who,
                 trace_id,
                 &facts,
                 attribution,
                 decision,
+                recorded,
             )
             .await;
         // #2472: a replay of this execution is recorded with these facts, but
         // only once they describe what was delivered (#2521): a failed write
         // withholds the value, so a replay must not record it as delivered.
         if written.is_ok()
-            && let Some(lease) = caller.execution
+            && let Some(lease) = lease
         {
             lease.note_audit(facts);
         }
-        written.and(result)
+        if written.is_ok() {
+            self.note_reading(args, reading);
+        }
+        written
+    }
+
+    // Only a delivered call counts: its own reading, and the tenants its
+    // arguments name when a backend answered it, with or without a log.
+    fn note_reading(&self, args: &Value, reading: DeliveredReading) {
+        if let Some((reading, responded)) = reading {
+            self.note_delivered_reading(args, reading, responded);
+        }
     }
 
     /// Write one meta invocation record with `facts` (outcome and response
@@ -687,11 +805,12 @@ impl MetaMcp {
         log: &std::sync::Arc<crate::security::TransparencyLogger>,
         args: &Value,
         session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
+        who: AuditWho,
         trace_id: &str,
         facts: &super::super::admission::ReplayAudit,
         attribution: Map<String, Value>,
         decision: Box<crate::security::decision_record::Decision>,
+        recorded: Option<super::super::grant_audit::RecordedSet>,
     ) -> Result<()> {
         let server = args
             .get("server")
@@ -710,7 +829,7 @@ impl MetaMcp {
             trace_id: Some(trace_id.to_string()),
             otel_trace_id: otel_trace_id.clone(),
             outcome,
-            who: AuditWho::from_caller(caller),
+            who,
         };
         // F20: on the blocking pool, bounded; a stalled disk answers 503
         // instead of pinning a runtime worker.
@@ -721,8 +840,8 @@ impl MetaMcp {
             .request_hash()
             .map_or_else(|| sha256_of(args), str::to_owned);
         let (srv, tl) = (server.to_string(), tool.to_string());
-        // The open slot's set, taken here: the blocking op below has no task-locals.
-        let recorded = super::super::grant_audit::open_slot_recorded();
+        // The open slot's set, taken by the caller where the slot is open: the
+        // blocking op below has no task-locals.
         let call_trace = trace_id.to_string();
         let written = log
             .append_bounded(move |log| {
