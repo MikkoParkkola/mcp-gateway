@@ -115,3 +115,22 @@ async fn p1c_a_direct_response_firewall_refusal_is_blocked() {
     let leg = verdict(&fx, &store, "(c) direct response firewall", Class::Blocked).await;
     assert!(leg.is_none(), "{}", leg.unwrap_or_default());
 }
+
+/// Leg (f), the meta twin of (c): the same reply refused by the response
+/// firewall on the meta route.
+#[tokio::test]
+async fn p1f_a_meta_response_firewall_refusal_is_blocked() {
+    let fx = fixture(Setup {
+        auth: Some(keys(None)),
+        tenant_limit: Some(0),
+        response_rules: Some(BLOCK_T_RULES),
+        reply: Some(takeover_reply()),
+        ..Setup::default()
+    })
+    .await;
+    let store = attach(&fx);
+    let call = meta_invoke("alpha", "t", &json!({}));
+    let _ = post_to(&fx, "/mcp", &call, &Caller::Key).await;
+    let leg = verdict(&fx, &store, "(f) meta response firewall", Class::Blocked).await;
+    assert!(leg.is_none(), "{}", leg.unwrap_or_default());
+}
