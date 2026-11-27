@@ -930,10 +930,10 @@ class DeclaredAssertions(unittest.TestCase):
 
     def test_the_sweep_counts_a_duplicate_after_any_closer(self) -> None:
         # A statement after the closer of an earlier line's construct is counted like any other.
-        for opener, closer in (("check(", ");"), ("let v = vec![", "];"), ("let v = {", "};")):
+        for opener, inner, closer in (("check(", "a,", ");"), ("let v = vec![", "a,", "];"), ("let v = {", "a", "};")):
             with self.subTest(closer=closer):
                 self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
-                            f"    {opener}\n        a,\n    {closer} assert!(ok());\n    assert!(ok());\n}}\n")
+                            f"    {opener}\n        {inner}\n    {closer} assert!(ok());\n    assert!(ok());\n}}\n")
                 self.repo.declare("src/checks.rs:6 assert!(ok()); [stmt:404cc513]")
                 self.refused("statement at src/checks.rs:6 occurs 2 times in guard_admits_only_its_host")
 

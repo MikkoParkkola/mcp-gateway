@@ -894,9 +894,9 @@ def _statement(src: list[str], blanked: list[str], line: int,
     else:
         j, c = line - 1, col
     text, last, stop = _forward(src, blanked, j, c)
-    # A plain line that a `,` or an earlier line's `)`/`]` ends sits inside a call or list: its
-    # statement is the enclosing one, when the scan back crosses that opener.
-    if at is None and (j, c) == (line - 1, col) and stop in (",", ")", "]"):
+    # A plain line that a `,`, an earlier line's `)`/`]` or its own line end ends may sit inside
+    # a call or list: its statement is the enclosing one, when the scan back crosses that opener.
+    if at is None and (j, c) == (line - 1, col) and stop in (",", ")", "]", ""):
         enclosing = _statement_start(src, blanked, line - 1, col, inside=True)
         if enclosing is not None:
             j, c = enclosing
