@@ -648,12 +648,11 @@ _MOD = re.compile(r"\bmod\s+([A-Za-z_]\w*)\s*([;{])")
 _MOD_WORD = re.compile(r"\bmod\b")
 _PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]')
 _PATH_WORD = re.compile(r"#\[\s*path\b")
-_MACRO_DEF = re.compile(r"\bmacro_rules\s*!\s*[A-Za-z_]\w*\s*[({\[]")
-# `fn <name>` in raw text, comments allowed between (`fn /* x */ name`): a superset of the
-# declarations, which declarations() then narrows to code.
-_FN_RAW = re.compile(r"\bfn(?:\s|/\*.*?\*/|//[^\n]*)+([A-Za-z_]\w*)", re.S)
-# A test attribute directly on a fn: #[test], #[tokio::test], #[tokio::test(...)]; not #[cfg(test)].
-_TEST_ATTR = re.compile(r"#\[\s*(?:[A-Za-z_]\w*::)*test\b")
+# `fn <name>` in raw text with only whitespace or line comments between: for a file with no
+# block comment, a superset of what declarations() finds in the blanked text.
+_FN_LINE = re.compile(r"\bfn(?:\s|//[^\n]*)+([A-Za-z_]\w*)")
+# A test attribute directly on a fn: #[test], #[tokio::test], #[tokio :: test(...)]; not #[cfg(test)].
+_TEST_ATTR = re.compile(r"#\[\s*(?:[A-Za-z_]\w*\s*::\s*)*test\b")
 
 
 @dataclass(frozen=True)
@@ -689,7 +688,8 @@ def module_tree(tree: Tree, root: str) -> dict[str, ModFile]:
         kept = blank(source, Wipe.COMMENTS) if _PATH_WORD.search(source) else code
         line_at = [0] * (len(code) + 1)  # _matching names a line only in its error
         # A macro_rules! body is token trees, not items: a `mod` in it declares nothing.
-        macros = [(m.end() - 1, _matching(code, m.end() - 1, line_at)) for m in _MACRO_DEF.finditer(code)]
+        macros = [(m.end() - 1, _matching(code, m.end() - 1, line_at)) for m in _MACRO_RULES.finditer(code)
+                  if m.group(0).startswith("macro_rules")]
         found = [(m, m.start()) for m in _MOD.finditer(code)
                  if _ident_start(code, m.start()) and not any(o < m.start() < c for o, c in macros)]
         inline = tuple((m.end() - 1, _matching(code, m.end() - 1, line_at), m.group(1))
@@ -761,11 +761,15 @@ def filter_refusal(tree: Tree, args: str, crates: Crates) -> str | None:
                 crates[root] = unreadable
                 raise
             # Which crate files spell `fn <name>`, for every name at once: one pass over the
-            # cached text instead of one `git grep` per row. Comments and strings still match
-            # here; declarations() below keeps only code.
+            # cached text instead of one `git grep` per row. A file with a block comment is read
+            # blanked, so a comment (nested or not) between `fn` and the name is space, as
+            # declarations() sees it; any other file raw, which can only over-match (a `fn x` in a
+            # string or line comment), and declarations() then keeps only code.
             index: dict[str, list[str]] = {}
             for path in mods:
-                for found in sorted(set(_FN_RAW.findall(tree.read(path)))):
+                source = tree.read(path)
+                names = _FN.findall(blank(source)) if "/*" in source else _FN_LINE.findall(source)
+                for found in sorted(set(names)):
                     index.setdefault(found, []).append(path)
             crates[root] = (mods, index)
         mods, index = crates[root]
