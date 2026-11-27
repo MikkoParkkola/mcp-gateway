@@ -445,7 +445,8 @@ fn an_exit_seen_in_one_freeze_does_not_carry_to_the_next() {
 /// K's directory moves away and a stranger's takes its path; the stranger
 /// lists X, whose stat names K's pid as its parent. The walk reads through
 /// K's pinned directory, so it still sees K's empty children file and X is
-/// never adopted. Red if the walk reads by path (mutant M10: X adopted).
+/// never adopted. Red only if the walk reads by path AND the T1 check is gone
+/// (mutants M10 + M16: X adopted); each alone leaves it green.
 #[test]
 fn a_pid_reused_under_its_walk_adopts_none_of_its_children() {
     let tree = s_and_k('T');
@@ -593,6 +594,10 @@ fn a_batch_cut_by_the_deadline_still_meets_its_parents_check() {
         let kept = if reaped { vec![s] } else { vec![s, k] };
         assert_eq!(pids(&listing), kept, "S reaped: {reaped}");
         assert!(!listing.complete, "S reaped: {reaped}: not cut short");
+        assert!(
+            !listing.settled,
+            "S reaped: {reaped}: a cut reading settled"
+        );
         if reaped {
             assert_eq!(table.moved, 1, "the reap did not happen at read 4");
         }
