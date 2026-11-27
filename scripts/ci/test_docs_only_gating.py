@@ -350,11 +350,23 @@ SAVE_FLAGS = {"Swatinem/rust-cache@": "save-if", "astral-sh/setup-uv@": "save-ca
 SAVING_PUSHES = (f"refs/heads/{RELEASE_LINE}", "refs/heads/main")
 
 
+def step_runs(step: dict, c: dict) -> bool:
+    """Whether a step's own `if` lets it run in context `c`: no `if` runs, and a literal false (also
+    `${{ false }}`, as cache_writers.py reads it) never runs."""
+    if "if" not in step:
+        return True
+    cond = step["if"]
+    if cache_writers.is_literal_false(cond):
+        return False
+    return cond is True or bool(evaluate(str(cond), c))
+
+
 def dead_save_errors(jobs: dict) -> list[str]:
     """Refuse a dead cache save. Saves are meant for pushes to the release line or main, the runs whose caches pull
     requests restore (by policy: a manual dispatch on the line would also write a restorable cache, but dispatches are
     rare and are not a warming route); which save conditions are allowed at all is cache_writers.py's rule, not this
-    check's. A step whose save condition is true on none of the pushes its job runs on never saves, yet reads as
+    check's. A step whose save condition is true on none of the pushes its job runs on, or that its own `if` keeps
+    from running there, never saves, yet reads as
     warming: macos-shards built cold on every train while its step looked like it kept a cache (measured 2026-11-25).
     Such a step must say false. Clippy's `check` runs on the release-line push for exactly that reason (comment above
     POST_MERGE_SKIPPED)."""
@@ -371,9 +383,9 @@ def dead_save_errors(jobs: dict) -> list[str]:
             if flag is None:
                 continue
             value = (step.get("with") or {}).get(flag, True)
-            if value is False or str(value).strip() == "false":
+            if cache_writers.is_literal_false(value):
                 continue
-            if not any(job_id in ran and (value is True or bool(evaluate(str(value), c)))
+            if not any(job_id in ran and step_runs(step, c) and (value is True or bool(evaluate(str(value), c)))
                        for c, ran in runs_on.values()):
                 errors.append(f"{job_id}: its {uses.split('@')[0]} step's {flag} is true on no push this job runs "
                               f"on (release line, main), so it never saves; write {flag}: false")
@@ -659,6 +671,42 @@ def main() -> int:
                 edit(step["with"])
         if not any(e.startswith(f"{job}:") for e in dead_save_errors(mutated)):
             errors.append(f"dead-save self-test: {label} on {job} was not caught")
+    # A save written `${{ false }}` says false, as cache_writers.is_literal_false reads it: not a dead save.
+    mutated = copy.deepcopy(jobs)
+    wrapped = 0
+    for step in mutated["macos-shards"]["steps"]:
+        if str(step.get("uses", "")).startswith("Swatinem/rust-cache@"):
+            step["with"]["save-if"] = "${{ false }}"
+            wrapped += 1
+    if not wrapped:
+        errors.append("dead-save self-test: macos-shards has no rust-cache step (changed nothing)")
+    elif any(e.startswith("macos-shards:") for e in dead_save_errors(mutated)):
+        errors.append("dead-save self-test: a `${{ false }}` save-if on macos-shards was refused")
+    # A step that never runs never saves, whatever its save flag says: its own `if` counts, as in
+    # cache_writers.py. linux-lib-union's live save, behind an `if` false on every push, is caught.
+    for label, cond in (("if: false", False),
+                        ("an if false on every push", "${{ github.event_name == 'pull_request' }}")):
+        mutated = copy.deepcopy(jobs)
+        gated = 0
+        for step in mutated["linux-lib-union"]["steps"]:
+            if str(step.get("uses", "")).startswith(("Swatinem/rust-cache@", "astral-sh/setup-uv@")):
+                step["if"] = cond
+                gated += 1
+        if not gated:
+            errors.append("dead-save self-test: linux-lib-union has no cache step (changed nothing)")
+        elif not any(e.startswith("linux-lib-union:") for e in dead_save_errors(mutated)):
+            errors.append(f"dead-save self-test: a live save behind {label} on linux-lib-union was not caught")
+    # The step's `if` and its save flag must hold on the SAME push: a job running on every push (no job if)
+    # whose step runs only on main while it saves only on the release line never saves; the same step
+    # saving on main is live; a `${{ false }}` step if never runs.
+    line_ref, main_ref = f"${{{{ github.ref == 'refs/heads/{RELEASE_LINE}' }}}}", "${{ github.ref == 'refs/heads/main' }}"
+    for label, step_if, save_if, dead in (("a step on main saving on the line", main_ref, line_ref, True),
+                                         ("a step on main saving on main", main_ref, main_ref, False),
+                                         ("a `${{ false }}` step if", "${{ false }}", True, True)):
+        probe = {"probe": {"steps": [{"uses": "Swatinem/rust-cache@x", "if": step_if, "with": {"save-if": save_if}}]}}
+        caught = any(e.startswith("probe:") for e in dead_save_errors(probe))
+        if caught != dead:
+            errors.append(f"dead-save self-test: {label} was {'accepted' if dead else 'refused'}")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):

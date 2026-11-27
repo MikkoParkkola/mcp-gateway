@@ -26,6 +26,8 @@ pub(super) struct Entries {
     /// staged: a detached discard holds the gate's in-flight count until the
     /// store calls are done, even when the write task died.
     pub(super) admitted: Option<AdmissionGuard>,
+    /// What the write got to, shared with the task's caller.
+    pub(super) trace: std::sync::Arc<super::WriteTrace>,
     #[cfg(test)]
     pub(super) gate: crate::gateway::restart_config_floor::ConfigGate,
 }
