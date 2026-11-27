@@ -42,9 +42,9 @@ test('R1 the first load of /ui/overview/status asks for no other screen before i
     return performance.getEntriesByType('resource').filter((r) => r.startTime < fcp).map((r) => new URL(r.name).pathname);
   });
   // The shell's own reads of /ui/api may start first; its assets are the shell's (server-paths with it, its import), the fonts and the
-  // current route's own screen, which the shell loads before it renders it; every other screen waits.
+  // current route's own screen (with the chart module it imports), which the shell loads before it renders it; every other screen waits.
   for (const name of early.filter((n) => n.startsWith('/ui/assets/'))) {
-    expect(name, `requested before first paint: ${early.join(', ')}`).toMatch(/^\/ui\/assets\/((shell|overview)\.[0-9a-f]{12}\.(js|css)|server-paths\.[0-9a-f]{12}\.js|[\w-]+\.[0-9a-f]{12}\.woff2)$/);
+    expect(name, `requested before first paint: ${early.join(', ')}`).toMatch(/^\/ui\/assets\/((shell|overview|chart)\.[0-9a-f]{12}\.(js|css)|server-paths\.[0-9a-f]{12}\.js|[\w-]+\.[0-9a-f]{12}\.woff2)$/);
   }
 });
 
