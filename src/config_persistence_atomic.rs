@@ -197,7 +197,11 @@ pub(crate) fn writer_refusal(e: &std::io::Error) -> Option<(&'static str, String
 #[cfg_attr(not(any(unix, windows)), allow(dead_code))]
 fn drop_scratch(scratch: &std::path::Path, refused: std::io::Error) -> std::io::Error {
     match std::fs::remove_file(scratch) {
-        Err(kept) if kept.kind() != std::io::ErrorKind::NotFound => kept,
+        Err(kept) if kept.kind() != std::io::ErrorKind::NotFound => {
+            // The returned error is the cleanup's; the cause stays in the log.
+            tracing::warn!(cause = %refused, cleanup = %kept, "a refused save left its scratch");
+            kept
+        }
         _ => refused,
     }
 }
