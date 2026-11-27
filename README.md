@@ -303,6 +303,8 @@ It is not a chat-completions or embeddings proxy. When a backend asks for `sampl
 
 Compared with a client that loads every tool definition into every request, the gateway trades a one-time discovery hop for a flat, small context cost. It aggregates many backends behind one namespaced surface with integrity checks, ranking, and per-user identity.
 
+This project is not related to `openziti/mcp-gateway`, a separate project with the same name.
+
 ### MCP compatibility
 
 The gateway speaks MCP 2026-07-28 (stateless, on by default) and 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05 (through the `initialize` handshake). It negotiates the revision with the client and with each backend on its own, so a client and a backend on different revisions still work together:
@@ -435,6 +437,7 @@ Embedded web UI at `/ui`: live status, searchable tools, server health, a read-o
 | **Per-client tool scopes** | Allowlist or denylist tools per API key with glob patterns | [examples/per-client-tool-scopes.yaml](examples/per-client-tool-scopes.yaml) |
 | **Security firewall** | Credential redaction, prompt-injection detection, and shell/SQL/path-traversal scanning | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
 | **Cost governance** | Per-tool, per-key, daily budgets with alert thresholds (log/notify/block) | [CHANGELOG](CHANGELOG.md#260---2026-03-13) |
+| **SIEM evidence export** | Opt-in (`control_plane.export`): tails the tool-call and governance audit logs, checks each entry's hash chain (and HMAC when signed), and appends verified entries as JSON lines to a file your SIEM agent reads. At-least-once: deduplicate in your SIEM on `entry_hash`. A file sink only; no OTel sink | [docs/control_plane.md](docs/control_plane.md#evidence-export-to-a-siem) |
 | **mTLS** | Certificate-based auth for tool execution | [CHANGELOG](CHANGELOG.md#240---2026-02-25) |
 
 ### Integration and discovery
