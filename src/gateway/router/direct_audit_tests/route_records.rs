@@ -214,7 +214,7 @@ async fn scoped_key_gets_the_miss_for_a_missing_backend() {
 #[tokio::test]
 async fn malformed_direct_tools_call_is_invalid() {
     let fx = fixture(Setup::default()).await;
-    let bare = json!({"jsonrpc": "2.0", "id": 1, "method": "tools/call"}).to_string();
+    let bare = nameless_tools_call();
     let (status, body) = post(&fx, "alpha", &bare, &Caller::Anonymous).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert_eq!(body["error"]["code"], -32602, "{body}");
