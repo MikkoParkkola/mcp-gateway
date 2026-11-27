@@ -769,6 +769,13 @@ class DeclaredAssertions(unittest.TestCase):
         self.helper("    check(1);\n")
         self.accepted()
 
+    def test_markers_written_inside_a_helper_line_do_not_steer_the_check(self) -> None:
+        # The line's own text holds "[stmt:...] [via other]"; only the tail after the row's
+        # digest marker names the helper.
+        self.helper("    check(1);\n", help_src="fn check(x: u8) {\n    assert_eq!(tag(x), \" [stmt:12345678] [via other]\");\n}\n",
+                    cell="src/help.rs:2 assert_eq!(tag(x), \" [stmt:12345678] [via other]\"); [stmt:8731b4c2] [via check]")
+        self.accepted()
+
     def test_a_helper_named_only_in_a_comment_and_a_string_is_refused(self) -> None:
         self.helper("    // check(1);\n    let s = \"check(1)\";\n    other(1);\n")
         self.refused("guard_admits_only_its_host does not call check")
