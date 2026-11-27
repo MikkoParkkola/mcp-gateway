@@ -496,7 +496,6 @@ fn answer_for(refusal: UiRefused, fields: &[&str], asked: Asked) -> Response {
         UiRefused::Unsupported(_) => "unsupported",
         UiRefused::NoAuditLog => "no_audit_log",
         UiRefused::AuditRefused => "audit_refused",
-        UiRefused::WriterRefused => "failed",
         UiRefused::Unprovable(_) => "unprovable",
         UiRefused::Stale(_) => "stale",
         UiRefused::StaleUnpreviewable(_) => "stale_unpreviewable",
@@ -504,7 +503,8 @@ fn answer_for(refusal: UiRefused, fields: &[&str], asked: Asked) -> Response {
         UiRefused::Busy(_) => "busy",
         UiRefused::Down(_) => "down",
         UiRefused::SecretsRefused { .. } => "secrets_refused",
-        UiRefused::Failed(_) => "failed",
+        // A writer refusal keeps the failed write's audit code, as before.
+        UiRefused::WriterRefused | UiRefused::Failed(_) => "failed",
     };
     let class = if let UiRefused::ReloadRefused { class } = &refusal {
         Some(class)
