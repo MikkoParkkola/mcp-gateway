@@ -9,9 +9,9 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.b052b8d989a6.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.509e3442f83e.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, withTip, statusTab as serverStatus, actionsTab as serverActions, settingsTab as serverSettings } from '/ui/assets/server-page.dad59b8abf85.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions, settingsTab as serverSettings } from '/ui/assets/server-page.8c3a60470367.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -88,6 +88,15 @@ function stateCell(badge, words) {
 function memberBadge(state) {
   const row = SERVER_STATES[state];
   return el('span', { class: `lb ${row.tone} plain` }, el('span', { class: 'glyph', 'aria-hidden': 'true' }, row.glyph), ' ', MEMBER_WORD[state]);
+}
+
+// The tooltip module loads after the screen has drawn and never holds it up; if it
+// fails, the headings stand without their (i). Each caller names its id literally.
+let tipModule = null;
+function withTip(node, make) {
+  (tipModule ??= import('/ui/assets/tooltip.fb009a93019b.js'))
+    .then((mod) => node.append(' ', make(mod.tip)), () => {});
+  return node;
 }
 
 /** The column headings; `tips` adds the Tools explanation (the Answering table only, so one per page). */

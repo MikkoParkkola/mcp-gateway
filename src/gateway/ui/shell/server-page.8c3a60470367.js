@@ -5,7 +5,7 @@
 // these when the address names a server; nothing here registers a page. Every
 // path that carries the server's name comes from server-paths, and every served
 // value goes in as text.
-import { el, go, serverBadge, serverBanner, state } from '/ui/assets/shell.b052b8d989a6.js';
+import { el, go, serverBadge, serverBanner, state } from '/ui/assets/shell.509e3442f83e.js';
 import { serverPath, keyPath, backendApi, activityHref } from '/ui/assets/server-paths.15a075bb0cb1.js';
 
 /** States whose `reason` is always one of the gateway's own sentences; never a refused server's. */
@@ -288,15 +288,6 @@ export async function actionsTab(body, ctx) {
   body.append(el('div', { class: 'sp' }, ...cards, audit));
 }
 
-// The tooltip module loads after the screen has drawn and never holds it up; if it
-// fails, the headings stand without their (i). Each caller names its id literally.
-let tipModule = null;
-export function withTip(node, make) {
-  (tipModule ??= import('/ui/assets/tooltip.74a1006768d8.js'))
-    .then((mod) => node.append(' ', make(mod.tip)), () => {});
-  return node;
-}
-
 /** A secret record's kind in words: the record contract has exactly these two kinds. */
 const KIND_WORDS = { env: 'Environment variable', headers: 'Header' };
 const RECORD_MEMBERS = 'field,kind,reference,server';
@@ -321,12 +312,12 @@ function reachWords(k, name) {
 /** Connection: the transport from the status entry (no read serves the address). */
 const connection = (s) => el('section', { class: 'sp-card sp-connection' }, el('h2', {}, 'Connection'),
   el('dl', { class: 'sp-facts' },
-    withTip(el('dt', {}, 'Transport'), (tip) => tip('servers.settings.transport')),
+    el('dt', {}, 'Transport'),
     el('dd', {}, typeof s.transport === 'string' && s.transport ? s.transport : 'not known')));
 
 /** Who can use it: every key of the read, a link to its page, and what it reaches here. */
 function whoCanUse(name, keys) {
-  const section = el('section', { class: 'sp-card' }, withTip(el('h2', {}, 'Who can use it'), (tip) => tip('servers.settings.who-can-use-it')));
+  const section = el('section', { class: 'sp-card' }, el('h2', {}, 'Who can use it'));
   if (!keys) {
     section.append(el('p', { class: 'sp-keys-unread' }, 'The keys could not be read.'));
     return section;

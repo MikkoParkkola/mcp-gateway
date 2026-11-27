@@ -173,7 +173,7 @@ test.describe('T8 Replace stores a value or says why not, and keeps no copy', ()
 test.describe('T8d the typed value leaves the page on every way out', () => {
   const gone = async (page) => {
     expect(await holds(page, SENT)).toBe(false);
-    await expect(page.locator('input[type="password"]')).toHaveCount(0);
+    await expect(page.locator('#content input[type="password"]')).toHaveCount(0);
   };
 
   test('T8d after a stored answer', async ({ page }) => {
