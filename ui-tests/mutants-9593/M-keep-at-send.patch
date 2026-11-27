@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.657ef6cc56df.js b/src/gateway/ui/shell/server-page.657ef6cc56df.js
+index 5964247dfc..deaf14d08b 100644
+--- a/src/gateway/ui/shell/server-page.657ef6cc56df.js
++++ b/src/gateway/ui/shell/server-page.657ef6cc56df.js
+@@ -391,7 +391,6 @@ function secretLine(r, server, ctx) {
+     form.querySelector('.sp-error')?.remove();
+     // The value leaves the field at once: a field left behind while the PATCH is pending holds nothing.
+     const value = input.value;
+-    input.value = '';
+     let answer;
+     try {
+       answer = await ctx.api(backendApi(server), {
