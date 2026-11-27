@@ -187,7 +187,10 @@ async fn k3_superseded_attempt_hands_nothing() {
     assert_eq!(got, Some(sha256_hex(BASE.as_bytes())), "{ROW} literal hash");
     floor.resume();
     assert_probes(ROW, &b, Probe::Free, "free after resume");
-    assert!(floor.settled(), "{ROW} settled after resume");
+    // Settled is asynchronous: each lock task marks itself finished when its
+    // closure returns, after it handed or dropped its guard, so it can lag
+    // the logs this row waited on.
+    support::wait_until("K3 settled after resume", || floor.settled());
 }
 
 #[tokio::test]
