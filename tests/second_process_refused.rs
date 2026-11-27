@@ -51,7 +51,13 @@ fn write_config(root: &Path, auth: bool) -> PathBuf {
 /// run from `cwd`, logging to `log`.
 fn start(root: &Path, config: &Path, cwd: &Path, log: &Path) -> gateway_bin::Reaped {
     std::fs::create_dir_all(cwd).expect("working directory");
-    gateway_bin::spawn_logged(&root.join("home"), &root.join("gateway-state"), config, cwd, log)
+    gateway_bin::spawn_logged(
+        &root.join("home"),
+        &root.join("gateway-state"),
+        config,
+        cwd,
+        log,
+    )
 }
 
 fn read(log: &Path) -> String {
@@ -63,12 +69,19 @@ async fn serving(gateway: &mut gateway_bin::Reaped, log: &Path) {
     let ready_by = Instant::now() + READY_BOUND;
     loop {
         if let Some(status) = gateway.child_mut().try_wait().expect("wait on the gateway") {
-            panic!("the gateway exited {status} instead of serving:\n{}", read(log));
+            panic!(
+                "the gateway exited {status} instead of serving:\n{}",
+                read(log)
+            );
         }
         if gateway_bin::logged_port(log).is_some_and(gateway_bin::answers_livez) {
             return;
         }
-        assert!(Instant::now() < ready_by, "the gateway never served:\n{}", read(log));
+        assert!(
+            Instant::now() < ready_by,
+            "the gateway never served:\n{}",
+            read(log)
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -82,7 +95,11 @@ async fn refused(gateway: &mut gateway_bin::Reaped, log: &Path, audit: &str) {
         if let Some(status) = gateway.child_mut().try_wait().expect("wait on the gateway") {
             break status;
         }
-        assert!(Instant::now() < deadline, "the second gateway kept running:\n{}", read(log));
+        assert!(
+            Instant::now() < deadline,
+            "the second gateway kept running:\n{}",
+            read(log)
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     let logs = read(log);
@@ -93,7 +110,11 @@ async fn refused(gateway: &mut gateway_bin::Reaped, log: &Path, audit: &str) {
         logs.contains(&sentence) && logs.contains("is held"),
         "the refusal must name {audit} and its held lease:\n{logs}"
     );
-    assert_eq!(gateway_bin::reported_port(&logs), None, "the refused gateway listened:\n{logs}");
+    assert_eq!(
+        gateway_bin::reported_port(&logs),
+        None,
+        "the refused gateway listened:\n{logs}"
+    );
 }
 
 /// A first process serves; a second on the same config, run from

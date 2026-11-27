@@ -255,19 +255,16 @@ pub fn answers_livez(port: u16) -> bool {
 /// of its output streams going to the file `log`. The child is killed if the
 /// returned owner drops while it still runs. A pure addition: no existing
 /// caller changes.
-pub fn spawn_logged(
-    home: &Path,
-    state: &Path,
-    config: &Path,
-    cwd: &Path,
-    log: &Path,
-) -> Reaped {
+pub fn spawn_logged(home: &Path, state: &Path, config: &Path, cwd: &Path, log: &Path) -> Reaped {
     let stdout = std::fs::File::create(log).expect("the gateway's log file");
     let stderr = stdout.try_clone().expect("a second handle on the log file");
     let mut gateway = tokio::process::Command::from(command(home, Inherit::Environment));
     gateway.env("MCP_GATEWAY_CONFIG_DIR", state);
     gateway.current_dir(cwd).arg("--config").arg(config);
-    gateway.stdin(std::process::Stdio::null()).stdout(stdout).stderr(stderr);
+    gateway
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(stderr);
     gateway.kill_on_drop(true);
     Reaped::new(gateway.spawn().expect("the gateway binary spawns"))
 }
