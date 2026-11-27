@@ -8,13 +8,13 @@ index 2bd038014..1c9b069b8 100644
  ) -> Response {
 -    let Some(axum::Extension(identity)) = identity else {
 +    let Some(axum::Extension(identity)) = identity.or_else(|| {
-+        Some(axum::Extension(VerifiedIdentity {
-+            subject: String::new(),
-+            email: String::new(),
-+            name: None,
-+            groups: Vec::new(),
-+            issuer: String::new(),
-+        }))
++        VerifiedIdentity::checked(
++            "c6-mutant".to_owned(),
++            "c6-mutant".to_owned(),
++            String::new(),
++            None,
++            Vec::new(),
++        ).map(axum::Extension)
 +    }) else {
          return refusal(StatusCode::UNAUTHORIZED, "unauthenticated", None);
      };
