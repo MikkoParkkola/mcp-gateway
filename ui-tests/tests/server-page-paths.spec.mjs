@@ -6,7 +6,7 @@
 // Unit rows import it from a data: URL of its served bytes; source rows read
 // the modules that must not build such a path themselves.
 import { test, expect } from './base.mjs';
-import { served } from './copy-check.mjs';
+import { served, importServed } from './copy-check.mjs';
 
 const PATHS = /^server-paths\.[0-9a-f]{12}\.js$/;
 const PAGE = /^server-page\.[0-9a-f]{12}\.js$/;
@@ -14,7 +14,7 @@ const SERVERS = /^servers\.[0-9a-f]{12}\.js$/;
 const SHELL = /^shell\.[0-9a-f]{12}\.js$/;
 
 let pathsPromise = null;
-const loadPaths = () => (pathsPromise ??= import(`data:text/javascript;base64,${Buffer.from(served(PATHS).text).toString('base64')}`));
+const loadPaths = () => (pathsPromise ??= importServed(PATHS));
 
 const HARD = 'a b/c?d%e#f é';
 const HARD_ENC = 'a%20b%2Fc%3Fd%25e%23f%20%C3%A9';

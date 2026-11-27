@@ -391,3 +391,15 @@ async fn a_new_listing_is_published_while_the_cache_is_held() {
         "each rescan publishes once, with the cache's lock held"
     );
 }
+
+/// The To do page tells the operator that a fixed client config file "clears on its own within half a minute"
+/// (its CLEARS_ON_ITS_OWN words). The decisions loop rescans every CACHE_WINDOW (gateway/ui/decisions.rs, the
+/// discovery loop), so a longer window would make that sentence false: change both or neither.
+#[test]
+fn the_rescan_window_keeps_the_to_do_page_half_minute_promise() {
+    assert!(
+        CACHE_WINDOW <= Duration::from_secs(30),
+        "CACHE_WINDOW is {CACHE_WINDOW:?}, but the To do page promises an unreadable client file clears on its own \
+         within half a minute (CLEARS_ON_ITS_OWN in the page's words module): change the words with the window"
+    );
+}

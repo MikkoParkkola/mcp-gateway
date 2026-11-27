@@ -245,3 +245,6 @@ export function served(pattern) {
   if (hits.length !== 1) throw new Error(`want exactly one ${pattern} in src/gateway/ui/shell, have ${hits.length}`);
   return { name: hits[0], text: readFileSync(SHELL_DIR + hits[0], 'utf8') };
 }
+
+/** The served module whose name fits `pattern`, imported from a data: URL of its bytes (Node reads it as an ES module). */
+export const importServed = (pattern) => import(`data:text/javascript;base64,${Buffer.from(served(pattern).text).toString('base64')}`);

@@ -11,7 +11,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { shellReady, heldStream, frame, countListeners } from './shell.mjs';
-import { served } from './copy-check.mjs';
+import { served, importServed } from './copy-check.mjs';
 
 test.use({ timezoneId: 'UTC' });
 
@@ -21,7 +21,7 @@ let corePromise = null;
  * an ES module with no package.json deciding, and the bytes are the served ones.
  */
 function loadCore() {
-  corePromise ??= import(`data:text/javascript;base64,${Buffer.from(served(/^activity-list\.[0-9a-f]{12}\.js$/).text).toString('base64')}`);
+  corePromise ??= importServed(/^activity-list\.[0-9a-f]{12}\.js$/);
   return corePromise;
 }
 
