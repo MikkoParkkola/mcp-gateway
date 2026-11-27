@@ -1,11 +1,13 @@
-diff --git a/src/gateway/ui/shell/server-page.8abcae2314bd.js b/src/gateway/ui/shell/server-page.8abcae2314bd.js
---- a/src/gateway/ui/shell/server-page.8abcae2314bd.js
-+++ b/src/gateway/ui/shell/server-page.8abcae2314bd.js
-@@ -238,7 +238,6 @@
-       ...(href ? [el('p', {}, el('a', { class: 'lnk', href, target: '_blank', rel: 'noopener noreferrer' }, 'Open the sign-in page'))] : []),
-       ...(until ? [el('p', {}, `The sign-in link expires at ${until}.`)] : []),
-       el('p', { class: 'acts' }, finish, cancel));
--    ctx.announce('Sign-in started.');
-   });
-   return node;
- }
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..5c234792ef 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -354,7 +354,7 @@ function secretLine(r, server, ctx) {
+     li.querySelector(':scope > .sp-done, :scope > .sp-error')?.remove();
+     if (text) {
+       li.append(el('p', { class: cls }, text));
+-      ctx.announce(text);
++      void text;
+     }
+   };
+   replace.addEventListener('click', () => {

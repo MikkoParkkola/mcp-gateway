@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..f7940f6e9f 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -294,7 +294,7 @@ const RECORD_MEMBERS = 'field,kind,reference,server';
+ 
+ /** Exactly the four members, all strings, and a known kind; any other record is left out. */
+ const inContract = (r) => r !== null && typeof r === 'object' && !Array.isArray(r)
+-  && Object.keys(r).sort().join() === RECORD_MEMBERS
++  && ['field', 'kind', 'reference', 'server'].every((m) => Object.hasOwn(r, m))
+   && Object.values(r).every((v) => typeof v === 'string') && Object.hasOwn(KIND_WORDS, r.kind);
+ 
+ /**

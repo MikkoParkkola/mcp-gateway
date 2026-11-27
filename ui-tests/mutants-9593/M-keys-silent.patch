@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..5770a45e5d 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -443,7 +443,7 @@ export async function settingsTab(body, ctx) {
+   if (!found) return;
+   const [config, keys] = await Promise.all([
+     ctx.api('/ui/api/config').catch(() => null),
+-    ctx.api('/ui/api/keys').then((b) => (Array.isArray(b?.keys) ? b.keys : null), () => null),
++    ctx.api('/ui/api/keys').then((b) => (Array.isArray(b?.keys) ? b.keys : null), () => []),
+   ]);
+   if (!live()) return; // answered after the user moved on: write nothing
+   body.append(el('div', { class: 'sp' }, connection(found), secrets(found.name, config, ctx), whoCanUse(found.name, keys)));

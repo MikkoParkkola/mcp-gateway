@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-off mutant run for the Reload now rows (throwaway branch only, never merged).
+# One-off mutant run for the server Settings rows (throwaway branch only, never merged).
 # Baseline first: every row named in the manifest must pass on the clean tree, else
 # every mutant is VOID. Then, per manifest row: apply the patch to the clean tree,
 # run only its rows in chromium with no retries, judge from Playwright's own summary
@@ -35,7 +35,7 @@ clean() { git -C "$root" diff --quiet -- src; }
 clean || { echo "run.sh: src/ is not clean at the start" >&2; exit 2; }
 
 # Baseline: both spec files whole (every row the manifest names), on the clean tree.
-npx playwright test --project=chromium --reporter=line --retries=0 tests/server-page-status.spec.mjs tests/server-page-actions.spec.mjs tests/server-page-paths.spec.mjs > "$out/baseline.log" 2>&1
+npx playwright test --project=chromium --reporter=line --retries=0 tests/server-page-settings.spec.mjs tests/servers-status.spec.mjs > "$out/baseline.log" 2>&1
 base_rc=$?
 base_ok=0
 [ "$base_rc" = 0 ] && grep -qE '^ *[0-9]+ passed' "$out/baseline.log" && base_ok=1

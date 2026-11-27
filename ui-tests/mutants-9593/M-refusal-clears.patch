@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..f05a747230 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -396,6 +396,7 @@ function secretLine(r, server, ctx) {
+         // No answer, or one that would not parse: the value may have been stored.
+         ? NOT_CONFIRMED
+         : `The gateway refused the new value (HTTP ${err.status}).`);
++      input.value = '';
+       form.append(el('p', { class: 'sp-error' }, why));
+       ctx.announce(why);
+       save.disabled = false;

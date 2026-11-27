@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..974c713592 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -305,7 +305,7 @@ const inContract = (r) => r !== null && typeof r === 'object' && !Array.isArray(
+ function reachWords(k, name) {
+   if (reaching([k], name).length === 0) return 'None';
+   if (Array.isArray(k.allowed_tools) && k.allowed_tools.length === 0) return 'None: its allowlist is empty';
+-  const listed = (v) => Array.isArray(v) && v.length > 0;
++  const listed = (v) => Boolean(v);
+   return listed(k.allowed_tools) || listed(k.denied_tools) ? 'Tool restrictions apply' : 'All of its tools';
+ }
+ 

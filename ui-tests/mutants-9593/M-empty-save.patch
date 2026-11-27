@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..e5122723fd 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -361,7 +361,7 @@ function secretLine(r, server, ctx) {
+     outcome(null, null);
+     const id = `sp-secret-${(formIds += 1)}`;
+     const input = el('input', { type: 'password', id, autocomplete: 'new-password', spellcheck: 'false' });
+-    const save = el('button', { type: 'submit', class: 'btn primary', disabled: '' }, 'Save');
++    const save = el('button', { type: 'submit', class: 'btn primary' }, 'Save');
+     const cancel = el('button', { type: 'button', class: 'btn' }, 'Cancel');
+     const form = el('form', { class: 'sp-replace' }, el('label', { for: id }, r.field), input, el('p', { class: 'acts' }, save, cancel));
+     const close = () => {

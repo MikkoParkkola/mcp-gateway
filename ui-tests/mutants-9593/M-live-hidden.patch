@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..351d9378a6 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -325,7 +325,7 @@ function whoCanUse(name, keys) {
+   const rows = keys.filter((k) => k && typeof k.name === 'string').map((k) => el('li', {},
+     el('a', { class: 'lnk', href: keyPath(k.name) }, k.name), ' ',
+     el('span', { class: 'sp-reach' }, reachWords(k, name)),
+-    ...(k.live === false ? [' ', el('span', { class: 'sp-live t3' }, 'Not live')] : [])));
++    ...(false ? [' ', el('span', { class: 'sp-live t3' }, 'Not live')] : [])));
+   section.append(el('ul', { class: 'sp-who' }, ...rows), el('p', { class: 'sp-help t3' }, "A key's reach is changed on its own page."));
+   return section;
+ }

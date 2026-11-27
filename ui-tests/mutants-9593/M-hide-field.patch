@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..c01ad59fb6 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -366,7 +366,7 @@ function secretLine(r, server, ctx) {
+     const form = el('form', { class: 'sp-replace' }, el('label', { for: id }, r.field), input, el('p', { class: 'acts' }, save, cancel));
+     const close = () => {
+       input.value = '';
+-      form.remove();
++      form.hidden = true;
+       replace.hidden = false;
+       replace.focus();
+     };

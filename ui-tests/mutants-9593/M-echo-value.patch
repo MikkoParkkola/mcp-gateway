@@ -1,0 +1,18 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..e83a88b481 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -403,11 +403,12 @@ function secretLine(r, server, ctx) {
+       return;
+     }
+     if (!form.isConnected) return;
++    const typed = input.value;
+     close();
+     const stored = Array.isArray(answer?.secrets_stored) && answer.secrets_stored.some((e) => e?.field === `env.${r.field}`);
+     // Without the slot in secrets_stored the page never says replaced (a second line of defence behind the route).
+     if (stored) outcome('sp-done', `${r.field} was replaced.`);
+-    else outcome('sp-error', NOT_CONFIRMED);
++    else outcome('sp-error', `${NOT_CONFIRMED} ${typed}`);
+   }
+   return li;
+ }

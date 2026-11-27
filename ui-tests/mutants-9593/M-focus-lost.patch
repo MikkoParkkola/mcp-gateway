@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..dc86952be5 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -368,7 +368,6 @@ function secretLine(r, server, ctx) {
+       input.value = '';
+       form.remove();
+       replace.hidden = false;
+-      replace.focus();
+     };
+     input.addEventListener('input', () => { save.disabled = input.value === ''; });
+     cancel.addEventListener('click', close);

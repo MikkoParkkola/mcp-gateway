@@ -1,37 +1,24 @@
 # id	patch	spec	grep (one row each; each leg's killing line is listed in the PR body)
-M-T1b-forbidden	M-T1b-forbidden.patch	tests/server-page-status.spec.mjs	T1b status: a key with no servers list
-M-list-for-object	M-list-for-object.patch	tests/server-page-status.spec.mjs	T1a the Status tab draws its badge
-M-reason-all	M-reason-all.patch	tests/server-page-status.spec.mjs	T1a the gateway reason shows
-M-reread	M-reread.patch	tests/server-page-status.spec.mjs	T2a a status event redraws
-M-keep-on-actions	M-keep-on-actions.patch	tests/server-page-status.spec.mjs	T2b a listener belongs to one render
-M-keep-a-after-b	M-keep-a-after-b.patch	tests/server-page-status.spec.mjs	T2b a listener belongs to one render
-M-link-dots	M-link-dots.patch	tests/server-page-status.spec.mjs	T1d the list links each name
-M-drop-not-live	M-drop-not-live.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
-M-drop-star	M-drop-star.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
-M-count-empty	M-count-empty.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
-M-fixed-rest	M-fixed-rest.patch	tests/server-page-actions.spec.mjs	T3b 5 reaching keys
-M-remove-no-confirm	M-remove-no-confirm.patch	tests/server-page-actions.spec.mjs	T4 Cancel sends nothing
-M-revive-on-press	M-revive-on-press.patch	tests/server-page-actions.spec.mjs	T5 the press opens the confirm
-M-ignore-not-revived	M-ignore-not-revived.patch	tests/server-page-actions.spec.mjs	T5 not_revived says it did not restart
-M-same-tab	M-same-tab.patch	tests/server-page-actions.spec.mjs	T6 start posts JSON
-M-new-attempt	M-new-attempt.patch	tests/server-page-actions.spec.mjs	T7 confirm 409 sign_in_not_ready
-M-raw-revive	M-raw-revive.patch	tests/server-page-actions.spec.mjs	T9c the DELETE and the revive POST
-M-raw-revive-S1	M-raw-revive-S1.patch	tests/server-page-paths.spec.mjs	S1 names enter paths only through server-paths
-M-final-keeps-buttons	M-final-keeps-buttons.patch	tests/server-page-actions.spec.mjs	T7 confirm 404 no_sign_in
-M-split-prefix	M-split-prefix.patch	tests/server-page-paths.spec.mjs	S1 every /ui/ string in the server page
-M-remove-after-leave	M-remove-after-leave.patch	tests/server-page-actions.spec.mjs	T4 Remove opens no confirm when the user left
-M-again-after-leave	M-again-after-leave.patch	tests/server-page-actions.spec.mjs	T6 a decision answered after the user left
-M-late-listener	M-late-listener.patch	tests/server-page-status.spec.mjs	T2c a status read answered after the user left
-M-page-gone	M-page-gone.patch	tests/server-page-status.spec.mjs	T2c the first event after the page has gone
-M-focus-status	M-focus-status.patch	tests/server-page-status.spec.mjs	T2d a redraw keeps keyboard focus on the Activity link
-M-focus-list	M-focus-list.patch	tests/server-page-status.spec.mjs	T2d a list refresh keeps keyboard focus
-M-refused-banner	M-refused-banner.patch	tests/server-page-status.spec.mjs	T1a the gateway reason shows
-M-spy-dots	M-spy-dots.patch	tests/server-page-status.spec.mjs	T1d the path helper is never asked
-M-transport-ends	M-transport-ends.patch	tests/server-page-actions.spec.mjs	T7 a confirm that gets no answer
-M-no-answer-words	M-no-answer-words.patch	tests/server-page-actions.spec.mjs	T7 a confirm that gets no answer
-M-overlap	M-overlap.patch	tests/server-page-actions.spec.mjs	T7 one decision at a time
-M-keys-wait	M-keys-wait.patch	tests/server-page-actions.spec.mjs	T3c a keys read that never answers
-M-silent	M-silent.patch	tests/server-page-actions.spec.mjs	T6 the sign-in start and a refusal are announced
-M-gone-stale	M-gone-stale.patch	tests/server-page-status.spec.mjs	T2e a server gone from a status event
-M-audit-in-card	M-audit-in-card.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
-M-unreadable-words	M-unreadable-words.patch	tests/server-page-actions.spec.mjs	T7 a Finish answered 200 with a body that does not parse
+M-reads-first	M-reads-first.patch	tests/server-page-settings.spec.mjs	T1b settings: a name no server has
+M-transport-config	M-transport-config.patch	tests/server-page-settings.spec.mjs	T9d the transport
+M-extra-kept	M-extra-kept.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
+M-any-kind	M-any-kind.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
+M-nonstring	M-nonstring.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
+M-missing-empty	M-missing-empty.patch	tests/server-page-settings.spec.mjs	T9b no member at all
+M-patch-extra	M-patch-extra.patch	tests/server-page-settings.spec.mjs	T8a Save sends
+M-every-200	M-every-200.patch	tests/server-page-settings.spec.mjs	T8c a 200 with an empty
+M-echo-value	M-echo-value.patch	tests/server-page-settings.spec.mjs	T8c a 200 with an empty
+M-hide-field	M-hide-field.patch	tests/server-page-settings.spec.mjs	T8d after Cancel
+M-empty-save	M-empty-save.patch	tests/server-page-settings.spec.mjs	T8d an empty value
+M-listed-truthy	M-listed-truthy.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
+M-deny-first	M-deny-first.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
+M-ignore-deny	M-ignore-deny.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
+M-restrict-as-all	M-restrict-as-all.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
+M-no-empty-rule	M-no-empty-rule.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
+M-live-hidden	M-live-hidden.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
+M-raw-key-link	M-raw-key-link.patch	tests/server-page-settings.spec.mjs	T9c the PATCH and the key link
+M-raw-patch	M-raw-patch.patch	tests/server-page-settings.spec.mjs	T9c the PATCH and the key link
+M-keys-silent	M-keys-silent.patch	tests/server-page-settings.spec.mjs	T9c-who a failed keys read
+M-focus-lost	M-focus-lost.patch	tests/server-page-settings.spec.mjs	T8d after Cancel
+M-silent	M-silent.patch	tests/server-page-settings.spec.mjs	T8a Save sends
+M-refusal-clears	M-refusal-clears.patch	tests/server-page-settings.spec.mjs	T8b a 422 secret_too_short

@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..ba3bc2b8b9 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -387,7 +387,7 @@ function secretLine(r, server, ctx) {
+     form.querySelector('.sp-error')?.remove();
+     let answer;
+     try {
+-      answer = await ctx.api(backendApi(server), {
++      answer = await ctx.api(`/ui/api/backends/${server}`, {
+         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: input.value } }),
+       });
+     } catch (err) {

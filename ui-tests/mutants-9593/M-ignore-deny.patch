@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..74e0eb88e1 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -306,7 +306,7 @@ function reachWords(k, name) {
+   if (reaching([k], name).length === 0) return 'None';
+   if (Array.isArray(k.allowed_tools) && k.allowed_tools.length === 0) return 'None: its allowlist is empty';
+   const listed = (v) => Array.isArray(v) && v.length > 0;
+-  return listed(k.allowed_tools) || listed(k.denied_tools) ? 'Tool restrictions apply' : 'All of its tools';
++  return listed(k.allowed_tools) ? 'Tool restrictions apply' : 'All of its tools';
+ }
+ 
+ /** Connection: the transport from the status entry (no read serves the address). */

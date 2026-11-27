@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
+index ee1216584f..06f399365e 100644
+--- a/src/gateway/ui/shell/server-page.8c3a60470367.js
++++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+@@ -420,7 +420,7 @@ function secretLine(r, server, ctx) {
+  */
+ function secrets(name, config, ctx) {
+   const section = el('section', { class: 'sp-card' }, el('h2', {}, 'Secrets'));
+-  const records = config?.secret_reference_records;
++  const records = config?.secret_reference_records ?? [];
+   if (!Array.isArray(records)) {
+     section.append(el('p', { class: 'sp-unread' }, 'The secrets could not be read.'));
+     return section;
