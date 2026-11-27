@@ -130,3 +130,26 @@ fn inherit_without_acl_probe_keeps_owner_bits_only() {
     write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace).unwrap();
     assert_eq!(mode_of(&path), 0o600);
 }
+
+/// Review r1 (gpt): a refused save's scratch that cannot be removed returns
+/// the removal error, so the refusal is never read as "nothing left behind".
+/// Gone or removed, the refusal itself is returned.
+#[test]
+fn a_scratch_that_stays_replaces_the_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let refusal = || std::io::Error::other("refused");
+    let stays = dir.path().join("stays");
+    std::fs::create_dir(&stays).unwrap();
+    let kept = super::drop_scratch(&stays, refusal());
+    assert_ne!(kept.to_string(), "refused", "{kept}");
+    assert!(stays.exists(), "a directory is not removed as a file");
+    let removed = dir.path().join("removed");
+    std::fs::write(&removed, b"scratch").unwrap();
+    assert_eq!(
+        super::drop_scratch(&removed, refusal()).to_string(),
+        "refused"
+    );
+    assert!(!removed.exists());
+    let gone = dir.path().join("gone");
+    assert_eq!(super::drop_scratch(&gone, refusal()).to_string(), "refused");
+}

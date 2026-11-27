@@ -104,6 +104,15 @@ pub(super) fn refusal(retry: Retry, mut answer: Response) -> Response {
     answer
 }
 
+/// A route's own answer, made the refusal's 409 when its class says nothing
+/// was attempted.
+pub(super) fn classed(class: Option<Retry>, answer: Response) -> Response {
+    match class {
+        Some(retry) => refusal(retry, answer),
+        None => answer,
+    }
+}
+
 /// The one answer to a config-gate refusal of a UI write, for every write
 /// route: all are 409s, since nothing was tried; busy alone is retryable and
 /// carries `Retry-After`.
@@ -349,10 +358,7 @@ pub(super) fn refused_write(route: WriteRoute, e: &ReplaceError) -> axum::respon
             config_refusal().into_response()
         }
     };
-    match class {
-        Some(retry) => refusal(retry, answer),
-        None => answer,
-    }
+    classed(class, answer)
 }
 
 #[cfg(tp3)]

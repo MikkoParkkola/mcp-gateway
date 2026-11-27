@@ -496,7 +496,7 @@ fn answer_for(refusal: UiRefused, fields: &[&str], asked: Asked) -> Response {
         UiRefused::Unsupported(_) => "unsupported",
         UiRefused::NoAuditLog => "no_audit_log",
         UiRefused::AuditRefused => "audit_refused",
-        UiRefused::WriterRefused { .. } => "writer_refused",
+        UiRefused::WriterRefused => "failed",
         UiRefused::Unprovable(_) => "unprovable",
         UiRefused::Stale(_) => "stale",
         UiRefused::StaleUnpreviewable(_) => "stale_unpreviewable",
@@ -575,7 +575,7 @@ fn save_class(refusal: &UiRefused, asked: Asked) -> Option<Retry> {
     match (refusal, asked) {
         (UiRefused::Busy(_) | UiRefused::StaleUnpreviewable(_), _)
         | (UiRefused::Preview(PreviewRefused::Recovering), Asked::Save) => Some(Retry::Now),
-        (UiRefused::NoAuditLog | UiRefused::WriterRefused { .. }, _)
+        (UiRefused::NoAuditLog | UiRefused::WriterRefused, _)
         | (
             UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)),
             Asked::Save,
@@ -654,10 +654,9 @@ fn answer(refusal: UiRefused, asked: Asked) -> Response {
             "audit_log_required",
             NO_AUDIT_LOG,
         ),
-        // The writer refused before the target changed: its code and text.
-        UiRefused::WriterRefused { code, text } => {
-            structured_error(StatusCode::CONFLICT, code, text).into_response()
-        }
+        // The writer refused before the target changed: the failed write's
+        // body, unchanged, at the refusal's 409.
+        UiRefused::WriterRefused => error(StatusCode::CONFLICT, "failed", FAILED),
         UiRefused::Unprovable(patch) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"error": "not_in_place", "patch": patch_steps(patch)})),
@@ -713,10 +712,7 @@ fn answer(refusal: UiRefused, asked: Asked) -> Response {
         UiRefused::Failed(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
     };
     let response = if retryable { retry(response) } else { response };
-    match class {
-        Some(retry) => super::errors::refusal(retry, response),
-        None => response,
-    }
+    super::errors::classed(class, response)
 }
 
 fn restart_fields(fields: &[&str], reload: &ReloadOutcome) -> Vec<String> {

@@ -21,8 +21,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::errors::{
-    config_path_unavailable, config_refusal, flat_error, gate_refusal, no_config_file,
-    no_reload_write, nothing_attempted, refusal, stale, structured_error,
+    classed, config_path_unavailable, config_refusal, flat_error, gate_refusal, no_config_file,
+    no_reload_write, nothing_attempted, stale, structured_error,
 };
 use super::super::guard::Guard;
 use super::super::secret_slots::{self, Store, Unopened};
@@ -174,10 +174,7 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             config_refusal().into_response()
         }
     };
-    match class {
-        Some(retry) => refusal(retry, answer),
-        None => answer,
-    }
+    classed(class, answer)
 }
 
 /// Where each store reference goes: `(header?, key)`, in the order the

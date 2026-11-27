@@ -34,14 +34,15 @@ async fn check(refusal: UiRefused, asked: Asked, status: StatusCode, code: &str,
     assert_eq!(response.headers().contains_key(RETRY_AFTER), retry);
     if retry {
         let header = response.headers().get(RETRY_AFTER).expect("Retry-After");
-        assert!(
-            header
-                .to_str()
-                .expect("ASCII")
-                .parse::<u64>()
-                .expect("retry seconds")
-                > 0
-        );
+        let seconds = header
+            .to_str()
+            .expect("ASCII")
+            .parse::<u64>()
+            .expect("retry seconds");
+        assert!(seconds > 0);
+        if status == StatusCode::CONFLICT {
+            assert_eq!(seconds, 1, "a refusal that clears by itself: retry in 1 s");
+        }
     }
     let (_, body) = decode(response).await;
     assert_eq!(body["error"], code, "{body}");
@@ -156,12 +157,9 @@ row!(
 );
 row!(
     writer_refused,
-    UiRefused::WriterRefused {
-        code: "foreign-owner",
-        text: "gateway.yaml is owned by another user".into()
-    },
+    UiRefused::WriterRefused,
     CONFLICT,
-    "foreign-owner",
+    "failed",
     false
 );
 row!(
@@ -368,4 +366,18 @@ async fn reload_not_enabled() {
         body,
         json!({"error": "Config reload is not enabled on this gateway"})
     );
+}
+
+/// Review r1 (kimi): a writer refusal keeps the failed write's body byte for
+/// byte; only its status moves, from 500 to the refusal's 409.
+#[tokio::test]
+async fn a_writer_refusal_keeps_the_failed_write_body() {
+    let refused = answer(UiRefused::WriterRefused, Asked::Save);
+    let failed = answer(UiRefused::Failed(FAILED.to_owned()), Asked::Save);
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!refused.headers().contains_key(RETRY_AFTER));
+    let (_, refused) = decode(refused).await;
+    let (_, failed) = decode(failed).await;
+    assert_eq!(refused, failed);
 }

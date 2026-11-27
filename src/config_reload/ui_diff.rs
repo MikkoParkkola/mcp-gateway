@@ -184,12 +184,9 @@ pub(crate) enum UiRefused {
     /// started, so the outcome is not confirmed (nothing was written).
     AuditRefused,
     /// Save: the writer refused the file before the target changed, and left
-    /// no scratch behind: its own code and text, which name the file and
-    /// user ids only.
-    WriterRefused {
-        code: &'static str,
-        text: String,
-    },
+    /// no scratch behind. It keeps the body a failed write has; only its
+    /// status is the refusal's 409.
+    WriterRefused,
     /// Save: the edit cannot be proven in place; the change as steps.
     Unprovable(Patch),
     /// Save: the file changed since the preview; the preview of it now.

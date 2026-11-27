@@ -191,6 +191,17 @@ pub(crate) fn writer_refusal(e: &std::io::Error) -> Option<(&'static str, String
     }
 }
 
+/// Remove the scratch of a refused save. A scratch that stays is not a clean
+/// refusal, so its removal error is returned instead: a writer refusal then
+/// always means nothing was left behind.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+fn drop_scratch(scratch: &std::path::Path, refused: std::io::Error) -> std::io::Error {
+    match std::fs::remove_file(scratch) {
+        Err(kept) if kept.kind() != std::io::ErrorKind::NotFound => kept,
+        _ => refused,
+    }
+}
+
 // Windows `Inherit` keeps the target's access list.
 #[cfg(windows)]
 #[path = "config_persistence_atomic_windows.rs"]

@@ -603,10 +603,7 @@ fn refused_by_writer(error: ReplaceError) -> Response {
         | ReplaceError::Unconfirmed { .. }
         | ReplaceError::Failed(_) => state_uncertain(),
     };
-    match class {
-        Some(retry) => super::errors::refusal(retry, answer),
-        None => answer,
-    }
+    super::errors::classed(class, answer)
 }
 
 /// `POST /ui/api/keys`.

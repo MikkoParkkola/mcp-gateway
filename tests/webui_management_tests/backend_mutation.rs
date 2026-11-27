@@ -7,7 +7,7 @@ use super::*;
 // ── Backend mutation tests ────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn test_add_backend_without_config_path_returns_503() {
+async fn test_add_backend_without_config_path_returns_409() {
     // GIVEN: state WITHOUT config_path (no persistence available)
     let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
@@ -268,7 +268,7 @@ async fn test_add_backend_returns_reload_outcome_when_context_available() {
 }
 
 #[tokio::test]
-async fn test_reload_endpoint_without_reload_context_returns_503() {
+async fn test_reload_endpoint_without_reload_context_returns_409() {
     let (state, _store) = make_app_state(None, None).await;
     let router = create_router(state);
 

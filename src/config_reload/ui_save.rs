@@ -401,7 +401,11 @@ fn map_error(error: ReplaceError, halt: Option<Halt>) -> Mapped {
         ReplaceError::Unsupported(why) => UiRefused::Preview(PreviewRefused::Untrusted(why)),
         ReplaceError::Stage(_) => write_failed("stage"),
         ReplaceError::Write(_) => write_failed("write"),
-        ReplaceError::WriterRefused { code, text } => UiRefused::WriterRefused { code, text },
+        ReplaceError::WriterRefused { .. } => {
+            // Logged as before; the answer keeps the failed write's body.
+            let _ = write_failed("writer_refused");
+            UiRefused::WriterRefused
+        }
         ReplaceError::Failed(_) => write_failed("failed"),
         ReplaceError::RollbackFailed { .. } => write_failed("rollback_failed"),
         ReplaceError::Unconfirmed { .. } => write_failed("unconfirmed"),

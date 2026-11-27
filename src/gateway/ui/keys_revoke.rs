@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use super::config_file::{Gateway, read_gateway};
 use super::errors::{
-    flat_error, gate_refusal, nothing_attempted, refusal, stale, structured_error,
+    classed, flat_error, gate_refusal, nothing_attempted, stale, structured_error,
 };
 use super::guard::Guard;
 use crate::config_persistence::keyedit::{
@@ -326,10 +326,7 @@ fn revoke_response(
 fn refused(name: &str, error: ReplaceError) -> Response {
     let class = nothing_attempted(&error);
     let answer = refused_answer(name, error);
-    match class {
-        Some(retry) => refusal(retry, answer),
-        None => answer,
-    }
+    classed(class, answer)
 }
 
 fn refused_answer(name: &str, error: ReplaceError) -> Response {
