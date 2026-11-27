@@ -207,3 +207,48 @@ async fn p4_3_an_abandoned_meta_request_writes_its_record_once() {
     };
     assert_eq!(record["outcome"], "ok", "{record}");
 }
+
+/// P4 (3), the client-cancel return: a `/mcp` call its caller cancels while
+/// the backend holds it is answered -32800 and leaves today's record and
+/// counts (its dispatch never finished, so it built no record).
+#[tokio::test]
+async fn p4_3_a_cancelled_meta_call_keeps_todays_record_and_counts() {
+    use std::sync::atomic::Ordering;
+    let fx = fixture(Setup {
+        extras: &[Extra::GateCall],
+        ..Setup::default()
+    })
+    .await;
+    let store = attach(&fx);
+    let call = meta_invoke("alpha", "t", &json!({}));
+    let request = post_to(&fx, "/mcp", &call, &Caller::Anonymous);
+    tokio::pin!(request);
+    loop {
+        tokio::select! {
+            _ = &mut request => panic!("premise: the backend holds the call"),
+            () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
+                if fx.calls.load(Ordering::SeqCst) > 0 {
+                    break;
+                }
+            }
+        }
+    }
+    let cancel = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                        "params": {"requestId": 5}})
+    .to_string();
+    let ((_, answer), _) = tokio::join!(
+        &mut request,
+        post_to(&fx, "/mcp", &cancel, &Caller::Anonymous)
+    );
+    assert_eq!(answer["error"]["code"], json!(-32800), "{answer}");
+    assert_eq!(
+        totals(&store),
+        [0, 0, 0, 0, 0],
+        "a cancelled call counts nothing"
+    );
+    assert_eq!(
+        invocations(&fx).len(),
+        0,
+        "a cancelled call writes no record"
+    );
+}
