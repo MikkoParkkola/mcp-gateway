@@ -29,26 +29,12 @@ on:
       - 'scripts/dev/merge_ui_line.py'
       - 'scripts/dev/test_merge_ui_line.py'
       - '.github/workflows/ui-tests.yml'
-  # Called by ci.yml's `journeys` job: the same setup, then the journeys project against the gateway
-  # binary that ci.yml's linux-gateway-bin job built in the same run. A call runs only the journeys steps.
-  workflow_call:
-    inputs:
-      journeys_bin:
-        description: Run the journeys project against ci.yml's linux-gateway-bin artifact instead of the fixture suite
-        type: boolean
-        default: false
-      build_result:
-        description: needs.linux-gateway-bin.result in the caller (a called workflow has no needs context)
-        type: string
-        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  # In a call the group is unique to the caller's run, so the caller's own concurrency decides cancellation; this
-  # workflow's own runs keep today's group.
-  group: ${{ github.workflow }}-${{ inputs.journeys_bin && format('journeys-{0}', github.run_id) || github.event.pull_request.number || github.ref }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -63,16 +49,6 @@ jobs:
       run:
         working-directory: ui-tests
     steps:
-      # Journeys mode, before anything else: a caller whose build did not succeed gets a red job at once.
-      - name: Stop when the caller's gateway build did not succeed (journeys mode)
-        if: ${{ inputs.journeys_bin && inputs.build_result != 'success' }}
-        # Before the checkout, so the job default ui-tests does not exist yet.
-        working-directory: .
-        env:
-          RESULT: ${{ inputs.build_result }}
-        run: |
-          echo "::error::journeys need the gateway binary, but the caller's build_result input is '$RESULT', not success"
-          exit 1
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -107,7 +83,7 @@ jobs:
         run: npx playwright install chromium
       # Only after a miss, as the combined cache action did: a hit has nothing new to save.
       - name: Save Chromium
-        if: (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && steps.browsers.outputs.cache-hit != 'true' && !inputs.journeys_bin
+        if: (github.ref == 'refs/heads/docs/ranking-1-release-line' || github.ref == 'refs/heads/main') && steps.browsers.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
@@ -127,14 +103,13 @@ jobs:
           timeout 300 npx playwright install-deps chromium \
             || echo "::warning::the system libraries were not installed (apt mirror unreachable); relying on the hosted image's"
       - name: Run the browser tests
-        if: ${{ !inputs.journeys_bin }}
         env:
           CI: 'true'
         # The `visual` project needs the design frames, which are not in
         # this repository; it runs locally.
         run: npx playwright test --project=chromium
       - name: Keep the report of a failed run
-        if: ${{ failure() && !inputs.journeys_bin }}
+        if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-tests-report
@@ -150,7 +125,7 @@ jobs:
       # holds its layout from first paint.
       # One worker: parallel phone loads would measure each other's CPU use.
       - name: Check the page budgets (LCP blocks, CLS is reported)
-        if: ${{ !cancelled() && !inputs.journeys_bin }}
+        if: ${{ !cancelled() }}
         env:
           CI: 'true'
           PERF_LOADS: '20'
@@ -158,7 +133,7 @@ jobs:
       - name: Keep the page budgets' spread
         # always(), not !cancelled(): a job that hits its time limit is
         # cancelled, and the rows it measured are the evidence most needed.
-        if: ${{ always() && !inputs.journeys_bin }}
+        if: ${{ always() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ui-perf-spread
