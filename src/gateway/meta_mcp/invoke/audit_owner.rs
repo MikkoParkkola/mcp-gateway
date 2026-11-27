@@ -260,8 +260,19 @@ pub(crate) async fn commit(lease: Option<&SyncLease>) -> crate::Result<()> {
         let landed = match received.await {
             Ok(appended) => meta.settle_record(appended, lease),
             // The job ended with no verdict (it panicked, or no runtime ran
-            // it): the record is not known to have landed.
-            Err(_) => Err(crate::Error::AuditUnavailable),
+            // it): the record is not known to have landed, which each
+            // failure policy treats as it treats a failed write.
+            Err(_) => {
+                tracing::error!("an invocation record's write ended with no verdict");
+                let closed = meta.transparency_logger.as_ref().is_some_and(|log| {
+                    log.failure_policy() == crate::security::audit::AuditFailurePolicy::FailClosed
+                });
+                if closed {
+                    Err(crate::Error::AuditUnavailable)
+                } else {
+                    Ok(())
+                }
+            }
         };
         written = written.and(landed);
     }
