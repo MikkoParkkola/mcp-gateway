@@ -1,4 +1,2 @@
 # id	patch	spec	grep (one row each; each leg's killing line is listed in the PR body)
-M-keep-at-send	M-keep-at-send.patch	tests/server-page-settings.spec.mjs	T8e leaving with the PATCH pending
-M-no-server-match	M-no-server-match.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
-M-reference-only-string	M-reference-only-string.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
+M-field-editable	M-field-editable.patch	tests/server-page-settings.spec.mjs	T8e nothing can be typed or saved again
