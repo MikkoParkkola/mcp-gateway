@@ -7,7 +7,8 @@ use super::{Config, TransportConfig};
 use crate::{Error, Result};
 
 impl Config {
-    /// `max_frame_bytes` applies to a stdio backend only, within the allowed range.
+    /// `max_frame_bytes` (the most one answer may carry) applies to a stdio
+    /// or HTTP backend, within the allowed range.
     ///
     /// # Errors
     ///
@@ -18,10 +19,13 @@ impl Config {
             let Some(bytes) = backend.max_frame_bytes else {
                 continue;
             };
-            if !matches!(backend.transport, TransportConfig::Stdio { .. }) {
+            if !matches!(
+                backend.transport,
+                TransportConfig::Stdio { .. } | TransportConfig::Http { .. }
+            ) {
                 return Err(Error::ConfigValidation(format!(
-                    "backends.{name}.max_frame_bytes is only valid for a stdio backend (one \
-                     declared with a `command`)"
+                    "backends.{name}.max_frame_bytes is only valid for a stdio or HTTP backend \
+                     (one declared with a `command` or a `url`)"
                 )));
             }
             if !(MIN_MAX_FRAME_BYTES..=CEILING_MAX_FRAME_BYTES).contains(&bytes) {

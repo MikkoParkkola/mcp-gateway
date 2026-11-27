@@ -65,6 +65,7 @@ impl Error {
             other @ (Self::Forbidden { .. }
             | Self::GatewayRefused { .. }
             | Self::ResponseFirewallRefused
+            | Self::ResponseTooLarge { .. }
             | Self::AuditUnavailable
             | Self::CapabilityHashMismatch { .. }
             | Self::BackendNotFound(_)
