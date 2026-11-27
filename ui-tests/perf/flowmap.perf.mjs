@@ -91,3 +91,35 @@ test('F2 a planted slow update misses the budget, two slow samples in fifty do n
   // An unmeasured number is a miss, never a pass.
   expect(miss([])).not.toBeNull();
 });
+
+test('DIAG where the phone update time goes', async ({ page }) => {
+  await serve(page, { body: big(0) });
+  await open(page);
+  await expect(page.locator('#content [data-panel="flow-map"] .ov-map')).toHaveCount(1);
+  await profileOn(page, 'phone');
+  const parts = await page.evaluate(async ([a, b]) => {
+    const screens = JSON.parse(document.getElementById('screens').textContent);
+    const { flowModel, updateMap } = await import(screens.overview.js);
+    const root = document.querySelector('#content [data-panel="flow-map"]');
+    const p95 = (xs) => xs.sort((x, y) => x - y)[Math.ceil(0.95 * xs.length) - 1].toFixed(2);
+    const run = (pair) => {
+      const m = []; const u = []; const f = [];
+      for (let i = 0; i < 50; i += 1) {
+        const t0 = performance.now(); const model = flowModel(pair[i % 2]);
+        const t1 = performance.now(); updateMap(root, model);
+        const t2 = performance.now(); root.getBoundingClientRect();
+        const t3 = performance.now();
+        m.push(t1 - t0); u.push(t2 - t1); f.push(t3 - t2);
+      }
+      return { model: p95(m), update: p95(u), flush: p95(f) };
+    };
+    const flushOnly = [];
+    for (let i = 0; i < 50; i += 1) { root.style.setProperty('--diag', String(i)); const t = performance.now(); root.getBoundingClientRect(); flushOnly.push(performance.now() - t); }
+    const changing = run([a, b]);
+    const same = run([a, a]);
+    root.querySelectorAll('.ov-lines path').forEach((p) => { p.style.transition = 'none'; });
+    const noTransition = run([a, b]);
+    return { changing, same, noTransition, flushOnly: p95(flushOnly) };
+  }, [big(0), big(1)]);
+  console.log(`DIAG phone ${JSON.stringify(parts)}`);
+});
