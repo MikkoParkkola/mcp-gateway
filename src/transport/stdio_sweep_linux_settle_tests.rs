@@ -472,7 +472,7 @@ fn a_pid_reused_under_its_walk_adopts_none_of_its_children() {
         ],
     ));
     let after = swapping.read(&[who(fake(1), 1)], &[], Duration::MAX);
-    assert!(swapping.moved, "the swap did not happen inside K's walk");
+    assert_eq!(swapping.moved, 2, "the swap did not happen inside K's walk");
     assert!(
         !pids(&after).contains(&orphan),
         "a stranger's child was adopted"

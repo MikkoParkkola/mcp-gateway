@@ -203,11 +203,11 @@ pub(in crate::transport::stdio) struct LinuxTable {
     pub(super) rewrite_fired: bool,
     /// Test only: after read number `.0`, rename each (from, to) pair in order,
     /// once: a fake pid reuse (the walked directory moves away and a stranger
-    /// takes its path). `moved` records that every rename succeeded.
+    /// takes its path). `moved` counts the renames that succeeded, in order.
     #[cfg(test)]
     pub(super) move_after_read: Option<(usize, Vec<(std::path::PathBuf, std::path::PathBuf)>)>,
     #[cfg(test)]
-    pub(super) moved: bool,
+    pub(super) moved: usize,
 }
 
 impl LinuxTable {
@@ -236,7 +236,7 @@ impl LinuxTable {
             #[cfg(test)]
             move_after_read: None,
             #[cfg(test)]
-            moved: false,
+            moved: 0,
         }
     }
 
@@ -320,7 +320,8 @@ impl LinuxTable {
         {
             self.moved = pairs
                 .iter()
-                .all(|(from, to)| std::fs::rename(from, to).is_ok());
+                .take_while(|(from, to)| std::fs::rename(from, to).is_ok())
+                .count();
         }
     }
 

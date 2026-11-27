@@ -17,8 +17,9 @@ use rustix::fs::{Mode, OFlags};
 pub(super) struct Pinned {
     fd: OwnedFd,
     /// Test only: where the directory was opened, so the sabotage job can make
-    /// the walk read by path instead (mutant M10).
+    /// the walk read by path instead (mutant M10). Unmutated code never reads it.
     #[cfg(test)]
+    #[allow(dead_code)]
     base: std::path::PathBuf,
 }
 

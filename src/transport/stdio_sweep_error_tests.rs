@@ -470,7 +470,7 @@ fn a_snapshot_with_less_than_a_slice_left_reads_once() {
     );
 }
 
-/// Option 4 (c): readings that keep being cut stop at SNAPSHOT_SLICES (4); the
+/// Option 4 (c): readings that keep being cut stop at `SNAPSHOT_SLICES` (4); the
 /// snapshot then keeps what it has and counts each short reading. Red if the
 /// cap is missing or different.
 #[test]
