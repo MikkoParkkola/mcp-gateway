@@ -235,11 +235,13 @@ test.describe('T8e while a Save is pending', () => {
   });
 
   for (const [label, answer] of [['stored', stored('env.API_TOKEN')], ['refused', { code: 422, body: { error: 'secret_too_short', message: 'sentence 422' } }]]) {
-    test(`T8e a ${label} answer after the user left clears the field it leaves behind`, async ({ page }) => {
+    test(`T8e leaving with the PATCH pending leaves the field empty, before and after a ${label} answer`, async ({ page }) => {
       const held = gate();
       await saveSecret(page, () => ({ ...answer, hold: held.shut }));
       const left = await page.locator('#content input[type="password"]').elementHandle();
       await toStatus(page);
+      // Still pending: the detached field must already be empty, not only once the answer lands.
+      expect(await left.evaluate((i) => i.value)).toBe('');
       const answered = page.waitForResponse('**/ui/api/backends/**');
       held.open();
       await answered;
