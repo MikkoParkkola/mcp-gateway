@@ -486,6 +486,7 @@ pub(crate) fn scrub_error(needles: &NeedleSet, error: &mut crate::Error) -> Scru
         | E::Forbidden { .. }
         | E::GatewayRefused { .. }
         | E::ResponseFirewallRefused
+        | E::ResponseTooLarge { .. }
         | E::AuditUnavailable
         | E::CapabilityHashMismatch { .. }
         | E::BackendNotFound(_)

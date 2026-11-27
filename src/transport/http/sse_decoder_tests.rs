@@ -179,6 +179,34 @@ async fn a_stream_ending_without_a_blank_line_still_yields_its_response() {
     assert!(response.result.is_some());
 }
 
+/// A stream that ends with no response frame, empty or holding only a
+/// comment and a notification, is an error, not an empty answer.
+#[tokio::test]
+async fn a_stream_ending_without_a_response_frame_is_an_error() {
+    let notes: &[&[u8]] = &[
+        b"",
+        b": keep-alive\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"x\"}\n\n",
+    ];
+    for body in notes {
+        let stream = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(body))]);
+        let error = decode_sse_exchange(stream, None)
+            .await
+            .expect_err("no response frame arrived");
+        assert!(
+            error.to_string().contains("No data in SSE response"),
+            "{error}"
+        );
+    }
+    let nothing = futures::stream::iter(Vec::<crate::error::Result<bytes::Bytes>>::new());
+    let error = decode_sse_exchange(nothing, None)
+        .await
+        .expect_err("a stream with no chunk at all");
+    assert!(
+        error.to_string().contains("No data in SSE response"),
+        "{error}"
+    );
+}
+
 /// A backend that omits the blank line between frames glues them into one
 /// block, and every `data:` line in a block is joined before parsing -- so the
 /// failure is a JSON parse error on text that looked like valid frames. The
