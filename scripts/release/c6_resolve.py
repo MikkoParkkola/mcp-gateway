@@ -22,7 +22,12 @@ docs/release/c6-gap/v4.0.0-c6-replacements.tsv) it:
      fn defined exactly once in the crate the arguments select (`--lib` or `--test X`), and
      a full path is that fn's path in the crate's module tree. Cargo matches a filter as a
      substring of the test path, so a test moved to another module would match nothing and
-     the row would come back VOID instead of judging its killer.
+     the row would come back VOID instead of judging its killer;
+  6. requires the row's declared_assertion (`<file>:<line> <text> [stmt:<8 hex>]`) to name a
+     line inside the killer (or inside a helper F the killer calls, for a `[via F]` row) that
+     still carries the recorded text and starts the statement with that digest, exactly once,
+     all in the file as the mutant run compiles it (the row's patch applied when it edits that
+     file). G7 scores a RED only when the panic is at that file:line.
 Prints one line per obligation and `N framed items unresolved`; exits 1 when N > 0.
 --manifest DIR writes the re-targeted patches and a mutants manifest for the runner.
 Standard library only.
@@ -33,6 +38,7 @@ from __future__ import annotations
 import argparse
 import csv
 import enum
+import hashlib
 import os
 import re
 import subprocess
@@ -734,9 +740,10 @@ def _declared_test_path(tree: Tree, target: str) -> str | None:
     return None
 
 
-def filter_refusal(tree: Tree, args: str, crates: Crates) -> str | None:
-    """Why the killer arguments' test filter does not name exactly one test, or None.
-    `crates` caches each crate's module tree and fn-name index across rows."""
+def filter_refusal(tree: Tree, args: str, crates: Crates) -> tuple[str | None, str | None]:
+    """(why the killer arguments' test filter does not name exactly one test, None), or
+    (None, the file defining that one test). `crates` caches each crate's module tree and
+    fn-name index across rows."""
     words = args.split()
     if words[:1] == ["--lib"] and len(words) == 2:
         root = "src/lib.rs"
@@ -745,10 +752,10 @@ def filter_refusal(tree: Tree, args: str, crates: Crates) -> str | None:
         roots = [r for r in ((declared,) if declared else (f"tests/{words[1]}.rs", f"tests/{words[1]}/main.rs"))
                  if tree.exists(r)]
         if not roots:
-            return f"killer arguments {args!r}: no test target {words[1]}"
+            return f"killer arguments {args!r}: no test target {words[1]}", None
         root = roots[0]
     else:
-        return f"killer arguments {args!r} are not `--lib FILTER` or `--test TARGET FILTER`"
+        return f"killer arguments {args!r} are not `--lib FILTER` or `--test TARGET FILTER`", None
     wanted = words[-1]
     name = wanted.rsplit("::", 1)[-1]
     try:
@@ -783,16 +790,17 @@ def filter_refusal(tree: Tree, args: str, crates: Crates) -> str | None:
             runs = [p for p, _, is_test in _fn_paths(tree, mods, sorted(near), lambda n: True)
                     if is_test and wanted in p]
     except Unsupported as unreadable:
-        return f"test filter {wanted}: cannot read the crate's module tree with certainty: {unreadable}"
+        return f"test filter {wanted}: cannot read the crate's module tree with certainty: {unreadable}", None
     if not defs:
-        return f"test filter {wanted}: no fn {name} in the crate rooted at {root}"
+        return f"test filter {wanted}: no fn {name} in the crate rooted at {root}", None
     if len(defs) > 1:
-        return f"test filter {wanted}: fn {name} is defined {len(defs)} times: " + ", ".join(f"{p} at {w}" for p, w in defs)
+        return (f"test filter {wanted}: fn {name} is defined {len(defs)} times: "
+                + ", ".join(f"{p} at {w}" for p, w in defs), None)
     if "::" in wanted and defs[0][0] != wanted:
-        return f"test filter {wanted} does not match the module tree: fn {name} is {defs[0][0]} at {defs[0][1]}"
+        return f"test filter {wanted} does not match the module tree: fn {name} is {defs[0][0]} at {defs[0][1]}", None
     if runs != [defs[0][0]]:
-        return f"test filter {wanted} matches {len(runs)} tests: {', '.join(sorted(runs))}"
-    return None
+        return f"test filter {wanted} matches {len(runs)} tests: {', '.join(sorted(runs))}", None
+    return None, defs[0][1].rsplit(":", 1)[0]
 
 
 def _fn_paths(tree: Tree, mods: dict[str, ModFile], paths, wanted) -> list[tuple[str, str, bool]]:
@@ -822,6 +830,119 @@ def _gap_rows(tree: Tree, outcomes: list[Outcome]) -> list[tuple[dict[str, str],
         if o is not None:
             rows.append((row, o))
     return rows
+
+
+# --------------------------------------------------------------------------------------------
+# Declared assertions: G7 scores a RED only at the row's declared file:line.
+# --------------------------------------------------------------------------------------------
+# A static tripwire for drift: it proves the declared site still holds the recorded statement
+# inside the killer (or the helper the row names), in the file as the mutant run compiles it.
+# It cannot prove the killer panics there; only the gate-day log does, through G7.
+
+# `<file>:<line> <text> [stmt:<8 hex>]`, then free annotations; `[via F]` names a helper.
+_SITE = re.compile(r"^(\S+):(\d+) (.+?) \[stmt:([0-9a-f]{8})\](.*)$")
+_VIA = re.compile(r"\[via ([A-Za-z_]\w*)\]")
+
+
+def _collapse(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _apply_reanchored(source: str, patch: str) -> str:
+    """`source` with `patch` applied by its hunk headers. Only for a patch `_reanchor` wrote,
+    whose headers name exactly where each old side sits in `source`."""
+    lines, out, cursor = source.splitlines(keepends=True), [], 0
+    for header, hunk in zip(re.findall(r"^@@ -(\d+),(\d+) ", patch, flags=re.M), _hunks(patch)):
+        first, count = int(header[0]) - 1, int(header[1])
+        out += lines[cursor:first] + [text + "\n" for mark, text in hunk if mark != "-"]
+        cursor = first + count
+    return "".join(out + lines[cursor:])
+
+
+def _statement(source: str, code: str, line: int) -> str:
+    """The statement that starts at 1-based `line`, whitespace-collapsed: from the line's first
+    non-blank character, reading brackets in the blanked `code`, up to a `;` or `,` at depth 0
+    (kept), a closer that would take the depth below 0 (left out), or a line end at depth 0."""
+    src, blanked = source.splitlines(), code.splitlines()
+    depth, parts = 0, []
+    for k in range(line - 1, len(blanked)):
+        text = blanked[k]
+        start = len(text) - len(text.lstrip()) if k == line - 1 else 0
+        end, done = len(text), False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                if depth == 0:
+                    end, done = i, True
+                    break
+                depth -= 1
+            elif ch in ";," and depth == 0:
+                end, done = i + 1, True
+                break
+        parts.append(src[k][start:end])
+        if done or depth == 0:
+            break
+    return _collapse(" ".join(parts))
+
+
+def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: str) -> str | None:
+    """Why the row's declared_assertion would not be the site G7 matches, or None."""
+    m = _SITE.match(row.get("declared_assertion", "").strip())
+    if not m:
+        return "declared assertion does not open with file:line, text and [stmt:<8 hex>]"
+    path, line, text, digest, tail = m.group(1), int(m.group(2)), m.group(3), m.group(4), m.group(5)
+    site = f"declared assertion {path}:{line}"
+    killer = row["declared_killer_args"].split()[-1].rsplit("::", 1)[-1]
+    via = _VIA.search(tail)
+
+    def judged(file: str) -> str:
+        # The file the mutant run compiled: the row's own patch applied when it edits that file.
+        source = tree.read(file)
+        return _apply_reanchored(source, o.patch) if file == o.file and o.patch else source
+
+    if not tree.exists(path):
+        return f"{site}: no such file"
+    try:
+        source = judged(path)
+        code = blank(source)
+        decls = declarations(source)
+        killer_src = source if killer_file == path else judged(killer_file)
+        killer_decls = [d for d in (decls if killer_file == path else declarations(killer_src)) if d.name == killer]
+    except Unsupported as unreadable:
+        return f"{site}: cannot read the source with certainty: {unreadable}"
+    count = len(source.splitlines())
+    if not 1 <= line <= count:
+        return f"{site} is outside the file's {count} lines"
+    if len(killer_decls) != 1:
+        return f"{site}: {killer} is declared {len(killer_decls)} times in {killer_file}"
+    kdecl = killer_decls[0]
+    if via:
+        helper = via.group(1)
+        holders = [d for d in decls if d.start <= line <= d.end]
+        inner = min(holders, key=lambda d: (d.end - d.start, -d.start)) if holders else None
+        if inner is None or inner.name != helper:
+            return f"{site} is in {inner.name if inner else 'no fn'}, not {helper}"
+        body = "\n".join(blank(killer_src).splitlines()[kdecl.start - 1:kdecl.end])
+        # The fn header names the killer, never the helper; any later `F(` or `F::` is a use.
+        if not re.search(rf"\b{re.escape(helper)}\s*(\(|::)", body):
+            return f"{killer} does not call {helper}"
+        span = inner
+    else:
+        if path != killer_file or not kdecl.start <= line <= kdecl.end:
+            return f"{site} is not inside {killer}"
+        span = kdecl
+    if _collapse(source.splitlines()[line - 1]) != _collapse(text):
+        return f"{site} does not carry the recorded text"
+    statement = _statement(source, code, line)
+    actual = hashlib.sha256(statement.encode()).hexdigest()[:8]
+    if actual != digest:
+        return f"{site} statement digest is {actual}, recorded {digest}"
+    same = sum(_statement(source, code, k) == statement for k in range(span.start, span.end + 1))
+    if same != 1:
+        return f"statement at {path}:{line} occurs {same} times in {span.name}"
+    return None
 
 
 # --------------------------------------------------------------------------------------------
@@ -876,10 +997,14 @@ def _run(tree: Tree, args: argparse.Namespace) -> int:
                 twin.status = "unresolved"
                 twin.detail = (f"{first.obligation.path} rank {first.obligation.rank} and "
                                f"{o.obligation.path} rank {o.obligation.rank} resolve to one function at {o.file}")
-    # A row whose test filter names no test, or several, would not judge its killer.
+    # A row whose test filter names no test, or several, would not judge its killer; a row
+    # whose declared site no longer holds its statement would have its RED scored VOID by G7.
     crates: Crates = {}
     for row, o in _gap_rows(tree, outcomes):
-        if o.status != "unresolved" and (why := filter_refusal(tree, row["declared_killer_args"], crates)):
+        if o.status == "unresolved":
+            continue
+        why, killer_file = filter_refusal(tree, row["declared_killer_args"], crates)
+        if why or (why := assertion_refusal(tree, row, o, killer_file)):
             o.status, o.detail = "unresolved", why
     for o in outcomes:
         ob = o.obligation
