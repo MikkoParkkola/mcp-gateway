@@ -27,3 +27,14 @@
 .sv-group:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
 .sv-note, .sv-quiet { margin: var(--space-2, .5rem) 0 0; }
 @media (prefers-reduced-motion: reduce) { .sv-group::before { transition: none; } }
+/* A server's own page (server-page.js): its facts, its action cards and their error line. */
+.sp { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-4, 1rem); max-width: 48rem; }
+.sp-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1, .25rem) var(--space-4, 1rem); margin: 0; }
+.sp-facts dt { color: var(--color-text-secondary); }
+.sp-facts dd { margin: 0; overflow-wrap: anywhere; }
+.sp-card { border: 1px solid var(--color-border-subtle); border-radius: 6px; padding: var(--space-4, 1rem); background: var(--color-bg-raised); overflow-wrap: anywhere; }
+.sp-card h2 { margin: 0 0 var(--space-1, .25rem); font-size: 1rem; }
+.sp-card .btn { max-width: 100%; }
+.sp-card .acts { display: flex; flex-wrap: wrap; gap: var(--space-2, .5rem); }
+.sp-warn { color: var(--color-status-warning-fg); }
+.sp-error { color: var(--color-status-danger-fg); }
