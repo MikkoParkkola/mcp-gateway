@@ -188,7 +188,7 @@ async fn a_stream_ending_without_a_response_frame_is_an_error() {
         b": keep-alive\n\nevent: message\ndata: {\"jsonrpc\":\"2.0\",\"method\":\"x\"}\n\n",
     ];
     for body in notes {
-        let stream = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(*body))]);
+        let stream = futures::stream::iter(vec![Ok(bytes::Bytes::from_static(body))]);
         let error = decode_sse_exchange(stream, None)
             .await
             .expect_err("no response frame arrived");
