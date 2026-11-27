@@ -34,10 +34,10 @@ export async function fakeServerGateway(page, { status, keys = { code: 200, body
   const seen = { status: 0, config: 0, keys: 0, backend: [] };
   let boot = true;
   const reply = async (route, a) => {
-    const { code = 200, body = a, hold = null, drop = false } = a && 'code' in a ? a : { body: a };
+    const { code = 200, body = a, hold = null, drop = false, raw = null } = a && 'code' in a ? a : { body: a };
     if (hold) await hold;
     if (drop) return route.abort('failed');
-    return route.fulfill({ status: code, contentType: 'application/json', body: JSON.stringify(body) });
+    return route.fulfill({ status: code, contentType: 'application/json', body: raw ?? JSON.stringify(body) });
   };
   await page.route('**/ui/api/status', (route) => {
     if (boot) { boot = false; return route.fulfill({ status: 200, contentType: 'application/json', body: '{}' }); }

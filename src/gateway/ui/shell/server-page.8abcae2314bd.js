@@ -151,7 +151,10 @@ function removeConsequences(s, keys) {
 /** The gateway's own sentence for a refusal, or one built from its status. */
 const refusalText = (err) => err?.serverMessage ?? (!err?.status
   ? 'The gateway did not answer. The sign-in may still be open: try again.'
-  : `The gateway refused the sign-in (HTTP ${err.status}).`);
+  : err.unreadable
+    // An ok status whose body would not parse: not a refusal, and the attempt may have gone through.
+    ? "The gateway's answer could not be read. The sign-in may still be open: try again."
+    : `The gateway refused the sign-in (HTTP ${err.status}).`);
 
 /** The confirm refusals after which an attempt cannot go on (signin.rs): the start is offered again. */
 const FINAL_REFUSALS = new Set(['no_sign_in', 'sign_in_save_failed']);
