@@ -1,0 +1,5 @@
+# file	fn	needle	count (generated; see delivery_framing.rs)
+src/gateway/router/meta_refusal_audit.rs	admission	build_error_response	1
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_refusal	gateway_error	2
+src/gateway/router/meta_refusal_audit.rs	settle_stdio_admission	gateway_error	1
+src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	JsonRpcResponse::error	2
