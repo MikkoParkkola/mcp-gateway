@@ -104,7 +104,7 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
     # macOS builds the lib test parts, never the whole binary (it swapped the 3-core, 7 GB runner): `lib-b`
-    # builds and runs parts 1-4 one at a time, `int` runs its suite and `int-lib` builds and runs part 5 in the
+    # builds and runs parts 1 and 3, `lib-c` parts 2 and 4 in its own job, one at a time, `int` runs its suite and `int-lib` builds and runs part 5 in the
     # same job. PARTS is the one source of which leg takes which part; the workflow names the leg only.
     "macos": {
         "lib-b": [("parts", ["--lib"], [], 0)],
@@ -112,8 +112,10 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-lib": [("parts", ["--lib"], [], 0)],
     },
 }
-# Which lib test parts each part-building leg builds and runs (`run-prebuilt-parts <os> <leg> --build`).
-PARTS = {"macos": {"lib-b": (1, 2, 3, 4), "int-lib": (5,)}}
+# Which lib test parts each part-building leg builds and runs (`run-prebuilt-parts <os> <leg> --build`). lib-b's
+# four parts were the train's longest macOS job; split over two legs as 1+3 and 2+4, the pairing whose slower leg
+# was shortest on two measured trains' per-part compile and test times, int becomes the longest.
+PARTS = {"macos": {"lib-b": (1, 3), "lib-c": (2, 4), "int-lib": (5,)}}
 # The macOS part counts the floors come from (each part's list less the macOS skips), with the run they were read
 # from: the E1 dispatch run at 0a3037aecd, both legs' per-part notices. Each leg's floor is its parts' sum, 2% under.
 MACOS_PART_COUNTS = {"run": "44460056220 (E1, macOS, 0a3037aecd)", 1: 3827, 2: 3700, 3: 4526, 4: 5157, 5: 3615}
@@ -957,12 +959,16 @@ def built_parts_rows() -> None:
                     os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
             return rc, open(log).read().split("\n")[:-1]
 
+        live = dict(PARTS["macos"])
         try:
-            # R1: the leg's parts from PARTS, in order, each binary gone before the next build; the clean run passes.
-            rc, steps = leg_run("lib-b", 8)
-            assert (rc, steps) == (0, ["build 1", "build 2", "build 3", "build 4"]), (rc, steps)
-            rc, steps = leg_run("int-lib", 2)
-            assert (rc, steps) == (0, ["build 5"]), (rc, steps)
+            # R1: each leg builds its parts from the live PARTS, in order, each binary gone before the next build; the
+            # clean run passes. The live split: lib-b 1 and 3, lib-c 2 and 4, int-lib 5.
+            assert live == {"lib-b": (1, 3), "lib-c": (2, 4), "int-lib": (5,)}, live
+            for leg, parts in live.items():
+                rc, steps = leg_run(leg, 2 * len(parts))
+                assert (rc, steps) == (0, [f"build {k}" for k in parts]), (leg, rc, steps)
+            # R2-R5 test the mechanism on a four-part leg, whatever the live split; restored below.
+            PARTS["macos"]["lib-b"] = (1, 2, 3, 4)
             # R2: a part that ran a listed test less, or a test it does not list, fails the leg.
             assert leg_run("lib-b", 8, BEHAVE_2="short")[0] == 1, "a part that ran one test fewer passed"
             assert leg_run("lib-b", 8, BEHAVE_3="extra")[0] == 1, "a part that ran an unlisted test passed"
@@ -991,6 +997,7 @@ def built_parts_rows() -> None:
             assert (rc, steps) == (0, [f"build {k}" for k in range(1, part_count() + 1)]), (rc, steps)
         finally:
             SHARDS["macos"].update(saved)
+            PARTS["macos"].update(live)
 
 
 def built_parts_root_rows() -> None:
@@ -998,6 +1005,9 @@ def built_parts_root_rows() -> None:
     non-zero exit or a missing row fails the leg; parts without root rows never use PRIVILEGE."""
     global PRIVILEGE
     saved_leg, saved_priv = SHARDS["macos"]["lib-b"], PRIVILEGE
+    # These rows test the mechanism on a four-part leg, whatever the live split; restored below.
+    saved_parts = PARTS["macos"]["lib-b"]
+    PARTS["macos"]["lib-b"] = (1, 2, 3, 4)
     row = ROOT_ROWS + "r"
     with tempfile.TemporaryDirectory() as root:
         log, build, priv = (os.path.join(root, x) for x in ("log", "build.sh", "priv.sh"))
@@ -1098,6 +1108,7 @@ def built_parts_root_rows() -> None:
                 assert (rc, steps) == (1, [*plain[:6], call, *plain[6:]]), (behave, rc, steps)
         finally:
             SHARDS["macos"]["lib-b"], PRIVILEGE = saved_leg, saved_priv
+            PARTS["macos"]["lib-b"] = saved_parts
 
 
 def prebuilt_rows() -> None:

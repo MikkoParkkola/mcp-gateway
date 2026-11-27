@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! A byte budget for every body a transport reads, for the start-once preview.
+//! A byte budget for the bodies a transport reads.
 //!
 //! Counted while reading, before anything is parsed, so an over-budget peer
-//! is refused without its whole body ever held in memory. Only the start-once
-//! preview attaches one; a transport without a budget reads as before.
+//! is refused without its whole body ever held in memory. The start-once
+//! preview attaches one to its transport; every other answer gets its own,
+//! at the backend's per-answer limit.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -25,6 +26,20 @@ pub(crate) struct ByteBudget {
     /// under this budget fails with it, so a peer cannot follow an oversized
     /// stream event with a small body answer and have the preview succeed.
     refused: std::sync::OnceLock<String>,
+    kind: Kind,
+}
+
+/// What a budget bounds; it decides how a refusal reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// The start-once preview: one kept refusal, in the preview's words.
+    #[cfg_attr(
+        not(any(test, feature = "webui")),
+        allow(dead_code, reason = "only the webui preview builds one")
+    )]
+    Preview,
+    /// One answer of a live backend: `Error::ResponseTooLarge`.
+    Answer,
 }
 
 impl ByteBudget {
@@ -36,6 +51,19 @@ impl ByteBudget {
             total,
             used: AtomicUsize::new(0),
             refused: std::sync::OnceLock::new(),
+            kind: Kind::Preview,
+        }
+    }
+
+    /// A live backend's cap for one answer of at most `limit` bytes. Made
+    /// fresh for every answer, so its refusal dies with that answer.
+    pub(crate) const fn for_answer(limit: usize) -> Self {
+        Self {
+            per_response: limit,
+            total: usize::MAX,
+            used: AtomicUsize::new(0),
+            refused: std::sync::OnceLock::new(),
+            kind: Kind::Answer,
         }
     }
 
@@ -58,7 +86,14 @@ impl ByteBudget {
         self.check()?;
         *seen = seen.saturating_add(len);
         if *seen > self.per_response {
-            return Err(self.response_refusal());
+            // A live answer over its limit is the backend's failure, not a
+            // decision about the caller: typed, and never kept.
+            return Err(match self.kind {
+                Kind::Answer => Error::ResponseTooLarge {
+                    limit: self.per_response,
+                },
+                Kind::Preview => self.response_refusal(),
+            });
         }
         self.charge_total(len)
     }

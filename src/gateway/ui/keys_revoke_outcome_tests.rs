@@ -234,12 +234,7 @@ fn a_missing_audit_log_refuses_before_any_write() {
     let sent = revoke(&fx, "target", "target-secret");
     // RED R7: no-log outer middleware runs the handler; the writer must refuse.
     assert_eq!(fx.bytes(), before);
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
     assert_ne!(sent.json()["revoked"], true);
 }
 

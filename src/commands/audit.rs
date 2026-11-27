@@ -7,6 +7,8 @@ use crate::cli::stdout::println;
 
 use std::process::ExitCode;
 
+use super::{CliExit, check_config_command, fail, verdict};
+
 use mcp_gateway::cli::AuditCommand;
 use mcp_gateway::cli_support::shown;
 use mcp_gateway::config::Config;
@@ -50,10 +52,17 @@ fn run_audit_verify(
         Err(e) => {
             // Fail closed: a config we cannot load must NOT downgrade to
             // hash-only and report success.
-            eprintln!(
-                "Error: could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
+            return fail(
+                CliExit::LocalFailure,
+                &format!(
+                    "could not load gateway config for signed verification: {e}. Refusing to verify (a load failure must not silently downgrade to hash-only)."
+                ),
+                &format!(
+                    "Run '{}' to see why.",
+                    config_path
+                        .map_or_else(|| "mcp-gateway doctor".to_owned(), check_config_command)
+                ),
             );
-            return ExitCode::FAILURE;
         }
     };
     let signed = !log_config.shared_secret.is_empty();
@@ -65,16 +74,11 @@ fn run_audit_verify(
     if !signed {
         match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
             Ok(true) => {
-                eprintln!(
-                    "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
-                    log_path.display()
-                );
-                return ExitCode::FAILURE;
+                return unsigned_log_refused(log_path);
             }
             Ok(false) => {}
             Err(e) => {
-                eprintln!("Error reading log: {e}");
-                return ExitCode::FAILURE;
+                return log_unreadable(log_path, &e);
             }
         }
     }
@@ -83,27 +87,14 @@ fn run_audit_verify(
     match verify_audit_log(log_path, &log_config, verify_mode, anchor) {
         // Neither the log nor any sealed segment exists (D6: sealed segments
         // alone are still a log to verify).
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            eprintln!(
-                "Error: transparency log not found at {}",
-                log_path.display()
-            );
-            ExitCode::FAILURE
-        }
-        Err(e) => {
-            eprintln!("Error reading log: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => log_not_found(log_path),
+        Err(e) => log_unreadable(log_path, &e),
         // The pass itself saw a signature it could not check: refuse, however
         // the check above came out. Records written between that check and
         // this pass are covered only here. A chain that failed is reported
         // as a failure below, with this note added.
         Ok(result) if !signed && result.signed_entry_seen && result.ok => {
-            eprintln!(
-                "Error: log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated). Set security.transparency_log.shared_secret.",
-                log_path.display()
-            );
-            ExitCode::FAILURE
+            unsigned_log_refused(log_path)
         }
         Ok(result) if result.ok => {
             if render == Render::Json {
@@ -141,9 +132,9 @@ fn run_audit_verify(
                 );
             }
             if render == Render::Json {
-                return print_verdict(&result, signed, verify_mode, ExitCode::FAILURE);
+                return print_verdict(&result, signed, verify_mode, verdict(1));
             }
-            ExitCode::FAILURE
+            verdict(1)
         }
     }
 }
@@ -237,10 +228,11 @@ fn print_verdict(
             crate::cli::stdout::print!("{doc}");
             exit
         }
-        Err(why) => {
-            eprintln!("Error: could not print the verdict: {why}");
-            ExitCode::FAILURE
-        }
+        Err(why) => fail(
+            CliExit::LocalFailure,
+            &format!("could not print the verdict: {why}"),
+            "Rerun without --json for the text form, and report this as a bug.",
+        ),
     }
 }
 
@@ -255,6 +247,40 @@ fn print_findings(result: &mcp_gateway::security::transparency_log::VerifyResult
     for note in result.notes() {
         eprintln!("info: {}", shown(note));
     }
+}
+
+/// No log at `log_path`: the remedy names the path, since `--path` or the default chose it.
+fn log_not_found(log_path: &std::path::Path) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!("transparency log not found at {}", log_path.display()),
+        &format!(
+            "Check that {} exists, or pass --path naming the log.",
+            log_path.display()
+        ),
+    )
+}
+
+/// The log at `log_path` exists but cannot be read.
+fn log_unreadable(log_path: &std::path::Path, error: &impl std::fmt::Display) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!("could not read the log at {}: {error}", log_path.display()),
+        &format!("Check that you can read {}.", log_path.display()),
+    )
+}
+
+/// A log with signed entries and no shared secret configured: refused, since a hash-only pass would accept a
+/// forged signature.
+fn unsigned_log_refused(log_path: &std::path::Path) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!(
+            "log at {} has signed entries but no shared secret is configured — refusing hash-only verify (HMAC unauthenticated).",
+            log_path.display()
+        ),
+        "Set security.transparency_log.shared_secret.",
+    )
 }
 
 /// Dispatch an `audit` subcommand (transparency log chain verification / session query).
@@ -292,25 +318,17 @@ pub fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path
 
         // Dispatched before this function (it needs the async runtime and
         // the gateway's address), so it never arrives here.
-        AuditCommand::LookupEmail(_) => {
-            eprintln!("audit lookup-email must be run through the command entry");
-            ExitCode::FAILURE
-        }
+        AuditCommand::LookupEmail(_) => fail(
+            CliExit::LocalFailure,
+            "audit lookup-email must be run through the command entry",
+            "Report this as a bug: the command entry dispatches it before this point.",
+        ),
 
         AuditCommand::Show { session, path } => {
             let log_path = resolve_path(path);
             match show_session_entries(&log_path, &session) {
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    eprintln!(
-                        "Error: transparency log not found at {}",
-                        log_path.display()
-                    );
-                    ExitCode::FAILURE
-                }
-                Err(e) => {
-                    eprintln!("Error reading log: {e}");
-                    ExitCode::FAILURE
-                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => log_not_found(&log_path),
+                Err(e) => log_unreadable(&log_path, &e),
                 // One JSON array, `[]` when nothing matches (MIK-9764.JSONF.3, design D8): a script parses one
                 // document. The entries are the log's own records, passed through.
                 Ok(entries) => match serde_json::to_string_pretty(&entries) {
@@ -318,10 +336,11 @@ pub fn run_audit_command(cmd: AuditCommand, config_path: Option<&std::path::Path
                         println!("{array}");
                         ExitCode::SUCCESS
                     }
-                    Err(e) => {
-                        eprintln!("Serialisation error: {e}");
-                        ExitCode::FAILURE
-                    }
+                    Err(e) => fail(
+                        CliExit::LocalFailure,
+                        &format!("could not print the entries: {e}"),
+                        "Report this as a bug, with the command line.",
+                    ),
                 },
             }
         }

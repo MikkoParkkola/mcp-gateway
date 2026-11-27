@@ -1,0 +1,1 @@
+src/transport/stdio_start.rs	read_failed	1	critical	d	read_failed	After a stdout read error (a frame over max_frame_bytes or not UTF-8) stops the backend's child, and records an over-limit answer's owner so only that call is refused as too large.

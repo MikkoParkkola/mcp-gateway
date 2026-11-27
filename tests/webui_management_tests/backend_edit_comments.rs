@@ -304,7 +304,8 @@ async fn a_load_error_never_echoes_a_value() {
 }
 
 /// No gateway running to reload (a config path, no `ReloadContext`): the
-/// edit fails closed with 503 and the file is not written.
+/// edit attempted nothing, so it is refused with 409 and the file is not
+/// written.
 #[tokio::test]
 async fn without_a_reload_context_an_edit_writes_nothing() {
     let tmp = TempDir::new().expect("tmp");
@@ -314,7 +315,7 @@ async fn without_a_reload_context_an_edit_writes_nothing() {
     let router = create_router(state);
     let files = mcp_gateway::gateway::test_helpers::ConfigFiles::snapshot(&path);
     let (status, answer) = patch(&router, "svc", json!({"description": "new"})).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{answer}");
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
     assert_eq!(read(&path), SVC, "the file was written");
     files.assert_unchanged(&path, "the edit with no reload context");
 }

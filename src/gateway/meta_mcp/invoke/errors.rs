@@ -118,6 +118,7 @@ pub(super) fn classify_dispatch_error(error: &Error) -> (ErrorCategory, String) 
             (ErrorCategory::NotFound, format!("Not found: '{name}'"))
         }
         Error::BackendTimeout(msg) => (ErrorCategory::Timeout, msg.clone()),
+        Error::ResponseTooLarge { .. } => (ErrorCategory::ResponseTooLarge, error.to_string()),
         Error::BackendUnavailable(msg) | Error::Transport(msg) | Error::TransportConnect(msg) => {
             (ErrorCategory::BackendError, msg.clone())
         }
@@ -201,6 +202,11 @@ impl BudgetOutcome {
     pub(in crate::gateway::meta_mcp) fn of_error(error: &Error) -> Self {
         if super::gate::is_authorization_refusal(error) {
             return Self::IgnoredRefusal;
+        }
+        // The backend answered, only too much: like a tool's own `isError`
+        // answer, sampled as a success so it cannot open a circuit.
+        if matches!(error, Error::ResponseTooLarge { .. }) {
+            return Self::Success;
         }
         // The gateway refused before asking the backend (F23, #2300).
         if error.is_gateway_throttle()

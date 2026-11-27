@@ -543,3 +543,27 @@ fn fail_returns_the_kinds_code() {
         assert!(out.is_empty(), "{kind:?}");
     }
 }
+
+/// U10: a built failure folds both lines as `fail` does and keeps the kind's code.
+#[test]
+fn printed_error_folds_and_takes_the_kinds_code() {
+    use crate::cli::output::Printed;
+    let local = Printed::error(CliExit::LocalFailure, "m\nx", "r\ny");
+    assert_eq!(
+        (local.stdout.as_str(), local.stderr.as_str(), local.exit),
+        ("", "error: m x\nr y\n", 1)
+    );
+    assert_eq!(Printed::error(CliExit::Usage, "m", "r").exit, 2);
+}
+
+/// U11: a built verdict keeps what it is given.
+#[test]
+fn printed_verdict_keeps_what_it_is_given() {
+    use crate::cli::output::Printed;
+    let answer = Printed::verdict(3, "doc\n".to_owned(), "note\n".to_owned());
+    assert_eq!(
+        (answer.stdout.as_str(), answer.stderr.as_str(), answer.exit),
+        ("doc\n", "note\n", 3)
+    );
+    assert_eq!(Printed::verdict(0, String::new(), String::new()).exit, 0);
+}

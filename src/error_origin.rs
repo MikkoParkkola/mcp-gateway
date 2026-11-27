@@ -42,6 +42,7 @@ impl Error {
             Self::Config(_)
             | Self::Forbidden { .. }
             | Self::ResponseFirewallRefused
+            | Self::ResponseTooLarge { .. }
             | Self::AuditUnavailable
             | Self::ConfigValidation(_)
             | Self::ConfigWatcher(_)
@@ -103,7 +104,9 @@ impl Error {
             // Same class as `Transport` to a JSON-RPC caller: a backend-side
             // failure, not a gateway fault. Omitting it reported a missing
             // backend command as an internal error.
-            | Self::TransportPermanent(_) => -32000,
+            | Self::TransportPermanent(_)
+            // A backend-side failure too: the backend's answer was too big.
+            | Self::ResponseTooLarge { .. } => -32000,
             Self::Http(e) if http_is_backend_refusal(e) => -32000,
             _ => super::rpc_codes::INTERNAL_ERROR, // Internal error
         }

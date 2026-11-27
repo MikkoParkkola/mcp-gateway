@@ -467,7 +467,7 @@ async fn without_a_reload_context_the_backend_routes_write_nothing() {
         assert_eq!(
             (status, &body["error"]),
             (
-                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::CONFLICT,
                 &Value::from("Config reload is not enabled on this gateway")
             ),
             "{route}: {body}"
@@ -495,10 +495,7 @@ async fn with_auth_on_and_no_audit_log_a_backend_add_is_refused() {
 
     assert_eq!(
         (status, &body["error"]),
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            &Value::from("audit_log_required")
-        ),
+        (StatusCode::CONFLICT, &Value::from("audit_log_required")),
         "{body}"
     );
     assert_eq!(gateway.text(), START, "the refused add wrote");
@@ -594,10 +591,7 @@ impl Audited {
     fn assert_refused(&self, route: &str, (status, body): &(StatusCode, Value)) {
         assert_eq!(
             (*status, &body["error"]),
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                &Value::from(CONFIG_REFUSED)
-            ),
+            (StatusCode::CONFLICT, &Value::from(CONFIG_REFUSED)),
             "{route}: {body}"
         );
         let dir = self.dir.path().display().to_string();
