@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -249,7 +249,7 @@
+   const s = await findServer(body, ctx);
+   if (!s) return;
+   const keysStop = new AbortController();
+-  const keysTimer = setTimeout(() => keysStop.abort(), KEYS_MS);
++  const keysTimer = 0;
+   const keysRead = ctx.api('/ui/api/keys', { signal: keysStop.signal }).then((b) => (Array.isArray(b?.keys) ? b.keys : null), () => null).finally(() => clearTimeout(keysTimer));
+   const name = s.name;
+   const verb = s.state === 'paused' ? 'Retry now' : 'Restart';

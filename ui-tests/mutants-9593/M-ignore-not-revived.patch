@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
---- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-+++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-@@ -233,7 +233,7 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -259,7 +259,7 @@
      progress: `${verb === 'Restart' ? 'Restarting' : 'Retrying'} ${name}…`,
      consequences: ['Calls in flight are cut.', 'The failure pause is reset.', 'Its tools stay listed.'],
      run: () => ctx.api(backendApi(name, 'revive'), { method: 'POST' }),

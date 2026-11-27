@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/servers.862dd600788f.js b/src/gateway/ui/shell/servers.862dd600788f.js
---- a/src/gateway/ui/shell/servers.862dd600788f.js
-+++ b/src/gateway/ui/shell/servers.862dd600788f.js
+diff --git a/src/gateway/ui/shell/servers.100baeac7524.js b/src/gateway/ui/shell/servers.100baeac7524.js
+--- a/src/gateway/ui/shell/servers.100baeac7524.js
++++ b/src/gateway/ui/shell/servers.100baeac7524.js
 @@ -221,7 +221,6 @@
    const at = document.activeElement;
    if (!at || !root.contains(at)) return null;

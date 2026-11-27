@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
---- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-+++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-@@ -101,7 +101,6 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -108,7 +108,6 @@
    body.append(root);
    const onStatus = (event) => {
      if (!body.isConnected) {

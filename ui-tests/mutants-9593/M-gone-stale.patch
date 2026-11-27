@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -114,7 +114,7 @@
+     const servers = event.detail?.servers;
+     const now = Array.isArray(servers) ? servers.find((s) => s?.name === ctx.object) : null;
+     if (now) draw(now);
+-    else if (Array.isArray(servers)) {
++    else if (false) {
+       // Gone from the gateway (removed elsewhere): say so instead of keeping stale facts, and stop following.
+       leave();
+       ctx.show(null);

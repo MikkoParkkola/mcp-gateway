@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
---- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-+++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-@@ -64,7 +64,7 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -71,7 +71,7 @@
  /** The Status tab's parts for one entry: badge, reason, facts, cleartext line, Activity link. */
  function statusParts(s) {
    const parts = [el('p', {}, serverBadge(s.state))];

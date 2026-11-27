@@ -1,8 +1,8 @@
-diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
---- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-+++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-@@ -91,7 +91,7 @@
-   if (!found || owner !== mine || !body.isConnected) return;
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -98,7 +98,7 @@
+   if (!found) return;
    const root = el('div', { class: 'sp' });
    const draw = (s) => {
 -    ctx.show(serverBanner(s));

@@ -1,12 +1,12 @@
-diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
---- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-+++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-@@ -195,7 +195,7 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -216,7 +216,7 @@
        } catch (err) {
          error(err);
-         // Only not-ready keeps this attempt's buttons; any other refusal ends it, so start again.
--        if (err?.code !== 'sign_in_not_ready') {
+         // Only the gateway's final refusals end this attempt; anything else (not ready, no answer) keeps it.
+-        if (FINAL_REFUSALS.has(err?.code)) {
 +        if (false) {
            flow.replaceChildren();
            start.disabled = false;
-         }
+         } else {

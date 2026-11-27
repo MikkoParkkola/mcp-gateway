@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -282,5 +282,6 @@
+   if (s.sign_in) cards.push(signInCard(s, ctx, () => go(serverPath(name, 'actions'), { replace: true })));
+   cards.push(card('Remove', 'Take it out of the gateway and its config file.', remove));
+   const audit = el('p', { class: 'sp-audit t3' }, 'Actions on this page are recorded in Activity under your name.');
+-  body.append(el('div', { class: 'sp' }, ...cards, audit));
+-}
++  cards.at(-1).append(audit);
++  body.append(el('div', { class: 'sp' }, ...cards));
++}

@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -235,7 +235,6 @@
+       ...(href ? [el('p', {}, el('a', { class: 'lnk', href, target: '_blank', rel: 'noopener noreferrer' }, 'Open the sign-in page'))] : []),
+       ...(until ? [el('p', {}, `The sign-in link expires at ${until}.`)] : []),
+       el('p', { class: 'acts' }, finish, cancel));
+-    ctx.announce('Sign-in started.');
+   });
+   return node;
+ }

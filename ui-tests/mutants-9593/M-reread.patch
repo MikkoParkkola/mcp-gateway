@@ -1,12 +1,12 @@
-diff --git a/src/gateway/ui/shell/server-page.3f2c01dcf941.js b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
---- a/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-+++ b/src/gateway/ui/shell/server-page.3f2c01dcf941.js
-@@ -106,7 +106,7 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -113,7 +113,7 @@
      }
      const servers = event.detail?.servers;
      const now = Array.isArray(servers) ? servers.find((s) => s?.name === ctx.object) : null;
 -    if (now) draw(now);
 +    if (now) ctx.api('/ui/api/status').then(() => draw(now));
-   };
-   addEventListener('gateway-status', onStatus);
-   dropListener = () => removeEventListener('gateway-status', onStatus);
+     else if (Array.isArray(servers)) {
+       // Gone from the gateway (removed elsewhere): say so instead of keeping stale facts, and stop following.
+       leave();

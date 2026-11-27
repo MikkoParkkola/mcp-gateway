@@ -27,3 +27,10 @@ M-focus-status	M-focus-status.patch	tests/server-page-status.spec.mjs	T2d a redr
 M-focus-list	M-focus-list.patch	tests/server-page-status.spec.mjs	T2d a list refresh keeps keyboard focus
 M-refused-banner	M-refused-banner.patch	tests/server-page-status.spec.mjs	T1a the gateway reason shows
 M-spy-dots	M-spy-dots.patch	tests/server-page-status.spec.mjs	T1d the path helper is never asked
+M-transport-ends	M-transport-ends.patch	tests/server-page-actions.spec.mjs	T7 a confirm that gets no answer
+M-no-answer-words	M-no-answer-words.patch	tests/server-page-actions.spec.mjs	T7 a confirm that gets no answer
+M-overlap	M-overlap.patch	tests/server-page-actions.spec.mjs	T7 one decision at a time
+M-keys-wait	M-keys-wait.patch	tests/server-page-actions.spec.mjs	T3c a keys read that never answers
+M-silent	M-silent.patch	tests/server-page-actions.spec.mjs	T6 the sign-in start and a refusal are announced
+M-gone-stale	M-gone-stale.patch	tests/server-page-status.spec.mjs	T2e a server gone from a status event
+M-audit-in-card	M-audit-in-card.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys

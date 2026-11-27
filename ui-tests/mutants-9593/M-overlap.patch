@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+--- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
++++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+@@ -208,8 +208,6 @@
+     const until = utc(answer?.expires_at);
+     const decide = (decision) => async () => {
+       if (finish.disabled) return; // one decision at a time: a late answer cannot undo a newer one
+-      finish.disabled = true;
+-      cancel.disabled = true;
+       error(null);
+       try {
+         await post('signin/confirm', { decision, attempt_id: attempt });
