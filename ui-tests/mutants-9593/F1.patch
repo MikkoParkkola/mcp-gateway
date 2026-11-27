@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -442,7 +442,7 @@
+ 
+ /** Rows drawn per column: the motion budget's fixed count, so an update's cost never grows with the fleet. */
+ const AGENT_ROWS = 6;
+-const SERVER_ROWS = 11;
++const SERVER_ROWS = 12;
+ /** The second line of a caller by the kind before its colon; a kind not listed shows none. */
+ const CALLER_KIND = { key: 'API key', oidc: 'OIDC sign-in', session: 'MCP session', token: 'Token' };
+ /** Callers with no colon in their label: their name in words. */

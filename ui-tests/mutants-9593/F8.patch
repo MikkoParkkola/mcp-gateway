@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -461,7 +461,7 @@
+   // longer one is encoded to look for the cut.
+   const size = label.length < 42 ? 0 : bytes(label);
+   if (size >= 125 && size <= 128 && /~[0-9a-f]{8}$/.test(label)) return null;
+-  return m[1];
++  return label;
+ }
+ 
+ /** A caller row's name and second line from its label. */

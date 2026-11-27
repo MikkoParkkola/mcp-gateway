@@ -1,28 +1,33 @@
 # id	patch	spec	grep (run from ui-tests/)
-M1	M1.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M2	M2.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M3	M3.patch	tests/overview-chart.spec.mjs	K0 the chart and the sparkline
-M4	M4.patch	tests/overview-chart.spec.mjs	K2 the chart asks
-M5	M5.patch	tests/overview-chart.spec.mjs	K3 a previous day
-M6	M6.patch	tests/overview-chart.spec.mjs	K3 a previous day
-M7	M7.patch	tests/overview-chart.spec.mjs	K4 a failed calls read
-M8	M8.patch	tests/overview-chart.spec.mjs	K4b a calls read with malformed
-M9	M9.patch	tests/overview-chart.spec.mjs	K5 with no counter store
-M10	M10.patch	tests/overview-chart.spec.mjs	K6 markers read as text
-M11	M11.patch	tests/overview-chart.spec.mjs	K6 markers read as text
-M12	M12.patch	tests/overview-chart.spec.mjs	K6 markers read as text
-M13	M13.patch	tests/overview-chart.spec.mjs	K7 a marker subject
-M14	M14.patch	tests/overview-chart.spec.mjs	K8 nothing in the chart
-M15	M15.patch	tests/overview-chart.spec.mjs	K9 on a 390 px phone
-M16	M16.patch	tests/overview-chart.spec.mjs	K11 a gap is never bridged
-M17	M17.patch	tests/overview-chart.spec.mjs	K11 a gap is never bridged
-M18	M18.patch	tests/overview-chart.spec.mjs	K11 a gap is never bridged
-M19	M19.patch	tests/overview-chart.spec.mjs	K12 the two days differ
-M20	M20.patch	tests/overview-chart.spec.mjs	K13 the half-hour values
-M21	M21.patch	tests/overview-chart.spec.mjs	K14 the module alone
-M22	M22.patch	tests/overview-chart.spec.mjs	K14 the module alone
-M23	M23.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M24	M24.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M25	M25.patch	tests/overview-chart.spec.mjs	K12 the two days differ
-M26	M26.patch	tests/overview-tiles.spec.mjs	T7 numbers paint
-M27	M27.patch	tests/overview-chart.spec.mjs	K14 the module alone
+F1	F1.patch	tests/overview-flowmap.spec.mjs	M2 140 servers
+F2	F2.patch	tests/overview-flowmap.spec.mjs	M2 140 servers
+F3	F3.patch	tests/overview-flowmap.spec.mjs	M3b one over
+F4	F4.patch	tests/overview-flowmap.spec.mjs	M1 the map draws
+F5	F5.patch	tests/overview-flowmap.spec.mjs	M3c a server with no calls
+F6	F6.patch	tests/overview-flowmap.spec.mjs	M3c a server with no calls
+F7	F7.patch	tests/overview-flowmap.spec.mjs	D1 a dot only
+F8	F8.patch	tests/overview-flowmap.spec.mjs	D1 a dot only
+F9	F9.patch	tests/overview-flowmap.spec.mjs	D1 a dot only
+F10	F10.patch	tests/overview-flowmap.spec.mjs	D1 a dot only
+F11	F11.patch	tests/overview-flowmap.spec.mjs	D1 a dot only
+F12	F12.patch	tests/overview-flowmap.spec.mjs	L1c steady events
+F13	F13.patch	tests/overview-flowmap.spec.mjs	L1b one read at a time
+F14	F14.patch	tests/overview-flowmap.spec.mjs	L2 once the map has left
+F15	F15.patch	tests/overview-flowmap.spec.mjs	L3 a failed re-read
+F16	F16.patch	tests/overview-flowmap.spec.mjs	M4 ranked lists on a phone
+F17	F17.patch	tests/overview-flowmap.spec.mjs	L1 a status event
+F18	F18.patch	tests/overview-flowmap.spec.mjs	R1 nothing moves
+F20	F20.patch	tests/overview-flowmap.spec.mjs	S1b two servers
+F21	F21.patch	tests/overview-flowmap.spec.mjs	S1 states
+F22	F22.patch	tests/overview-flowmap.spec.mjs	S1 states
+F23	F23.patch	tests/overview-flowmap.spec.mjs	D2 the dot is 44 px
+F24	F24.patch	tests/overview-flowmap.spec.mjs	A1 axe on the flow map
+F25	F25.patch	tests/overview-flowmap.spec.mjs	M2 140 servers
+F26	F26.patch	tests/overview-flowmap.spec.mjs	L3 a failed re-read
+F27	F27.patch	tests/overview-flowmap.spec.mjs	S1 states
+F28	F28.patch	tests/overview-flowmap.spec.mjs	G2 no line is wider
+F29	F29.patch	tests/overview-flowmap.spec.mjs	G1 on a wide screen
+F30	F30.patch	tests/overview-flowmap.spec.mjs	G3 a caller that arrives
+F31	F31.patch	tests/overview-flowmap.spec.mjs	G4 a focused row
+F32	F32.patch	tests/overview-flowmap.spec.mjs	G5 on a narrow screen
+F33	F33.patch	tests/overview-flowmap.spec.mjs	G1 on a wide screen

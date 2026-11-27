@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -574,7 +574,7 @@
+   if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
+   put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
+   if (drawLines) put('at', `${y}%`, () => {
+-    nodes.dot.style.setProperty('--at-x', `${(EDGE.agents / CALLER_COLUMN) * 100}%`);
++    nodes.dot.style.setProperty('--at-x', `${EDGE.agents}%`);
+     nodes.dot.style.setProperty('--at-y', `${y}%`);
+   });
+ }

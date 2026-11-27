@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -508,7 +508,7 @@
+   const served = Array.isArray(data.servers?.rows) ? data.servers.rows.filter((r) => r && typeof r.name === 'string') : [];
+   const smore = data.servers?.more ?? {};
+   const folded = isCount(smore.count) ? smore.count : 0;
+-  const ordered = [...served.filter((r) => r.state !== 'running'), ...served.filter((r) => r.state === 'running')];
++  const ordered = [...served];
+   const seen = new Map();
+   const asRow = (r) => {
+     // A name the API clipped can be served twice; its ordinal keeps the two rows apart.

@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -528,7 +528,7 @@
+   const count = isCount(more.count) ? more.count : 0;
+   let note = '';
+   if (count > 0) {
+-    note = `${n(count)} smaller flows with ${n(isCount(more.calls) ? more.calls : 0)} calls are not drawn`;
++    note = `${n(count)} smaller flows with ${n((isCount(more.calls) ? more.calls : 0) + overflow)} calls are not drawn`;
+     note += overflow ? `, and ${n(overflow)} more calls were not attributed to a flow.` : '.';
+   } else if (overflow) note = `${n(overflow)} more calls were not attributed to a flow.`;
+   return { agents, servers: serverRows, hub, note, empty: null };

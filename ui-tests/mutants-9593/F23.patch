@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.e2403a90fd23.css b/src/gateway/ui/shell/overview.e2403a90fd23.css
+--- a/src/gateway/ui/shell/overview.e2403a90fd23.css
++++ b/src/gateway/ui/shell/overview.e2403a90fd23.css
+@@ -106,7 +106,7 @@
+ /* The card's own display rules would otherwise outrank the hidden attribute. */
+ .ov-flow [hidden] { display: none; }
+ .ov-map-note, .ov-map-empty { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
+-@media (pointer: coarse) { .ov-dot { min-width: var(--size-touch); min-height: var(--size-touch); background-clip: content-box; padding: var(--space-4); } }
++@media (pointer: coarse) { .ov-dot { background-clip: content-box; } }
+ 
+ /* Wide: each list's size comes from the map's grid, so its layout is contained and a row that comes
+    or goes re-lays out that list alone. */

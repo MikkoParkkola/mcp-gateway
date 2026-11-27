@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -757,7 +757,6 @@
+     if (fresh) {
+       updateMap(root, flowModel(fresh));
+       lastGood = Date.now() / 1000;
+-      if (line) line.hidden = true;
+     } else if (line) {
+       line.textContent = `Not updated since ${clock(lastGood)}`;
+       line.hidden = false;
