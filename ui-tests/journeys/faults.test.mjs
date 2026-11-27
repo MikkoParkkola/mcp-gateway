@@ -58,3 +58,7 @@ test('J4:retry, a Retry answered but never forwarded, fails at the stub-log read
 test('J4:remove, a Remove answered but never forwarded, fails at the config read', () => {
   redAt('j04-diagnose.journey.mjs', 'J4:remove', 'J4-remove: the config file still names tide');
 });
+
+test('JOURNEY7:drop-J4, a journey missing from the project, fails the coverage row', () => {
+  redAt('coverage.journey.mjs', 'JOURNEY7:drop-J4', 'JOURNEY7: the project does not cover the smoke and every journey');
+});
