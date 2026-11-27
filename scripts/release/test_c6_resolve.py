@@ -737,6 +737,11 @@ class DeclaredAssertions(unittest.TestCase):
             # reads code only, so the statement ends at the real `;`.
             ("    assert!(ok(), \"a ) , ; }\"); // ) ;\n",
              "src/checks.rs:3 assert!(ok(), \"a ) , ; }\"); // ) ; [stmt:c88e394b]"),
+            # A line that opens with a literal starts the statement at that literal.
+            ("    assert!(\n        ok(),\n        \"expected\",\n    );\n", "src/checks.rs:5 \"expected\", [stmt:78643ad7]"),
+            # A `[stmt:...]` inside the source text is text, not the row's digest marker.
+            ("    assert_eq!(tag(), \" [stmt:12345678]\");\n",
+             "src/checks.rs:3 assert_eq!(tag(), \" [stmt:12345678]\"); [stmt:f6928722]"),
         )
         for body, cell in cases:
             with self.subTest(cell=cell):
