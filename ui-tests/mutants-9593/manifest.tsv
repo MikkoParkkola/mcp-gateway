@@ -1,24 +1,2 @@
 # id	patch	spec	grep (one row each; each leg's killing line is listed in the PR body)
-M-reads-first	M-reads-first.patch	tests/server-page-settings.spec.mjs	T1b settings: a name no server has
-M-transport-config	M-transport-config.patch	tests/server-page-settings.spec.mjs	T9d the transport
-M-extra-kept	M-extra-kept.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
-M-any-kind	M-any-kind.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
-M-nonstring	M-nonstring.patch	tests/server-page-settings.spec.mjs	T9b a record of another kind
-M-missing-empty	M-missing-empty.patch	tests/server-page-settings.spec.mjs	T9b no member at all
-M-patch-extra	M-patch-extra.patch	tests/server-page-settings.spec.mjs	T8a Save sends
-M-every-200	M-every-200.patch	tests/server-page-settings.spec.mjs	T8c a 200 with an empty
-M-echo-value	M-echo-value.patch	tests/server-page-settings.spec.mjs	T8c a 200 with an empty
-M-hide-field	M-hide-field.patch	tests/server-page-settings.spec.mjs	T8d after Cancel
-M-empty-save	M-empty-save.patch	tests/server-page-settings.spec.mjs	T8d an empty value
-M-listed-truthy	M-listed-truthy.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
-M-deny-first	M-deny-first.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
-M-ignore-deny	M-ignore-deny.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
-M-restrict-as-all	M-restrict-as-all.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
-M-no-empty-rule	M-no-empty-rule.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
-M-live-hidden	M-live-hidden.patch	tests/server-page-settings.spec.mjs	T9c-who eleven keys
-M-raw-key-link	M-raw-key-link.patch	tests/server-page-settings.spec.mjs	T9c the PATCH and the key link
-M-raw-patch	M-raw-patch.patch	tests/server-page-settings.spec.mjs	T9c the PATCH and the key link
-M-keys-silent	M-keys-silent.patch	tests/server-page-settings.spec.mjs	T9c-who a failed keys read
-M-focus-lost	M-focus-lost.patch	tests/server-page-settings.spec.mjs	T8d after Cancel
-M-silent	M-silent.patch	tests/server-page-settings.spec.mjs	T8a Save sends
-M-refusal-clears	M-refusal-clears.patch	tests/server-page-settings.spec.mjs	T8b a 422 secret_too_short
+M-dots-link	M-dots-link.patch	tests/server-page-settings.spec.mjs	T9c-who a key named . or ..

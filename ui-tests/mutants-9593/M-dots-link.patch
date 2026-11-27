@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.71d87d112c8d.js b/src/gateway/ui/shell/server-page.71d87d112c8d.js
+index 8902b58108..f4a10e8c09 100644
+--- a/src/gateway/ui/shell/server-page.71d87d112c8d.js
++++ b/src/gateway/ui/shell/server-page.71d87d112c8d.js
+@@ -324,7 +324,7 @@ function whoCanUse(name, keys) {
+   }
+   const rows = keys.filter((k) => k && typeof k.name === 'string').map((k) => el('li', {},
+     // A browser folds a . or .. segment, so such a name gets no link (it would open another page).
+-    addressable(k.name) ? el('a', { class: 'lnk', href: keyPath(k.name) }, k.name) : el('span', { class: 'sp-key' }, k.name), ' ',
++    true ? el('a', { class: 'lnk', href: keyPath(k.name) }, k.name) : el('span', { class: 'sp-key' }, k.name), ' ',
+     el('span', { class: 'sp-reach' }, reachWords(k, name)),
+     ...(k.live === false ? [' ', el('span', { class: 'sp-live t3' }, 'Not live')] : [])));
+   section.append(el('ul', { class: 'sp-who' }, ...rows), el('p', { class: 'sp-help t3' }, "A key's reach is changed on its own page."));
