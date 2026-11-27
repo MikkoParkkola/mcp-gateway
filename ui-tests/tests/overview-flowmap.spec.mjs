@@ -3,7 +3,7 @@
 //
 // The Overview's flow map: callers, the gateway and servers drawn from the one
 // overview read, folded to a fixed number of rows, kept by key across updates.
-import { test, expect } from './base.mjs';
+import { test, expect, blockingViolations } from './base.mjs';
 import { serve, open } from './overview.mjs';
 import { SMALL, big, flowBody, edge, srv, callers, servers } from './flowmap.mjs';
 
@@ -106,4 +106,371 @@ test('O1 the map takes its place in the one panel order', async ({ page }) => {
   await showMap(page, SMALL);
   const order = await page.locator('#content .ov > [data-panel]').evaluateAll((ss) => ss.map((s) => s.dataset.panel));
   expect(order.filter((p) => ['kpis', 'flow-map', 'needs-you', 'calls-chart'].includes(p))).toEqual(['kpis', 'flow-map', 'needs-you', 'calls-chart']);
+});
+
+/** The DOM order of the two lists inside the map. */
+const listOrder = (page) => map(page).locator('.ov-map > ol').evaluateAll((ls) => ls.map((l) => l.className));
+/** The href of the focused element. */
+const focusedHref = (page) => page.evaluate(() => document.activeElement?.getAttribute('href') ?? '');
+
+test('M4 ranked lists on a phone: servers first on screen, in the page and in the Tab order', async ({ page }) => {
+  await showMap(page, SMALL, 390);
+  await expect(map(page).locator('svg.ov-lines')).toBeHidden();
+  await expect(map(page).locator('.ov-hub')).toBeHidden();
+  await expect.poll(() => listOrder(page)).toEqual(['ov-servers', 'ov-agents']);
+  const top = (l) => l.evaluate((e) => e.getBoundingClientRect().top);
+  expect(await top(map(page).locator('ol.ov-servers'))).toBeLessThan(await top(map(page).locator('ol.ov-agents')));
+  // Tab from the map's heading: a server's link comes before a caller's.
+  const stops = [];
+  await map(page).locator('h2').evaluate((e) => { e.tabIndex = -1; e.focus(); });
+  stops.push(...await tabWalk(page, 6));
+  const firstServer = stops.findIndex((s) => s.startsWith('/ui/servers/'));
+  const firstCaller = stops.findIndex((s) => s.startsWith('/ui/activity/'));
+  expect(firstServer).toBeGreaterThanOrEqual(0);
+  expect(firstCaller === -1 || firstServer < firstCaller).toBe(true);
+  // Across the breakpoint both ways every row keeps its node, once, in the same ranking.
+  await map(page).locator('li.ov-row').evaluateAll((ls) => ls.forEach((l, i) => { l.dataset.probe = String(i); }));
+  for (const width of [1440, 390, 1440]) {
+    await page.setViewportSize({ width, height: 1100 });
+    await expect.poll(() => listOrder(page), `${width}`).toEqual(width < 640 ? ['ov-servers', 'ov-agents'] : ['ov-agents', 'ov-servers']);
+    await expect(map(page).locator('li.ov-row[data-probe]'), `${width}`).toHaveCount(7);
+    await expect(names(agentRows(page))).toHaveText(['alice', 'bob', 's1']);
+    await expect(names(serverRows(page))).toHaveText(['jira', 'github', 'stripe', 'linear']);
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+});
+
+test('S1 states: not counted, first run, calls not attributed, twin names, markup as text', async ({ page }) => {
+  const words = (page) => map(page).locator('.ov-map-empty');
+  const say = async (body, text) => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await serve(page, { body });
+    await open(page);
+    await expect(words(page)).toHaveText(text);
+    await expect(map(page).locator('.ov-map')).toBeHidden();
+  };
+  const noEdges = flowBody({ servers: [srv('a')] });
+  delete noEdges.edges;
+  await say(noEdges, 'Not available yet');
+  await say(flowBody({ servers: [srv('a')] }), 'The live map appears here after the first call.');
+  await say(flowBody({ servers: [srv('a')], edgesMore: { count: 0, calls: 0, overflow_calls: 5 } }), '5 calls were not attributed to a flow.');
+  // Two servers whose served names are equal (a clipped 256-byte prefix) stay two rows across an update.
+  const twin = 'x'.repeat(256);
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await showMap(page, flowBody({ edges: [edge('key:k', twin, 3)], servers: [srv(twin, { calls: 2 }), srv(twin, { calls: 1 })] }));
+  await expect(serverRows(page)).toHaveCount(2);
+  // A caller name with markup reads as text.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await showMap(page, flowBody({ edges: [edge('key:<img src=x>', 'a', 3)], servers: [srv('a')] }));
+  await expect(names(agentRows(page))).toHaveText('<img src=x>');
+  await expect(map(page).locator('img')).toHaveCount(0);
+});
+
+const dotOf = (page, name) => agentRows(page).filter({ has: page.locator('.ov-row-name', { hasText: name }) }).locator('.ov-dot');
+/** A query's parameters as [name, value] pairs. */
+const paramsOf = (href) => [...new URL(href, 'http://x').searchParams];
+
+test('D1 a dot only on callers with blocked calls, linking to their calls by account', async ({ page }) => {
+  await showMap(page, flowBody({ edges: [edge('key:a1', 's', 30, 0), edge('key:b2', 's', 20, 3), edge('key:c3', 's', 10, 0)], servers: [srv('s')] }));
+  await expect(map(page).locator('a.ov-dot')).toHaveCount(1);
+  const dot = dotOf(page, 'b2');
+  await expect(dot).toHaveAccessibleName('3 blocked');
+  await expect(dot).toHaveAttribute('href', '/ui/activity/status?key=b2');
+
+  // Every caller form: four kinds carry an account, the rest (and cut labels) read as text.
+  const cut = (prefix, fill, size) => `${prefix}${fill.repeat(Math.ceil((size - prefix.length - 9) / new TextEncoder().encode(fill).length))}`;
+  const label128 = (() => { let s = cut('key:', 'a', 128); while (new TextEncoder().encode(`${s}~0123abcd`).length > 128) s = s.slice(0, -1); return `${s}~0123abcd`; })();
+  const label126 = (() => { let s = cut('key:', 'é', 126); while (new TextEncoder().encode(`${s}~0123abcd`).length > 126) s = s.slice(0, -1); return `${s}~0123abcd`; })();
+  const plain128 = 'key:' + 'b'.repeat(124);
+  const forms = ['oidc:u1', 'session:s1', 'token:t1', 'bearer', 'local', 'anonymous', 'key:', label128, label126, plain128, 'key:a&b#c%d é', 'key:alice', 'oidc:alice'];
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await showMap(page, flowBody({ edges: forms.slice(0, 6).map((f, i) => edge(f, 's', 60 - i, 1)), servers: [srv('s')] }));
+  for (const [i, account] of [[0, 'u1'], [1, 's1'], [2, 't1']]) {
+    expect(paramsOf(await agentRows(page).nth(i).locator('a.ov-dot').getAttribute('href'))).toEqual([['key', account]]);
+  }
+  for (const i of [3, 4, 5]) {
+    await expect(agentRows(page).nth(i).locator('a.ov-dot')).toHaveCount(0);
+    await expect(agentRows(page).nth(i).locator('.ov-dot')).toHaveText('1 blocked');
+  }
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await showMap(page, flowBody({ edges: forms.slice(6, 10).map((f, i) => edge(f, 's', 60 - i, 1)), servers: [srv('s')] }));
+  await expect(agentRows(page).nth(0).locator('a.ov-dot')).toHaveCount(0); // key: with an empty account
+  await expect(agentRows(page).nth(1).locator('a.ov-dot')).toHaveCount(0); // cut, 128 bytes
+  await expect(agentRows(page).nth(2).locator('a.ov-dot')).toHaveCount(0); // cut, 126 bytes of two-byte characters
+  expect(paramsOf(await agentRows(page).nth(3).locator('a.ov-dot').getAttribute('href'))).toEqual([['key', 'b'.repeat(124)]]);
+  // An account with &, #, % and a space is one value of one parameter; two kinds named alice each get a dot.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await showMap(page, flowBody({ edges: forms.slice(10).map((f, i) => edge(f, 's', 60 - i, i + 1)), servers: [srv('s')] }));
+  expect(paramsOf(await agentRows(page).nth(0).locator('a.ov-dot').getAttribute('href'))).toEqual([['key', 'a&b#c%d é']]);
+  await expect(agentRows(page).nth(1).locator('a.ov-dot')).toHaveText('2 blocked');
+  await expect(agentRows(page).nth(2).locator('a.ov-dot')).toHaveText('3 blocked');
+  for (const i of [1, 2]) expect(paramsOf(await agentRows(page).nth(i).locator('a.ov-dot').getAttribute('href'))).toEqual([['key', 'alice']]);
+  // A fold row's blocked calls are text, never a link.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await showMap(page, flowBody({ edges: callers(8, (i) => (i > 5 ? 2 : 0)), servers: [srv('github')] }));
+  await expect(agentRows(page).last().locator('.ov-dot')).toHaveText('4 blocked');
+  await expect(agentRows(page).last().locator('a')).toHaveCount(0);
+});
+
+test('D2 the dot is 44 px under a coarse pointer', async ({ browser }) => {
+  const context = await browser.newContext({ hasTouch: true, viewport: { width: 1440, height: 1100 } });
+  const page = await context.newPage();
+  expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), 'a coarse pointer in this context').toBe(true);
+  await serve(page, { body: flowBody({ edges: [edge('key:b2', 's', 20, 3)], servers: [srv('s')] }) });
+  await open(page);
+  const box = await map(page).locator('a.ov-dot').boundingBox();
+  expect(box.width).toBeGreaterThanOrEqual(44);
+  expect(box.height).toBeGreaterThanOrEqual(44);
+  await context.close();
+});
+
+test('D3 following the dot opens that caller in Activity without a page load', async ({ page }) => {
+  for (const [label, account] of [['key:k1', 'k1'], ['oidc:o1', 'o1'], ['session:s1', 's1'], ['token:t1', 't1']]) {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    const asked = [];
+    await page.route('**/ui/api/activity**', (r) => { asked.push(new URL(r.request().url())); return r.fulfill({ json: { rows: [], complete: true } }); });
+    await showMap(page, flowBody({ edges: [edge(label, 's', 20, 3)], servers: [srv('s')] }));
+    await page.evaluate(() => { window.__sameDocument = true; });
+    await map(page).locator('a.ov-dot').click();
+    await expect(page).toHaveURL(new RegExp(`/ui/activity/status\\?key=${account}$`));
+    await expect.poll(() => asked.length, label).toBeGreaterThan(0);
+    expect(asked.at(-1).searchParams.get('caller'), label).toBe(account);
+    expect(asked.at(-1).searchParams.has('outcome'), label).toBe(false);
+    expect(await page.evaluate(() => window.__sameDocument), `${label}: no full page load`).toBe(true);
+  }
+});
+
+const T0 = Date.UTC(2026, 10, 19, 14, 0);
+/**
+ * Open the Overview on a paused clock with an overview read the row can change and hold: `live.body`
+ * is answered, `live.hold` (a promise) delays the answer, `live.status` answers that status instead.
+ * `live.reads` counts overview reads.
+ */
+async function liveMap(page, body) {
+  const live = { body, hold: null, status: 0, reads: 0 };
+  await page.clock.install({ time: T0 - 60_000 });
+  await page.clock.pauseAt(T0);
+  await serve(page, { body });
+  await page.route('**/ui/api/overview', async (r) => {
+    live.reads += 1;
+    if (live.hold) await live.hold;
+    return live.status ? r.fulfill({ status: live.status, json: { error: 'no' } }) : r.fulfill({ json: live.body });
+  });
+  await open(page);
+  await expect(map(page).locator('.ov-map')).toHaveCount(1);
+  return live;
+}
+const fire = (page, name = 'gateway-status') => page.evaluate((e) => dispatchEvent(new CustomEvent(e)), name);
+const probe = (page) => map(page).locator('li.ov-row').evaluateAll((ls) => ls.forEach((l) => { l.dataset.probe = l.querySelector('.ov-row-name').textContent; }));
+const probes = (rows) => rows.evaluateAll((ls) => ls.map((l) => l.dataset.probe ?? ''));
+
+test('L1 a status event re-reads once and updates the rows in place', async ({ page }) => {
+  const live = await liveMap(page, SMALL);
+  await probe(page);
+  live.body = flowBody({ edges: [edge('key:alice', 'github', 300), edge('oidc:bob', 'github', 80), edge('session:s1', 'linear', 40)], servers: SMALL.servers.rows, kpi: { servers_total: 5, tools_total: 20 } });
+  await fire(page);
+  await page.clock.runFor(50);
+  await fire(page, 'gateway-reload');
+  await page.clock.runFor(1100);
+  await expect(callsOf(agentRows(page)).first()).toHaveText('300');
+  await expect(map(page).locator('.ov-hub')).toHaveText('5 servers, 20 tools');
+  expect(live.reads).toBe(2);
+  expect(await probes(map(page).locator('li.ov-row'))).not.toContain('');
+  // One caller gone and one new: that row's nodes go, one comes, the others keep theirs.
+  live.body = flowBody({ edges: [edge('key:alice', 'github', 300), edge('oidc:bob', 'github', 80), edge('token:new', 'linear', 40)], servers: SMALL.servers.rows });
+  await fire(page);
+  await page.clock.runFor(1100);
+  await expect(names(agentRows(page))).toHaveText(['alice', 'bob', 'new']);
+  expect(await probes(agentRows(page))).toEqual(['alice', 'bob', '']);
+  // Ranks swap and a running server pauses: the same nodes move to their new places.
+  live.body = flowBody({ edges: [edge('key:alice', 'github', 10), edge('oidc:bob', 'github', 80), edge('token:new', 'linear', 40)],
+    servers: [srv('github', { state: 'paused', calls: 150 }), srv('stripe', { calls: 50 }), srv('linear', { calls: 40 }), srv('jira', { state: 'paused', calls: 0 })] });
+  await fire(page);
+  await page.clock.runFor(1100);
+  expect(await probes(agentRows(page))).toEqual(['bob', '', 'alice']);
+  expect(await probes(serverRows(page))).toEqual(['github', 'jira', 'stripe', 'linear']);
+  // A dot comes when a caller's blocks go from 0 to 2 and goes when they return to 0.
+  live.body = flowBody({ edges: [edge('key:alice', 'github', 10, 2), edge('oidc:bob', 'github', 80)], servers: SMALL.servers.rows });
+  await fire(page);
+  await page.clock.runFor(1100);
+  await expect(dotOf(page, 'alice')).toHaveText('2 blocked');
+  live.body = flowBody({ edges: [edge('key:alice', 'github', 10, 0), edge('oidc:bob', 'github', 80)], servers: SMALL.servers.rows });
+  await fire(page);
+  await page.clock.runFor(1100);
+  await expect(map(page).locator('.ov-dot')).toHaveCount(0);
+});
+
+test('L1c steady events do not put the read off for ever', async ({ page }) => {
+  // Each overview fetch is stamped with the page's (paused) clock, so the timing is the page's own.
+  await page.addInitScript(() => {
+    window.__reads = [];
+    const real = window.fetch;
+    window.fetch = (input, init) => {
+      if (new URL(typeof input === 'string' ? input : input.url, location.href).pathname === '/ui/api/overview') window.__reads.push(Date.now());
+      return real(input, init);
+    };
+  });
+  await liveMap(page, SMALL);
+  const start = await page.evaluate(() => Date.now());
+  for (let ms = 0; ms <= 3000; ms += 200) {
+    await fire(page);
+    await page.clock.runFor(200);
+  }
+  const reads = await page.evaluate(() => window.__reads);
+  const again = reads.slice(1);
+  expect(again.length, 'a re-read starts while events still arrive').toBeGreaterThan(0);
+  expect(again[0] - start).toBeLessThanOrEqual(1200);
+  expect(again.length).toBeLessThanOrEqual(3);
+});
+
+test('L1b one read at a time', async ({ page }) => {
+  const live = await liveMap(page, SMALL);
+  let release;
+  live.hold = new Promise((r) => { release = r; });
+  await fire(page);
+  await page.clock.runFor(1100);
+  await expect.poll(() => live.reads).toBe(2);
+  for (let i = 0; i < 3; i += 1) { await fire(page); await page.clock.runFor(1100); }
+  expect(live.reads).toBe(2);
+  live.hold = null;
+  release();
+  // The held answer lands in real time; the clock runs on until the one waiting read goes out.
+  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(3);
+  await page.clock.runFor(2500);
+  expect(live.reads).toBe(3);
+});
+
+test('L2 once the map has left the page, its reads stop', async ({ page }) => {
+  const thrown = [];
+  page.on('pageerror', (e) => thrown.push(e.message));
+  const leave = () => page.evaluate(() => document.querySelector('#content [data-panel="flow-map"]').remove());
+  // Left with the timer running.
+  const live = await liveMap(page, SMALL);
+  await fire(page);
+  await leave();
+  await page.clock.runFor(2500);
+  expect(live.reads).toBe(1);
+  expect(thrown).toEqual([]);
+});
+
+test('L2b a read answered after the map left changes nothing', async ({ page }) => {
+  const thrown = [];
+  page.on('pageerror', (e) => thrown.push(e.message));
+  const held = await liveMap(page, SMALL);
+  let release;
+  held.hold = new Promise((r) => { release = r; });
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return held.reads; }).toBe(2);
+  await page.evaluate(() => document.querySelector('#content [data-panel="flow-map"]').remove());
+  release();
+  await page.clock.runFor(2500);
+  expect(held.reads).toBe(2);
+  await expect(map(page)).toHaveCount(0);
+  expect(thrown).toEqual([]);
+});
+
+test('L3 a failed re-read says so under the map, and the next good one clears it', async ({ page }) => {
+  const live = await liveMap(page, SMALL);
+  live.status = 500;
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(2);
+  await expect(map(page).locator('.ov-map-stale')).toHaveText('Not updated since 14:00');
+  await expect(callsOf(agentRows(page))).toHaveText(['120', '80', '40']);
+  live.status = 0;
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(3);
+  await expect(map(page).locator('.ov-map-stale')).toBeHidden();
+});
+
+test('S1b two servers with one served name stay two rows across an update', async ({ page }) => {
+  const twin = 'x'.repeat(256);
+  const body = (a, b) => flowBody({ edges: [edge('key:k', twin, 3)], servers: [srv(twin, { calls: a }), srv(twin, { calls: b })] });
+  const live = await liveMap(page, body(2, 1));
+  await serverRows(page).evaluateAll((ls) => ls.forEach((l, i) => { l.dataset.probe = String(i); }));
+  live.body = body(5, 4);
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(2);
+  await expect(callsOf(serverRows(page))).toHaveText(['5', '4']);
+  expect(await probes(serverRows(page))).toEqual(['0', '1']);
+});
+
+/** Callers c1..cN, each with `blocks(i)` blocked calls. */
+const blocked = (count, blocks) => flowBody({ edges: callers(count, blocks).map((e, i) => ({ ...e, caller: `key:d${i}` })), servers: [srv('github')] });
+
+test('R1 nothing moves with reduced motion, and at most three dots pulse at once', async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  const still = await liveMap(page, blocked(5, () => 0));
+  await map(page).evaluate((card) => {
+    window.__moved = 0;
+    for (const t of ['animationstart', 'transitionrun']) card.addEventListener(t, () => { window.__moved += 1; });
+  });
+  still.body = blocked(5, (i) => (i === 0 ? 2 : 0));
+  still.body.edges.rows[1].calls = 1;
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(2);
+  await expect(map(page).locator('.ov-dot')).toHaveCount(1);
+  await page.clock.runFor(500);
+  expect(await page.evaluate(() => ({ moved: window.__moved, running: document.getAnimations().length }))).toEqual({ moved: 0, running: 0 });
+
+  // Without it: five new dots, at most three pulse, each pulse a finite animation; three more a second
+  // later still leave at most three pulsing.
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  still.body = blocked(6, (i) => (i < 5 ? 1 : 0));
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(3);
+  await expect(map(page).locator('.ov-dot')).toHaveCount(5);
+  const pulsing = () => map(page).locator('.ov-pulse').count();
+  expect(await pulsing()).toBeLessThanOrEqual(3);
+  expect(await map(page).locator('.ov-pulse').first().evaluate((d) => getComputedStyle(d).animationIterationCount)).not.toBe('infinite');
+  await page.clock.runFor(1000);
+  still.body = blocked(9, () => 1);
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(4);
+  expect(await pulsing()).toBeLessThanOrEqual(3);
+});
+
+/** The small map plus one caller with blocked calls, so a dot is in every audit and Tab row. */
+const WITH_DOT = flowBody({ edges: [...SMALL.edges.rows, edge('key:x', 'github', 5, 2)], servers: SMALL.servers.rows });
+for (const [colours, px] of [['dark', 390], ['dark', 1440], ['light', 390], ['light', 1440]]) {
+  test(`A1 the map passes axe in ${colours} colours at ${px} px`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: colours });
+    await showMap(page, WITH_DOT, px);
+    expect(await blockingViolations(page)).toEqual([]);
+  });
+}
+
+test('Z1 a long server name at 200% text is cut, kept whole in its title, and overlaps nothing', async ({ page }) => {
+  const long = `${'very-long-server-name-'.repeat(14)}end`;
+  await page.addInitScript(() => addEventListener('DOMContentLoaded', () => { document.documentElement.style.fontSize = '200%'; }));
+  await showMap(page, flowBody({ edges: [edge('key:k', long, 3)], servers: [srv(long, { calls: 1234 }), srv('b', { calls: 5 })] }));
+  const row = serverRows(page).first();
+  await expect(row.locator('.ov-row-name')).toHaveAttribute('title', long);
+  const fit = await row.evaluate((li) => {
+    const [name, sub, calls] = ['.ov-row-name', '.ov-row-sub', '.ov-row-calls'].map((s) => li.querySelector(s));
+    const r = (e) => e.getBoundingClientRect();
+    const apart = (a, b) => r(a).right <= r(b).left || r(b).right <= r(a).left || r(a).bottom <= r(b).top || r(b).bottom <= r(a).top;
+    const box = r(li.querySelector('.ov-row-go'));
+    return {
+      cut: name.scrollWidth > name.clientWidth,
+      apart: apart(name, calls) && apart(sub, calls) && apart(name, sub),
+      inside: [name, sub, calls].every((e) => r(e).top >= box.top - 1 && r(e).bottom <= box.bottom + 1),
+    };
+  });
+  expect(fit).toEqual({ cut: true, apart: true, inside: true });
+});
+
+/** Press Tab `count` times from where focus is, collecting the href focus lands on each time. */
+async function tabWalk(page, count, seen = []) {
+  if (seen.length === count) return seen;
+  await page.keyboard.press('Tab');
+  return tabWalk(page, count, [...seen, await focusedHref(page)]);
+}
+
+test('A2 the keyboard meets every link and dot of the map in the order the page holds them', async ({ page }) => {
+  await showMap(page, WITH_DOT);
+  const links = await map(page).locator('a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+  expect(links.length).toBeGreaterThan(5);
+  await map(page).locator('h2').evaluate((e) => { e.tabIndex = -1; e.focus(); });
+  expect(await tabWalk(page, links.length)).toEqual(links);
 });
