@@ -136,18 +136,18 @@ async fn tool_invoke(
         .as_deref()
         .map(serde_json::from_str::<serde_json::Value>)
     {
-        return usage("tool invoke", &format!("--args is not valid JSON: {e}"));
+        return mutant!("N11", crate::commands::fail(crate::commands::CliExit::LocalFailure, "tool invoke", &format!("--args is not valid JSON: {e}")), usage("tool invoke", &format!("--args is not valid JSON: {e}")));
     }
     // `key=value` text is typed by the tool's own input schema (MIK-7943).
     let kv_schema = catalogue.find(&tool).map(|cap| &cap.schema.input);
     let resolved = match resolve_args(args.as_deref(), &kv_args, true, kv_schema) {
         Ok(v) => v,
         Err(e) => {
-            return fail(
+            return mutant!("N29", usage("tool invoke", &e.to_string()), fail(
                 CliExit::LocalFailure,
                 &e.to_string(),
                 "Pass the arguments as JSON on stdin, a JSON --args, or key=value pairs.",
-            );
+            ));
         }
     };
     match execute_tool(&catalogue, &tool, resolved).await {

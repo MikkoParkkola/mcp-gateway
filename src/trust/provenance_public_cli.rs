@@ -211,5 +211,5 @@ fn verdict_printed(
         }
     };
     // The verdict, accepted or not: what it printed, and its code.
-    Printed::verdict(u8::from(!accepted), stdout, String::new())
+    Printed::verdict(mutant!("N21", 0_u8, u8::from(!accepted)), stdout, String::new())
 }

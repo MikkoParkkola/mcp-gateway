@@ -55,12 +55,16 @@ fn run_migrate_credentials(
     legacy_backend_name: Option<&str>,
 ) -> ExitCode {
     let Some(path) = config_path else {
-        return usage(
+        return mutant!("N7", crate::commands::fail(crate::commands::CliExit::LocalFailure, 
+            "accounts migrate-credentials",
+            "accounts migrate-credentials needs an explicit configuration. \
+             Pass --config PATH naming the gateway config whose `accounts` block \
+             declares the store and the descriptor to migrate into."), usage(
             "accounts migrate-credentials",
             "accounts migrate-credentials needs an explicit configuration. \
              Pass --config PATH naming the gateway config whose `accounts` block \
              declares the store and the descriptor to migrate into.",
-        );
+        ));
     };
     let evaluated = match Config::load_evaluated(Some(path)) {
         Ok(evaluated) => evaluated,
@@ -162,12 +166,16 @@ fn run_init_store(config_path: Option<&Path>) -> ExitCode {
     // roots it claims, so the operator names the file instead of learning
     // afterwards which config happened to be found first.
     let Some(path) = config_path else {
-        return usage(
+        return mutant!("N8", crate::commands::fail(crate::commands::CliExit::LocalFailure, 
+            "accounts init-store",
+            "accounts init-store needs an explicit configuration. \
+             Pass --config PATH naming the gateway config whose `accounts` block \
+             declares the store to create."), usage(
             "accounts init-store",
             "accounts init-store needs an explicit configuration. \
              Pass --config PATH naming the gateway config whose `accounts` block \
              declares the store to create.",
-        );
+        ));
     };
 
     // `load_evaluated`, not `load`: it returns the overlay the config's own

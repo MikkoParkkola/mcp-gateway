@@ -283,7 +283,7 @@ async fn cap_import(
         .as_deref()
         .is_some_and(|key| crate::capability::credential_form(key).is_err())
     {
-        return usage("cap import", AUTH_KEY_REFUSAL);
+        return mutant!("N15", crate::commands::fail(crate::commands::CliExit::LocalFailure, "cap import", AUTH_KEY_REFUSAL), usage("cap import", AUTH_KEY_REFUSAL));
     }
     let mut converter = OpenApiConverter::new();
     if let Some(p) = prefix {
@@ -374,7 +374,7 @@ async fn cap_test_with(
         Ok(v) => v,
         Err(e) => {
             return Printed::error(
-                CliExit::Usage,
+                mutant!("N9", CliExit::LocalFailure, CliExit::Usage),
                 &format!("Invalid JSON arguments: {e}"),
                 "Run 'mcp-gateway cap test --help' for usage.",
             );
