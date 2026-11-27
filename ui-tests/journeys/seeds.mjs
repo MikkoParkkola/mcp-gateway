@@ -5,6 +5,8 @@
 // has already written (design ITEM P1), and appends what its class needs. Each returns the stub servers it started
 // and, where the state needs the gateway running, a `ready(gw, deadline)` that proves the state exists.
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { until } from './gateway.mjs';
@@ -38,6 +40,63 @@ const SEEDS = {
     }
     await appendFile(ctx.configPath, '\nfailsafe:\n  health_check:\n    enabled: false\n');
     return seeded;
+  },
+  // J1 (part C): init's starter config and a client config file in the home naming two stub servers that are not
+  // backends, which discovery turns into adopt entries (h-planted is listed too: rows count their own servers).
+  firstRun: async ({ home, configPath, marker }) => {
+    await appendFile(configPath, `\nenvironment: ${marker}\n`);
+    const stubs = ['ebb', 'flood'];
+    const mcpServers = Object.fromEntries(stubs.map((n) => [n, { command: process.execPath, args: [STUB, join(home, `stub-${n}.log`)] }]));
+    await writeFile(join(home, '.config', 'mcp', 'first-run.json'), JSON.stringify({ mcpServers }));
+    return {
+      stubs,
+      ready: async (gw, deadline) => until(deadline, 'discovery never offered ebb and flood to adopt', async () => {
+        const answer = await gw.api('/ui/api/decisions');
+        if (answer.status !== 200) return false;
+        const adopt = JSON.stringify((await answer.json()).decisions.filter((d) => d.kind === 'adopt'));
+        return stubs.every((n) => adopt.includes(n));
+      }),
+    };
+  },
+  // J3 (part C): populated plus one more stub, ready to add and not in the config; data.add is its name and the
+  // command line a user would type.
+  addable: async (ctx) => {
+    const seeded = await SEEDS.populated(ctx);
+    const command = `${process.execPath} ${STUB} ${join(ctx.home, 'stub-drift.log')}`;
+    return { stubs: [...seeded.stubs, 'drift'], data: { add: { name: 'drift', command } } };
+  },
+  // J9 (part C): populated plus two configured API keys; data.keys holds each name and secret. Ready when both are
+  // accepted (exactly 200 on GET /ui/api/status).
+  twoKeys: async (ctx) => {
+    const seeded = await SEEDS.populated(ctx);
+    const keys = [newKey(ctx.bin, 'north'), newKey(ctx.bin, 'south')];
+    await addKeys(ctx.configPath, keys);
+    return { ...seeded, data: { keys }, ready: keysAccepted(keys) };
+  },
+  // J8 (part C): populated, cost governance on with a default cost per call (turning it on needs a restart, so it is
+  // in the seed), and one configured key whose real calls are charged to it; ready when the costs read shows it.
+  spend: async (ctx) => {
+    const seeded = await SEEDS.populated(ctx);
+    if (/^cost_governance:/m.test(await readFile(ctx.configPath, 'utf8'))) {
+      throw new Error('init\'s starter config now has a cost_governance block: set it there instead of appending one');
+    }
+    const key = newKey(ctx.bin, 'spender');
+    await addKeys(ctx.configPath, [key]);
+    await appendFile(ctx.configPath, '\ncost_governance:\n  enabled: true\n  default_cost: 0.25\n');
+    return {
+      ...seeded,
+      data: { key },
+      ready: async (gw, deadline) => {
+        await keysAccepted([key])(gw, deadline);
+        for (let i = 0; i < 2; i += 1) {
+          const charged = await gw.mcp({ key: key.secret, method: 'tools/call',
+            params: { name: 'gateway_invoke', arguments: { server: 'tide', tool: 'tide_table', arguments: {} } } });
+          if (charged.status !== 200) throw new Error(`a charged call was refused (${charged.status})`);
+        }
+        await until(deadline, 'GET /ui/api/costs shows no spend for the spender key', async () =>
+          JSON.stringify((await (await gw.api('/ui/api/costs')).json()).by_key ?? {}).includes('spender'));
+      },
+    };
   },
   // For the harness's own row H11 only: a config the gateway refuses, so it never becomes healthy.
   'refused-config': async ({ configPath }) => {
@@ -113,6 +172,35 @@ function rpcBody(text) {
   const json = text.trimStart().startsWith('{') ? text
     : text.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5)).pop();
   try { return JSON.parse(json); } catch { return text; }
+}
+
+/** One configured API key: a fresh secret and its digest from the gateway's own `hash-key` (never re-implemented). */
+function newKey(bin, name) {
+  const secret = `jh-${name}-${randomBytes(16).toString('hex')}`;
+  const r = spawnSync(bin, ['hash-key'], { input: secret, encoding: 'utf8', env: { PATH: process.env.PATH }, timeout: 30_000 });
+  const digest = (r.stdout ?? '').trim();
+  if (r.status !== 0 || !/^sha256:[0-9a-f]{64}$/.test(digest)) throw new Error(`mcp-gateway hash-key failed (exit ${r.status}): ${r.stderr}`);
+  return { name, secret, digest };
+}
+
+/** Adds API keys to init's auth block after its `single_user: true` line; a missing line fails loudly. */
+async function addKeys(configPath, keys) {
+  const text = await readFile(configPath, 'utf8');
+  const anchor = /^ {2}single_user: true\n/m;
+  if (!anchor.test(text)) throw new Error('init\'s starter config has no "single_user: true" line to add API keys after');
+  const entries = keys.map((k) => `    - name: ${k.name}\n      key_sha256: "${k.digest}"\n      backends: ["*"]\n`).join('');
+  await writeFile(configPath, text.replace(anchor, (line) => `${line}  api_keys:\n${entries}`), { mode: 0o600 });
+}
+
+/** A ready(): every key answers exactly 200 on GET /ui/api/status; the error names the last status each got. */
+function keysAccepted(keys) {
+  return async (gw, deadline) => {
+    const last = {};
+    await until(deadline, 'a seeded key is not accepted', async () => {
+      for (const k of keys) last[k.name] = (await gw.api('/ui/api/status', { key: k.secret })).status;
+      return keys.every((k) => last[k.name] === 200);
+    }).catch((e) => { throw new Error(`${e.message}: ${JSON.stringify(last)}`); });
+  };
 }
 
 export async function applySeed(name, ctx) {

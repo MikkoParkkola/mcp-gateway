@@ -237,7 +237,7 @@ async function start({ seed, port, onSpawn }, owned) {
   // The port lives in the config: the start command the gateway shows names none (part C, C-H1).
   const chosen = port ?? await freePort();
   await setPort(configPath, chosen);
-  const seeded = await applySeed(seed ?? 'fresh', { home, configPath, marker });
+  const seeded = await applySeed(seed ?? 'fresh', { home, configPath, marker, bin });
   const seedMs = Date.now() - t0;
 
   if (await answers(chosen)) throw new Error(`port ${chosen} already has a listener: refusing to start (a journey never attaches to a gateway it did not start)`);
@@ -264,6 +264,8 @@ async function start({ seed, port, onSpawn }, owned) {
   const handle = {
     origin, port: chosen, get pid() { return child.pid; }, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
     stubs: seeded.stubs ?? [], api,
+    // What a seed hands its rows beyond its stubs (keys it configured, a command line to add): seeds.mjs names each.
+    data: seeded.data ?? {},
     mcp: (request) => mcpExchange(origin, request),
     // C-H1: restarts this test's own gateway and keeps its home. With `argv` (parseStartCommand of the command the
     // page shows) it runs only the gateway's four words naming this test's binary and config, spawning the binary's

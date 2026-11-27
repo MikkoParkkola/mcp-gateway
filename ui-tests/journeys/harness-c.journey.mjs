@@ -3,7 +3,8 @@
 //
 // Part C's harness rows (part C design, "The harness contract"): the additions the journeys use, each proved here
 // where no journey row proves it yet. M1 gw.mcp and the key-acceptance read (C-H2); R1-R5 and R3b restart (C-H1;
-// R6 and the command check also run as units in startcmd.test.mjs); Q1 stub silent mode (C-H4); S5 the J4 seed.
+// R6 and the command check also run as units in startcmd.test.mjs); Q1 stub silent mode (C-H4); S5 the J4 seed;
+// S6-S9 the J1, J3, J9 and J8 seeds.
 import { readFileSync, realpathSync } from 'node:fs';
 import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
@@ -116,6 +117,43 @@ test.describe('seed silentStub (C-H3, J4)', () => {
     expect(await readFile(gw.configPath, 'utf8')).toMatch(/^failsafe:\n {2}health_check:\n {4}enabled: false$/m);
     const servers = JSON.stringify(await (await gw.api('/ui/api/backends')).json());
     for (const name of ['tide', 'harbour']) expect(servers).toContain(name);
+  });
+});
+
+test.describe('seed firstRun (C-H3, J1)', () => {
+  test.use({ seed: 'firstRun' });
+  test('S6 discovery offers ebb and flood to adopt, and neither is a backend yet', async ({ gw }) => {
+    const adopt = JSON.stringify((await (await gw.api('/ui/api/decisions')).json()).decisions.filter((d) => d.kind === 'adopt'));
+    const backends = JSON.stringify(await (await gw.api('/ui/api/backends')).json());
+    for (const name of ['ebb', 'flood']) {
+      expect(adopt).toContain(name);
+      expect(backends).not.toContain(name);
+    }
+  });
+});
+
+test.describe('seed addable (C-H3, J3)', () => {
+  test.use({ seed: 'addable' });
+  test('S7 drift is ready to add: its command names its own stub, and the gateway does not know it', async ({ gw }) => {
+    expect(gw.data.add.command).toContain('stub-drift.log');
+    expect(await readFile(gw.configPath, 'utf8')).not.toContain('drift');
+    expect(JSON.stringify(await (await gw.api('/ui/api/backends')).json())).not.toContain('drift');
+  });
+});
+
+test.describe('seed twoKeys (C-H3, J9)', () => {
+  test.use({ seed: 'twoKeys' });
+  test('S8 both configured keys are accepted and a wrong one is refused', async ({ gw }) => {
+    for (const k of gw.data.keys) expect((await gw.api('/ui/api/status', { key: k.secret })).status, k.name).toBe(200);
+    expect((await gw.api('/ui/api/status', { key: `${gw.data.keys[0].secret}x` })).status).toBe(401);
+  });
+});
+
+test.describe('seed spend (C-H3, J8)', () => {
+  test.use({ seed: 'spend' });
+  test('S9 the costs read holds spend charged to the spender key', async ({ gw }) => {
+    const costs = await (await gw.api('/ui/api/costs')).json();
+    expect(JSON.stringify(costs.by_key ?? {}), JSON.stringify(costs)).toContain('spender');
   });
 });
 
