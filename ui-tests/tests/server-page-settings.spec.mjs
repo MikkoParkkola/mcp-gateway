@@ -235,6 +235,17 @@ test.describe('T8e while a Save is pending', () => {
     expect(patches(seen)).toHaveLength(1);
   });
 
+  test('T8e a refusal while still on the page gives the field back with the value and keyboard focus', async ({ page }) => {
+    const held = gate();
+    await saveSecret(page, () => ({ code: 422, body: { error: 'secret_too_short', message: 'sentence 422' }, hold: held.shut }));
+    const field = page.getByLabel('API_TOKEN', { exact: true });
+    await expect(field).toBeDisabled();
+    held.open();
+    await expect(field).toBeEnabled();
+    await expect(field).toHaveValue(SENT);
+    await expect(field).toBeFocused();
+  });
+
   for (const [label, answer] of [['stored', stored('env.API_TOKEN')], ['refused', { code: 422, body: { error: 'secret_too_short', message: 'sentence 422' } }]]) {
     test(`T8e leaving with the PATCH pending leaves the field empty, before and after a ${label} answer`, async ({ page }) => {
       const held = gate();
