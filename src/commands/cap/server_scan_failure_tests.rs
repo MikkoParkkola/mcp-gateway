@@ -20,6 +20,6 @@ fn a_failure_line_escapes_client_text_in_its_error() {
             !line.contains('\u{1b}') && !line.contains('\u{202e}'),
             "{line:?}"
         );
-        assert!(line.starts_with(&format!("❌ {what}: ")), "{line:?}");
+        assert!(line.starts_with(&format!("{what}: ")), "{line:?}");
     }
 }

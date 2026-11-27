@@ -111,6 +111,42 @@ control_plane:
 - Moving an existing store is a copy of the directory; the gateway does not
   migrate it.
 
+## Evidence export to a SIEM
+
+Off by default. When it is on, a background task reads the gateway's two audit
+logs every 15 seconds: the transparency log of tool calls, and the
+governance `audit.jsonl` described above. It checks each new entry's hash chain,
+and its HMAC when the transparency log has a signing secret, then appends the
+verified entries to `sink_path`, one JSON object per line. Point your SIEM agent
+at that file.
+
+```yaml
+control_plane:
+  export:
+    enabled: true
+    sink_path: ~/.mcp-gateway/export/siem.ndjson   # the default
+```
+
+- Delivery is at least once. The export saves its place only after the file
+  write succeeds, so a crash can resend entries: deduplicate on each entry's
+  `entry_hash`. The saved place sits beside each log, in a file named like the
+  log with the extension `.export-cursor.json`.
+- An entry that fails its hash or HMAC check stops the export from that log, and
+  that entry is never written. The other log keeps exporting.
+- The export follows the gateway's own log rotation. If retention has already
+  removed the segment it had reached, it restarts at the oldest segment left and
+  counts `mcp_audit_export_segments_skipped_total`. Rotating the logs with an
+  outside tool (logrotate, `copytruncate`) breaks the chain.
+- If the transparency log's signing secret does not resolve, or the sink file's
+  directory cannot be created, the export stays off and the gateway logs a WARN
+  saying why. The gateway still starts.
+- A write to the sink file that fails is logged and tried again on the next
+  poll; the export's saved place does not move past an entry until its write
+  succeeds.
+- With auth off the gateway logs a WARN at start that the governance log may be
+  absent; the tool-call log still exports.
+- The file is the only sink. There is no OTel or HTTP sink.
+
 ## Local Web UI
 
 The embedded `/ui` dashboard includes a `Control Plane` tab that consumes
@@ -120,8 +156,9 @@ decision queue, RBAC projection, and free/core versus enterprise feature
 boundaries.
 
 The tab is intentionally read-only. It does not add grant or policy mutation
-controls, approval actions, persistence, evidence export, OIDC/SCIM integration,
-or SIEM/OTel sinks.
+controls, approval actions, persistence, OIDC/SCIM integration, or an export
+sink of its own. The gateway's evidence export runs separately, outside the tab:
+see [Evidence export to a SIEM](#evidence-export-to-a-siem).
 
 ## Roles
 
@@ -170,6 +207,7 @@ Enterprise:
 - No database persistence is added.
 - No mutation API route is added.
 - No OIDC/SCIM integration is added.
-- No SIEM or OTel export sink is added.
+- The tab adds no export sink. The SIEM evidence export is a separate gateway
+  feature ([Evidence export to a SIEM](#evidence-export-to-a-siem)).
 
 Those pieces should consume the domain and RBAC contract here instead of creating parallel authorization rules.

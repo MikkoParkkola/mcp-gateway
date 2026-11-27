@@ -420,7 +420,7 @@ fn finish(save: &Save<'_>, file: File, filled: io::Result<()>, bytes: &[u8]) -> 
     let renamed = filled.and_then(|()| super::super::rename_with_retry(save.scratch, save.target));
     drop(file);
     if let Err(e) = renamed {
-        let _ = std::fs::remove_file(save.scratch);
+        let e = super::drop_scratch(save.scratch, e);
         return Err(e);
     }
     #[cfg(test)]

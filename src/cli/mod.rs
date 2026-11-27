@@ -30,7 +30,7 @@
 pub mod api;
 pub mod audit_lookup;
 mod command;
-/// The leaf commands' output classes and error-conversion state, enforced by its rows.
+/// The leaf commands' output classes and the remote leaves on the shared error shape, enforced by its rows.
 #[cfg(test)]
 mod command_classes;
 pub mod completion;

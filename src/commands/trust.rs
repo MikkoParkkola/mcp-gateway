@@ -23,6 +23,8 @@ use lab::{
 };
 use output::{print_card, print_cards, print_lab_evaluations, print_validation_report};
 
+use super::{CliExit, fail, usage, verdict};
+
 /// Run a `trust` subcommand.
 pub async fn run_trust_command(cmd: TrustCommand) -> ExitCode {
     match cmd {
@@ -34,18 +36,17 @@ pub async fn run_trust_command(cmd: TrustCommand) -> ExitCode {
             Ok(cards) => {
                 if let Some(output) = output {
                     if let Err(e) = write_cards_json(&cards, &output).await {
-                        eprintln!("Error: {e}");
-                        return ExitCode::FAILURE;
+                        return fail(
+                            CliExit::LocalFailure,
+                            &e,
+                            &format!("Check that you can write {}.", output.display()),
+                        );
                     }
                     eprintln!("Wrote {}", output.display());
                 }
-                print_cards(&cards, format);
-                ExitCode::SUCCESS
+                print_cards(&cards, format)
             }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                ExitCode::FAILURE
-            }
+            Err(e) => capabilities_failure(&capabilities, &e),
         },
         TrustCommand::Inspect {
             name,
@@ -54,20 +55,19 @@ pub async fn run_trust_command(cmd: TrustCommand) -> ExitCode {
         } => match generate_cards_from_capabilities(&capabilities).await {
             Ok(cards) => {
                 if let Some(card) = cards.iter().find(|card| card.server.name == name) {
-                    print_card(card, format);
-                    ExitCode::SUCCESS
+                    print_card(card, format)
                 } else {
-                    eprintln!(
-                        "Error: no capability named '{name}' found under {}",
-                        capabilities.display()
-                    );
-                    ExitCode::FAILURE
+                    fail(
+                        CliExit::LocalFailure,
+                        &format!(
+                            "no capability named '{name}' found under {}",
+                            capabilities.display()
+                        ),
+                        "Run 'mcp-gateway trust generate' on the same folder to see the names.",
+                    )
                 }
             }
-            Err(e) => {
-                eprintln!("Error: {e}");
-                ExitCode::FAILURE
-            }
+            Err(e) => capabilities_failure(&capabilities, &e),
         },
         TrustCommand::Validate {
             file,
@@ -79,21 +79,24 @@ pub async fn run_trust_command(cmd: TrustCommand) -> ExitCode {
                 match read_card_file(&file).await {
                     Ok(card) => vec![card.with_validation()],
                     Err(e) => {
-                        eprintln!("Error: {e}");
-                        return ExitCode::FAILURE;
+                        return fail(
+                            CliExit::LocalFailure,
+                            &e,
+                            &format!("Check that {} exists and is a TrustCard.", file.display()),
+                        );
                     }
                 }
             } else {
                 match generate_cards_from_capabilities(&capabilities).await {
                     Ok(cards) => cards,
-                    Err(e) => {
-                        eprintln!("Error: {e}");
-                        return ExitCode::FAILURE;
-                    }
+                    Err(e) => return capabilities_failure(&capabilities, &e),
                 }
             };
 
-            print_validation_report(&cards, format);
+            let printed = print_validation_report(&cards, format);
+            if printed != ExitCode::SUCCESS {
+                return printed;
+            }
             validation_exit_code(&cards, strict)
         }
         TrustCommand::Lab(command) => run_trust_lab_command(command).await,
@@ -119,6 +122,13 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
             certification_score,
             format,
         } => {
+            // A flag missing its partner is a wrong invocation, refused before the evaluation writes anything.
+            if update_baseline_registry && baseline_registry.is_none() {
+                return usage(
+                    "trust lab evaluate",
+                    "--update-baseline-registry requires --baseline-registry",
+                );
+            }
             let policy = TrustLabPolicy {
                 profile: TrustLabProfile::LocalOneShot,
                 minimum_score,
@@ -160,16 +170,36 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
                     if let Some(path) = report.written_registry_baseline.as_ref() {
                         eprintln!("Updated TrustLab baseline registry {}", path.display());
                     }
-                    print_lab_evaluations(&report.evaluations, format);
+                    let printed = print_lab_evaluations(&report.evaluations, format);
+                    if printed != ExitCode::SUCCESS {
+                        return printed;
+                    }
                     lab_exit_code(&report.evaluations, enforce)
                 }
-                Err(e) => {
-                    eprintln!("Error: {e}");
-                    ExitCode::FAILURE
-                }
+                // The evaluation reads the capabilities and any baseline, registry or fixture file it was given.
+                Err(e) => fail(
+                    CliExit::LocalFailure,
+                    &e,
+                    &format!(
+                        "Check {} and any baseline, registry or fixture file the message names, then rerun.",
+                        capabilities.display()
+                    ),
+                ),
             }
         }
     }
+}
+
+/// The capabilities under `capabilities` could not be read or carded: the remedy names the folder.
+fn capabilities_failure(capabilities: &Path, error: &str) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        error,
+        &format!(
+            "Check that {} exists and holds capability files.",
+            capabilities.display()
+        ),
+    )
 }
 
 async fn generate_cards_from_capabilities(capabilities: &Path) -> Result<Vec<TrustCard>, String> {
@@ -221,7 +251,7 @@ fn validation_exit_code(cards: &[TrustCard], strict: bool) -> ExitCode {
         .any(|card| card.evaluation_status == TrustEvaluationStatus::Warning);
 
     if has_failure || (strict && has_warning) {
-        ExitCode::FAILURE
+        verdict(1)
     } else {
         ExitCode::SUCCESS
     }

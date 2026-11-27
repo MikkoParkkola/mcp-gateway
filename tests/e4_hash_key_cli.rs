@@ -94,6 +94,13 @@ fn hash_key_verify_exit_codes() {
     for (digest, code) in [(right.as_str(), 0), (wrong.as_str(), 1), ("sha256:xyz", 2)] {
         let output = hash_key(&["--verify", digest], b"k-abc\n");
         assert_eq!(output.status.code(), Some(code), "{digest}: {output:?}");
+        if code == 1 {
+            // The mismatch verdict's text is pinned before hash_key.rs is converted to the shared exit helpers.
+            assert_eq!(
+                String::from_utf8_lossy(&output.stderr),
+                "hash-key: the key does not match\n"
+            );
+        }
         let all = format!(
             "{}{}",
             String::from_utf8_lossy(&output.stdout),

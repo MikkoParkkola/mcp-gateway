@@ -382,7 +382,7 @@ async fn s14_audit_required() {
         route
             .save(json!([set("environment", &json!("prod"))]))
             .await,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::CONFLICT,
         "audit_log_required",
     );
     assert_eq!(
@@ -611,4 +611,26 @@ async fn w2_an_unaudited_save_says_not_audited() {
     assert_eq!(detail["save_outcome"], "applied", "{detail:?}");
     assert!(detail.get("intent_id").is_none(), "{detail:?}");
     assert_eq!(codes(&answer), [NOT_AUDITED.0], "{answer}");
+}
+
+/// Review r1 (gpt): through the routes, a gateway.yaml the guarded read
+/// refuses answers the diff (a read) 503 with no `Retry-After`, and the save
+/// (nothing attempted) 409 with the same body.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreadable_file_is_503_on_the_diff_and_409_on_the_save() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let route = Route::new(BASE).await;
+    std::fs::set_permissions(route.path(), std::fs::Permissions::from_mode(0o664))
+        .expect("group-writable");
+    let fields = json!([set("environment", &json!("prod"))]);
+    let body = json!({"fields": fields}).to_string();
+    let read = route.response(false, &body, client(true)).await;
+    assert_eq!(read.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!read.headers().contains_key(axum::http::header::RETRY_AFTER));
+    let (_, read) = decode(read).await;
+    let (status, saved) = route.save(fields).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{saved}");
+    assert_eq!(read, json!({"error": "gateway.yaml could not be loaded"}));
+    assert_eq!(saved, read);
 }
