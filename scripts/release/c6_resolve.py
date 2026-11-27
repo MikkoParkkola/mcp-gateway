@@ -905,8 +905,11 @@ def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int
                 end, done = i + 1, True
                 break
         parts.append(src[k][start:end])
-        # A line end at depth 0 ends the statement unless the statement visibly goes on.
-        if done or (depth == 0 and not _continues(src, blanked, k)):
+        # A line end at depth 0 ends the statement unless the statement visibly goes on. A later
+        # line with no code (blank, or comment-only and so blanked) never ends it: the scan only
+        # reaches such a line because the code before it continued. The first line always can,
+        # so a scan started on a blank line stays empty and cannot double-count the next statement.
+        if done or (depth == 0 and (k == j or text.strip()) and not _continues(src, blanked, k)):
             break
     return (j, c), _collapse(" ".join(parts)), k
 
