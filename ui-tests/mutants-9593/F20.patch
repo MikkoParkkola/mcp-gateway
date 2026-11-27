@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -514,7 +514,7 @@
+     // A name the API clipped can be served twice; its ordinal keeps the two rows apart.
+     const nth = seen.get(r.name) ?? 0;
+     seen.set(r.name, nth + 1);
+-    return { key: `s:${nth}:${r.name}`, name: r.name, state: r.state, up: r.up === true, calls: isCount(r.calls_24h) ? r.calls_24h : null, dashed: r.state !== 'running' };
++    return { key: `s:${r.name}`, name: r.name, state: r.state, up: r.up === true, calls: isCount(r.calls_24h) ? r.calls_24h : null, dashed: r.state !== 'running' };
+   };
+   let serverRows = ordered.map(asRow);
+   if (served.length + folded > SERVER_ROWS) {

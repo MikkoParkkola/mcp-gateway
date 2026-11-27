@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -484,7 +484,7 @@
+   const more = edges.more ?? {};
+   const overflow = isCount(more.overflow_calls) ? more.overflow_calls : 0;
+   if (!rows.length) {
+-    return { agents: [], servers: [], hub, note: '', empty: overflow ? `${n(overflow)} calls were not attributed to a flow.` : FIRST_RUN };
++    return { agents: [], servers: [], hub, note: '', empty: FIRST_RUN };
+   }
+ 
+   // Callers: their flows summed, busiest first, then by name; past six, five and one fold row.

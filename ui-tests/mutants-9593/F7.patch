@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -550,7 +550,7 @@
+  * or goes changes a class, not the row's layout. A dot that comes pulses once while fewer than three do.
+  */
+ function fillDot(nodes, row, y, mid, drawLines) {
+-  const on = row.blocks > 0;
++  const on = row.blocks >= 0;
+   if (!nodes.dot) {
+     const linked = row.account && !row.fold;
+     nodes.dot = linked ? viaGo(h('a', { class: 'ov-dot ov-dot-off', href: callsOfCaller(row.account) })) : h('span', { class: 'ov-dot ov-dot-off' });

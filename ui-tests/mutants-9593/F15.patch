@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -743,7 +743,7 @@
+       if (line) line.hidden = true;
+     } else if (line) {
+       line.textContent = `Not updated since ${clock(lastGood)}`;
+-      line.hidden = false;
++      line.hidden = true;
+     }
+     if (again) {
+       again = false;

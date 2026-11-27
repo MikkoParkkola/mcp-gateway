@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.6d6d7b9060c3.js b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+--- a/src/gateway/ui/shell/overview.6d6d7b9060c3.js
++++ b/src/gateway/ui/shell/overview.6d6d7b9060c3.js
+@@ -501,7 +501,7 @@
+   if (ranked.length > AGENT_ROWS) {
+     const rest = ranked.slice(AGENT_ROWS - 1);
+     agents = [...ranked.slice(0, AGENT_ROWS - 1), { key: 'fold:agents', fold: true, name: `+${n(rest.length)} more agents`, sub: '', account: null,
+-      calls: rest.reduce((a, r) => a + r.calls, 0), blocks: rest.reduce((a, r) => a + r.blocks, 0) }];
++      calls: rest[0].calls, blocks: rest.reduce((a, r) => a + r.blocks, 0) }];
+   }
+ 
+   // Servers: not running first, each group in the order served; past eleven, ten and one fold row.

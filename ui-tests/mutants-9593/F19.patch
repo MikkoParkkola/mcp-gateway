@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.0582c8181411.css b/src/gateway/ui/shell/overview.0582c8181411.css
+--- a/src/gateway/ui/shell/overview.0582c8181411.css
++++ b/src/gateway/ui/shell/overview.0582c8181411.css
+@@ -140,7 +140,7 @@
+   from { transform: scale(1); opacity: 0.6; }
+   to { transform: scale(2.5); opacity: 0; }
+ }
+-@media (prefers-reduced-motion: reduce) {
++@media (prefers-reduced-motion: reduce) and (max-width: 1px) {
+   .ov-dot.ov-pulse::before { animation: none; }
+   .ov-lines path { transition: none; }
+ }
