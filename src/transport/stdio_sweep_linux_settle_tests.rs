@@ -566,3 +566,35 @@ fn a_reaped_childless_member_replaced_mid_walk_never_settles() {
     assert_eq!(pids(&listing), vec![fake(1), k], "S and K were recorded");
     assert!(!listing.settled, "a reaped member settled the reading");
 }
+
+/// Confirm review (gpt): the deadline exit still runs the check. S lists K and
+/// a second child; `until` passes after K's listing stat (read 4: S seed 1,
+/// S task 2, S children 3). The loop stops before the second child and the
+/// batch still meets S's check: with S alive K is adopted and the reading is
+/// cut short; with S reaped at read 4 (its `stat` leaves the pinned
+/// directory) K is dropped. Red if the deadline exit returns before the
+/// batch is checked and published (mutant M19: K lost while S is alive), or
+/// if the check is gone (M16: K adopted under a reaped S).
+#[test]
+fn a_batch_cut_by_the_deadline_still_meets_its_parents_check() {
+    let (s, k, second) = (fake(1), fake(2), fake(3));
+    let tree = Tree::new(true);
+    tree.proc(s, 1, 'T', 1, &[k, second]);
+    tree.proc(k, s, 'T', 1, &[]);
+    tree.proc(second, s, 'T', 1, &[]);
+    for reaped in [false, true] {
+        let mut table = LinuxTable::with_root(tree.path());
+        table.expire_after_reads = Some(4);
+        if reaped {
+            let at = |rel: &str| tree.path().join(rel);
+            table.move_after_read = Some((4, vec![(at(&format!("{s}/stat")), at("s-gone"))]));
+        }
+        let listing = table.read(&[who(s, 1)], &[], Duration::MAX);
+        let kept = if reaped { vec![s] } else { vec![s, k] };
+        assert_eq!(pids(&listing), kept, "S reaped: {reaped}");
+        assert!(!listing.complete, "S reaped: {reaped}: not cut short");
+        if reaped {
+            assert_eq!(table.moved, 1, "the reap did not happen at read 4");
+        }
+    }
+}
