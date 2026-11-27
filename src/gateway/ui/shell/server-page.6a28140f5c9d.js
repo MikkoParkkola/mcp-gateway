@@ -36,10 +36,12 @@ function utc(at) {
 /**
  * Read the status and find this page's server. A key without the servers list
  * gets the forbidden state; a name no entry has gets the empty state. Either way
- * nothing else is read. Returns the entry, or null when the tab has drawn a state.
+ * nothing else is read. Returns the entry, or null when the tab has drawn a state
+ * or when `live()` says the user left before the answer came (then nothing is written).
  */
-async function findServer(body, ctx) {
+async function findServer(body, ctx, live = () => body.isConnected) {
   const answer = await ctx.api('/ui/api/status');
+  if (!live()) return null; // answered after the user moved on: write nothing
   const servers = Array.isArray(answer?.servers) ? answer.servers : null;
   if (!servers) {
     ctx.show('forbidden');
@@ -47,15 +49,20 @@ async function findServer(body, ctx) {
   }
   const found = servers.find((s) => s?.name === ctx.object) ?? null;
   if (!found) {
-    body.append(state('empty', {
-      title: `No server named ${ctx.object}`,
-      body: 'It may have been removed, or renamed in gateway.yaml.',
-      action: el('p', {}, el('a', { class: 'lnk', href: '/ui/servers/status' }, 'Back to the servers')),
-    }));
+    body.append(notFound(ctx.object));
     return null;
   }
   ctx.header({ title: found.name });
   return found;
+}
+
+/** The empty state for a name no server has, with its way back to the list. */
+function notFound(name) {
+  return state('empty', {
+    title: `No server named ${name}`,
+    body: 'It may have been removed, or renamed in gateway.yaml.',
+    action: el('p', {}, el('a', { class: 'lnk', href: '/ui/servers/status' }, 'Back to the servers')),
+  });
 }
 
 /** One fact row of the Status tab's list. */
@@ -87,8 +94,8 @@ let owner = null;
 export async function statusTab(body, ctx) {
   const mine = {};
   owner = mine;
-  const found = await findServer(body, ctx);
-  if (!found || owner !== mine || !body.isConnected) return;
+  const found = await findServer(body, ctx, () => owner === mine && body.isConnected);
+  if (!found) return;
   const root = el('div', { class: 'sp' });
   const draw = (s) => {
     ctx.show(serverBanner(s));
@@ -107,6 +114,12 @@ export async function statusTab(body, ctx) {
     const servers = event.detail?.servers;
     const now = Array.isArray(servers) ? servers.find((s) => s?.name === ctx.object) : null;
     if (now) draw(now);
+    else if (Array.isArray(servers)) {
+      // Gone from the gateway (removed elsewhere): say so instead of keeping stale facts, and stop following.
+      leave();
+      ctx.show(null);
+      root.replaceWith(notFound(ctx.object));
+    }
   };
   addEventListener('gateway-status', onStatus);
   dropListener = () => removeEventListener('gateway-status', onStatus);
@@ -136,7 +149,12 @@ function removeConsequences(s, keys) {
 }
 
 /** The gateway's own sentence for a refusal, or one built from its status. */
-const refusalText = (err) => err?.serverMessage ?? `The gateway refused the sign-in (HTTP ${err?.status ?? 0}).`;
+const refusalText = (err) => err?.serverMessage ?? (!err?.status
+  ? 'The gateway did not answer. The sign-in may still be open: try again.'
+  : `The gateway refused the sign-in (HTTP ${err.status}).`);
+
+/** The confirm refusals after which an attempt cannot go on (signin.rs): the start is offered again. */
+const FINAL_REFUSALS = new Set(['no_sign_in', 'sign_in_save_failed']);
 
 /** Link schemes, colon left off: shell row t6 refuses any asset spelling a web scheme. */
 const WEB_SCHEMES = new Set(['http', 'https']);
@@ -154,8 +172,8 @@ function providerUrl(raw) {
 /**
  * Sign in again. The start posts `{}`; its answer gives a new-tab link, the expiry,
  * and Finish or Cancel, which post the decision with that answer's attempt id,
- * again on a retry. A refusal shows the gateway's sentence; not-ready keeps the buttons,
- * any other refusal clears them so the start can be pressed again.
+ * again on a retry. A refusal shows the gateway's sentence; only a final refusal clears
+ * the buttons so the start can be pressed again, and one decision runs at a time.
  * Any decision the gateway takes draws the tab again, which reads the status.
  */
 function signInCard(s, ctx, again) {
@@ -189,15 +207,21 @@ function signInCard(s, ctx, again) {
     const href = providerUrl(answer?.authorization_url);
     const until = utc(answer?.expires_at);
     const decide = (decision) => async () => {
+      if (finish.disabled) return; // one decision at a time: a late answer cannot undo a newer one
+      finish.disabled = true;
+      cancel.disabled = true;
       error(null);
       try {
         await post('signin/confirm', { decision, attempt_id: attempt });
       } catch (err) {
         error(err);
-        // Only not-ready keeps this attempt's buttons; any other refusal ends it, so start again.
-        if (err?.code !== 'sign_in_not_ready') {
+        // Only the gateway's final refusals end this attempt; anything else (not ready, no answer) keeps it.
+        if (FINAL_REFUSALS.has(err?.code)) {
           flow.replaceChildren();
           start.disabled = false;
+        } else {
+          finish.disabled = false;
+          cancel.disabled = false;
         }
         return;
       }
@@ -224,7 +248,9 @@ function signInCard(s, ctx, again) {
 export async function actionsTab(body, ctx) {
   const s = await findServer(body, ctx);
   if (!s) return;
-  const keysRead = ctx.api('/ui/api/keys', { signal: AbortSignal.timeout(KEYS_MS) }).then((b) => (Array.isArray(b?.keys) ? b.keys : null), () => null);
+  const keysStop = new AbortController();
+  const keysTimer = setTimeout(() => keysStop.abort(), KEYS_MS);
+  const keysRead = ctx.api('/ui/api/keys', { signal: keysStop.signal }).then((b) => (Array.isArray(b?.keys) ? b.keys : null), () => null).finally(() => clearTimeout(keysTimer));
   const name = s.name;
   const verb = s.state === 'paused' ? 'Retry now' : 'Restart';
   const restart = el('button', { type: 'button', class: 'btn' }, `${verb} ${name}`);
@@ -254,6 +280,7 @@ export async function actionsTab(body, ctx) {
   });
   const cards = [card(verb, verb === 'Restart' ? 'Restart its connection to the gateway.' : 'Try it now, without waiting out the pause.', restart)];
   if (s.sign_in) cards.push(signInCard(s, ctx, () => go(serverPath(name, 'actions'), { replace: true })));
-  cards.push(card('Remove', 'Take it out of the gateway and its config file.', remove, el('p', { class: 't3' }, 'Actions on this page are recorded in Activity under your name.')));
-  body.append(el('div', { class: 'sp' }, ...cards));
+  cards.push(card('Remove', 'Take it out of the gateway and its config file.', remove));
+  const audit = el('p', { class: 'sp-audit t3' }, 'Actions on this page are recorded in Activity under your name.');
+  body.append(el('div', { class: 'sp' }, ...cards, audit));
 }
