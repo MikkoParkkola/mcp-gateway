@@ -92,7 +92,7 @@ pub async fn run_add_command(
         Ok(e) => e.into_iter().collect::<std::collections::HashMap<_, _>>(),
         // A usage error, before any side effect.
         Err(msg) => {
-            return usage("add", &msg);
+            return mutant!("N14", crate::commands::fail(crate::commands::CliExit::LocalFailure, "add", &msg), usage("add", &msg));
         }
     };
 
