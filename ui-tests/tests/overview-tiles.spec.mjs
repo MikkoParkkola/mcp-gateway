@@ -211,11 +211,13 @@ test('T7 numbers paint before the series; the cache tile waits for both of its r
   await expect(num(page, 'cache')).toHaveText('…');
   calls.release(SERIES.calls);
   await expect(tile(page, 'calls').locator('svg.ov-spark')).toHaveCount(1);
+  await expect(tile(page, 'calls').locator('.chart-spark')).toHaveAttribute('title', /calls per 30 min/);
   await expect(num(page, 'cache')).toHaveText('…');
   hits.release(SERIES.cache_hits);
   await expect(num(page, 'cache')).toHaveText('20%');
   blocks.release(SERIES.blocks);
   await expect(tile(page, 'blocks').locator('svg.ov-spark')).toHaveCount(1);
+  await expect(tile(page, 'blocks').locator('.chart-spark')).toHaveAttribute('title', /calls per 30 min/);
 });
 
 test('T8 a failed series read: trend words in place of the sparkline, the number kept', async ({ page }) => {
@@ -269,6 +271,7 @@ test('T9 the cache tile: one case per row of its table', async ({ page }) => {
   await serve(page);
   await open(page);
   expect(await plotted(page, 'cache')).toBe(2);
+  await expect(tile(page, 'cache').locator('.chart-spark')).toHaveAttribute('title', /share of calls per 30 min/);
   // A 0-call bucket between two runs splits the line: two lines, never one across the gap.
   await page.unrouteAll();
   await serve(page, { reads: { calls: series('calls', [100, 0, 200, 5]), cache_hits: series('cache_hits', [10, 0, 50, 1]) } });
