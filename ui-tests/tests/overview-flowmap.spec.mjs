@@ -137,6 +137,14 @@ test('M4 ranked lists on a phone: servers first on screen, in the page and in th
   }
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  // A blocked caller's dot reads as words in its own row on a phone, inside that row's box.
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  await showMap(page, WITH_DOT, 390);
+  const dot = dotOf(page, 'x');
+  await expect(dot).toBeVisible();
+  await expect(dot).toHaveText('2 blocked');
+  const inRow = await dot.evaluate((d) => { const a = d.getBoundingClientRect(); const b = d.closest('li').getBoundingClientRect(); return a.left >= b.left && a.right <= b.right && a.top >= b.top && a.bottom <= b.bottom; });
+  expect(inRow).toBe(true);
 });
 
 test('S1 states: not counted, first run, calls not attributed, twin names, markup as text', async ({ page }) => {
