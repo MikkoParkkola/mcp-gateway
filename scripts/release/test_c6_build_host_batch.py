@@ -99,7 +99,8 @@ class Host(unittest.TestCase):
     def run_host(self, slot: str, **env: str) -> subprocess.CompletedProcess:
         full = {"PATH": self.path, "HOME": str(self.home), "C6_REPO": str(self.bare),
                 "FREEZE_SHA": self.freeze, "STAMP": STAMP, "SLOT": slot, **env}
-        return subprocess.run(["bash", str(SCRIPT)], env=full, capture_output=True, text=True, timeout=60)
+        # Run as the procedure runs it, by path: a script committed without its executable bit fails here.
+        return subprocess.run([str(SCRIPT)], env=full, capture_output=True, text=True, timeout=60)
 
     def batch_dir(self, b: str) -> Path:
         return self.home / f"c6-gate-{STAMP}{b}"
@@ -130,6 +131,17 @@ class Host(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("not 1.99.1", r.stderr)
         self.assertFalse((self.batch_dir("1") / "out").exists())
+
+    def test_the_script_is_executable_as_the_procedure_calls_it(self) -> None:
+        self.assertTrue(os.access(SCRIPT, os.X_OK), f"{SCRIPT} has no executable bit; the procedure calls it by path")
+
+    def test_the_toolchain_follows_the_workflow_pin(self) -> None:
+        self.make_repo(PINS_AS_CI.replace("1.99.1", "1.98.0"))
+        r = self.run_host("1", FAKE_RUSTC="1.98.0")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        env = dict(line.split("=", 1) for line in (self.batch_dir("1") / "out/env.txt").read_text().splitlines())
+        self.assertEqual(env["RUSTUP_TOOLCHAIN"], "1.98.0")
+        self.assertIn("rustc 1.98.0", (self.batch_dir("1") / "run.log").read_text())
 
     def test_no_toolchain_pin_stops(self) -> None:
         self.make_repo("jobs: {}\n")
