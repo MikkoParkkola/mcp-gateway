@@ -7,7 +7,7 @@
 // Inputs: JOURNEYS_GATEWAY_BIN only. Unset, missing or not executable fails the run; nothing here ever skips.
 import { spawn, spawnSync } from 'node:child_process';
 import { constants, openSync, closeSync, realpathSync } from 'node:fs';
-import { access, appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, appendFile, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
@@ -170,6 +170,23 @@ async function fingerprint(dir) {
   return JSON.stringify(out, Object.keys(out).sort());
 }
 
+/**
+ * A directory that goes first on the child's PATH with `xdg-open` and `open` stand-ins: each appends the URL it was
+ * given to <home>/browser-opens.log and opens nothing. The gateway's OAuth start opens the authorization page through
+ * them (oauth/client/browser.rs launch_command); on the second real run the real one started a browser on the test
+ * host, which wrote into the decoy home.
+ */
+async function browserShims(home) {
+  const dir = join(home, 'jh-bin');
+  await mkdir(dir, { recursive: true });
+  for (const name of ['xdg-open', 'open']) {
+    const shim = join(dir, name);
+    await writeFile(shim, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(home, 'browser-opens.log')}'\n`);
+    await chmod(shim, 0o755);
+  }
+  return dir;
+}
+
 /** init's bearer: `bearer_token: "file:<path>"` in the config, the secret in that file. */
 async function bearerFrom(configPath) {
   const m = (await readFile(configPath, 'utf8')).match(/bearer_token:\s*"file:([^"]+)"/);
@@ -224,7 +241,7 @@ async function start({ seed, port, onSpawn }, owned) {
   const decoy = await mkdtemp(join(tmpdir(), 'jh-decoy-'));
   owned.homes = [home, decoy];
   owned.services = []; // local services a seed started (an OAuth provider stub): closed at teardown, ports must refuse
-  const path = process.env.PATH;
+  const path = `${await browserShims(home)}:${process.env.PATH}`;
   const env = gatewayEnv({ home, decoy, path });
   const configPath = join(home, 'gateway.yaml');
 
@@ -302,6 +319,8 @@ async function start({ seed, port, onSpawn }, owned) {
     },
     listenerPids: () => listenerPids(chosen),
     stubLog: (name) => readFile(join(home, `stub-${name}.log`), 'utf8').catch(() => ''),
+    // Every URL the gateway asked the system to open (the xdg-open/open stand-ins), one per line.
+    browserOpens: () => readFile(join(home, 'browser-opens.log'), 'utf8').catch(() => ''),
     // C-H4: makes stub `name` stop answering (it still logs what reaches it), or answer again.
     silence: (name, on = true) => (on ? writeFile(join(home, `stub-${name}.silent`), '')
       : rm(join(home, `stub-${name}.silent`), { force: true })),

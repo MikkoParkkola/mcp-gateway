@@ -161,6 +161,9 @@ test.describe('seed needsYou (C-H3, J10)', () => {
   test.use({ seed: 'needsYou' });
   test('O1 S10 with its provider stub up, signin needs signing in, and a restart-only change is pending', async ({ gw }) => {
     expect(await signInOf(gw, 'signin')).toEqual({ status: 'never_signed_in', needsSignIn: true });
+    // The OAuth start asked the system to open the provider's authorization page: the stand-in took it, so no
+    // browser ran on the host (and the decoy check at teardown proves nothing wrote into D).
+    expect(await gw.browserOpens()).toContain('/authorize');
     const { pending_restart: pending } = await (await gw.api('/ui/api/gateway')).json();
     expect(JSON.stringify(pending?.fields ?? []), JSON.stringify(pending)).toContain('cost_governance');
   });
