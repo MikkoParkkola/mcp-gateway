@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.657ef6cc56df.js b/src/gateway/ui/shell/server-page.657ef6cc56df.js
+index 5964247dfc..6c0b3139be 100644
+--- a/src/gateway/ui/shell/server-page.657ef6cc56df.js
++++ b/src/gateway/ui/shell/server-page.657ef6cc56df.js
+@@ -435,7 +435,7 @@ function secrets(name, config, ctx) {
+     section.append(el('p', { class: 'sp-unread' }, 'The secrets could not be read.'));
+     return section;
+   }
+-  const mine = records.filter((r) => inContract(r) && r.server === name);
++  const mine = records.filter((r) => inContract(r));
+   section.append(el('ul', { class: 'sp-secrets' }, ...mine.map((r) => secretLine(r, name, ctx))),
+     el('p', { class: 'sp-only t3' }, 'Only secrets held as references are listed; a value written into gateway.yaml as text is not.'));
+   return section;

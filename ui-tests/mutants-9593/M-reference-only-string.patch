@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.657ef6cc56df.js b/src/gateway/ui/shell/server-page.657ef6cc56df.js
+index 5964247dfc..1110820786 100644
+--- a/src/gateway/ui/shell/server-page.657ef6cc56df.js
++++ b/src/gateway/ui/shell/server-page.657ef6cc56df.js
+@@ -295,7 +295,7 @@ const RECORD_MEMBERS = 'field,kind,reference,server';
+ /** Exactly the four members, all strings, and a known kind; any other record is left out. */
+ const inContract = (r) => r !== null && typeof r === 'object' && !Array.isArray(r)
+   && Object.keys(r).sort().join() === RECORD_MEMBERS
+-  && Object.values(r).every((v) => typeof v === 'string') && Object.hasOwn(KIND_WORDS, r.kind);
++  && typeof r.reference === 'string' && Object.hasOwn(KIND_WORDS, r.kind);
+ 
+ /**
+  * What a key reaches of this server (sidecar 2, first rule that holds): none when
