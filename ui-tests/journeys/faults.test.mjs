@@ -5,7 +5,7 @@
 // real journeys project on one journey with JH_FAULT set (nested.mjs). Needs JOURNEYS_GATEWAY_BIN.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,10 +30,16 @@ function reportErrors(node, found = []) {
  * text, whose source excerpts could quote the message beside an unrelated error.
  */
 function redAt(file, fault, message) {
-  const report = join(mkdtempSync(join(tmpdir(), 'jh-fault-')), 'report.json');
-  const run = journeysRun([`journeys/${file}`, '--reporter=json'], { JH_FAULT: fault, PLAYWRIGHT_JSON_OUTPUT_NAME: report });
+  const dir = mkdtempSync(join(tmpdir(), 'jh-fault-'));
+  let run;
+  let json;
+  try {
+    run = journeysRun([`journeys/${file}`, '--reporter=json'], { JH_FAULT: fault, PLAYWRIGHT_JSON_OUTPUT_NAME: join(dir, 'report.json') });
+    json = JSON.parse(readFileSync(join(dir, 'report.json'), 'utf8'));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
   assert.notEqual(run.status, 0, `the fault run passed:\n${run.out}`);
-  const json = JSON.parse(readFileSync(report, 'utf8'));
   assert.equal(json.stats?.skipped, 0, `the fault run skipped:\n${JSON.stringify(json.stats)}`);
   assert.equal(json.stats?.unexpected, 1, `the fault run did not fail exactly one test:\n${JSON.stringify(json.stats)}`);
   const [first] = reportErrors(json.suites);

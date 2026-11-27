@@ -74,7 +74,9 @@ test('J4 diagnose: a silent server is found, retried and removed', async ({ page
   expect(initializes(await gw.stubLog('tide')), 'stop and report: tide reconnected while the pages loaded').toBe(mark);
   await page.locator('dialog.confirm').getByRole('button', { name: retry }).click();
   // The confirm's own done title (shell: `p.done-title`, "✓ <notice>"); the page may repeat the notice beside a status line.
-  await expect(page.locator('p.done-title', { hasText: 'tide was restarted.' })).toHaveText('✓ tide was restarted.');
+  const restarted = page.locator('p.done-title', { hasText: 'tide was restarted.' });
+  await expect(restarted).toBeVisible();
+  await expect(restarted).toHaveText('✓ tide was restarted.');
 
   // Outside the browser: the stub's own log gained exactly one connection after the click.
   await expect.poll(async () => initializes(await gw.stubLog('tide')) - mark,
@@ -86,7 +88,9 @@ test('J4 diagnose: a silent server is found, retried and removed', async ({ page
   await page.locator('nav.tabs').getByRole('link', { name: 'Actions', exact: true }).click();
   await page.locator('#content').getByRole('button', { name: 'Remove tide' }).click();
   await page.locator('dialog.confirm').getByRole('button', { name: 'Remove tide' }).click();
-  await expect(page.locator('p.done-title', { hasText: 'tide was removed.' })).toHaveText(/^✓ tide was removed\./);
+  const removed = page.locator('p.done-title', { hasText: 'tide was removed.' });
+  await expect(removed).toBeVisible();
+  await expect(removed).toHaveText(/^✓ tide was removed\./);
 
   // Outside the browser: the config file no longer names tide, and the gateway's status read does not list it.
   await expect.poll(async () => /^ {2}tide:$/m.test(await readFile(gw.configPath, 'utf8')),
