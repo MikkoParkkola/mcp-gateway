@@ -174,3 +174,8 @@ pub(crate) async fn commit(lease: Option<&SyncLease>) -> crate::Result<()> {
     }
     written
 }
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "audit_owner_tests.rs"]
+mod tests;
