@@ -204,11 +204,11 @@ test('R-OK-NONE: both of the gateway\'s no-change summaries read as nothing chan
   expect(await saidSince(page, from)).toEqual([NOTHING, NOTHING]);
 });
 
-test('R-SUMMARY-PIN: the page\'s no-change and 503 literals are the gateway\'s own', () => {
+test('R-SUMMARY-PIN: the page\'s no-change and no-reload literals are the gateway\'s own', () => {
   const read = (rel) => readFileSync(new URL(`../../${rel}`, import.meta.url), 'utf8');
   expect(read('src/config_reload/mod.rs')).toContain('const NO_CHANGES_SUMMARY: &str = "no changes detected";');
   expect(read('src/config_reload/diff.rs')).toContain('"no changes".to_string()');
-  expect(read('src/gateway/ui/mod.rs')).toContain('"Config reload is not enabled on this gateway"');
+  expect(read('src/gateway/ui/errors.rs')).toContain('const NO_RELOAD: &str = "Config reload is not enabled on this gateway";');
   const source = gatewaySource();
   expect(source, 'a gateway.<hash>.js module').toBeTruthy();
   expect(source).toContain("'no changes detected'");
@@ -329,18 +329,19 @@ test('R-409: a refused reload says the gateway runs as before, with the gateway\
   await oneOutcome(page, A409, L409, S409);
 });
 
-test('R-503: a reload the gateway cannot take says so, with its sentence', async ({ page }) => {
+test('R-NO-RELOAD-409 and R-503: a reload not enabled is refused (409, nothing ran); one the gateway cannot take says so, with its sentence', async ({ page }) => {
   await reloadScreen(page, [
-    { status: 503, json: { error: 'Config reload is not enabled on this gateway' } },
+    // The gateway's own answer when reload is not enabled: nothing was attempted.
+    { status: 409, json: { error: 'Config reload is not enabled on this gateway' } },
     { status: 503, json: { error: 'mock: the gateway is shutting down' } },
   ]);
   const from = await open(page);
   await press(page);
-  await settled(page, [head(REFUSED), sentence('Config reload is not enabled on this gateway')]);
+  await settled(page, [head(REFUSED_409), sentence('Config reload is not enabled on this gateway')]);
   await press(page);
   await settled(page, [head(REFUSED), sentence('mock: the gateway is shutting down')]);
   expect(await saidSince(page, from)).toEqual([
-    `${REFUSED} Config reload is not enabled on this gateway.`,
+    `${REFUSED_409} Config reload is not enabled on this gateway.`,
     `${REFUSED} mock: the gateway is shutting down.`,
   ]);
 });

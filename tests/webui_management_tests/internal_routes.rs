@@ -393,7 +393,7 @@ const ROWS: &[Row] = &[
         Method::POST,
         "/ui/api/reload",
         Payload::None,
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // src/gateway/ui/session.rs:123 (dashboard_link)
     row(
@@ -417,7 +417,7 @@ const ROWS: &[Row] = &[
         Method::POST,
         "/ui/api/backends",
         Payload::Json(ADD_BACKEND),
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // backends.rs:388 (update_backend)
     row(
@@ -425,7 +425,7 @@ const ROWS: &[Row] = &[
         Method::PATCH,
         "/ui/api/backends/docs",
         Payload::Json(UPDATE_BACKEND),
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // backends.rs:273 (remove_backend)
     row(
@@ -433,7 +433,7 @@ const ROWS: &[Row] = &[
         Method::DELETE,
         "/ui/api/backends/docs",
         Payload::None,
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // backends.rs:337 (revive_backend)
     row(

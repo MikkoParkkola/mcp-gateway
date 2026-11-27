@@ -67,8 +67,8 @@ fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WipedBytes, D::E
 }
 
 use super::errors::{
-    RESTART_BUSY, config_refusal, flat_error, gate_refusal, no_config_file, no_reload_read,
-    no_reload_write, stale, structured_error,
+    RESTART_BUSY, Retry, config_refusal, config_refusal_read, flat_error, gate_refusal,
+    no_config_file, no_reload_read, no_reload_write, stale, structured_error,
 };
 use super::secret_slots::{self, Unopened};
 use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
@@ -127,9 +127,9 @@ fn identify<S>(body: FieldBody<S>, entry: usize) -> Result<(FieldId, Param, S), 
     ))
 }
 
-fn scalar(id: FieldId, value: &serde_json::Value) -> Result<Scalar, Box<Response>> {
+fn scalar(id: FieldId, value: &serde_json::Value, asked: Asked) -> Result<Scalar, Box<Response>> {
     let Some(kind) = id.spec().kind else {
-        return Err(Box::new(answer(UiRefused::WrongKind(id))));
+        return Err(Box::new(answer(UiRefused::WrongKind(id), asked)));
     };
     let converted = match kind {
         ValueKind::Bool => value.as_bool().map(Scalar::Bool),
@@ -177,7 +177,7 @@ pub(super) async fn settings_diff(
             Err(response) => return *response,
         };
         let value = match value {
-            ValueBody::Set(value) => match scalar(id, &value) {
+            ValueBody::Set(value) => match scalar(id, &value, Asked::Diff) {
                 Ok(value) => PreviewValue::Set(value),
                 Err(response) => return *response,
             },
@@ -195,6 +195,7 @@ pub(super) async fn settings_diff(
                 .iter()
                 .map(|(id, ..)| id.spec().id)
                 .collect::<Vec<_>>(),
+            Asked::Diff,
         ),
     }
 }
@@ -267,7 +268,7 @@ pub(super) async fn settings_save(
                 Err(response) => return *response,
             };
             let value = match value {
-                SaveValueBody::Set(value) => match scalar(id, &value) {
+                SaveValueBody::Set(value) => match scalar(id, &value, Asked::Save) {
                     Ok(value) => SaveValue::Set(value),
                     Err(response) => return *response,
                 },
@@ -326,7 +327,7 @@ pub(super) async fn settings_save(
         answered = (answer.outcome, answer.intent_id.map(|id| id.0));
         match answer.result {
             Ok(saved) => saved_answer(&saved, &fields, &live, &config_path, audited),
-            Err(refusal) => answer_for(refusal, &fields),
+            Err(refusal) => answer_for(refusal, &fields, Asked::Save),
         }
     }
     .await;
@@ -477,7 +478,15 @@ fn patch_steps(patch: Patch) -> serde_json::Value {
     }).collect::<Vec<_>>())
 }
 
-fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
+/// Which route asked: the diff is a read, so its shared refusals stay 503;
+/// the save is a write, so a refusal that attempted nothing is 409.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Asked {
+    Diff,
+    Save,
+}
+
+fn answer_for(refusal: UiRefused, fields: &[&str], asked: Asked) -> Response {
     let variant = match &refusal {
         UiRefused::WrongKind(_) => "wrong_kind",
         UiRefused::BadValue(..) => "bad_value",
@@ -486,6 +495,7 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         UiRefused::ReloadRefused { .. } => "reload_refused",
         UiRefused::Unsupported(_) => "unsupported",
         UiRefused::NoAuditLog => "no_audit_log",
+        UiRefused::AuditRefused => "audit_refused",
         UiRefused::Unprovable(_) => "unprovable",
         UiRefused::Stale(_) => "stale",
         UiRefused::StaleUnpreviewable(_) => "stale_unpreviewable",
@@ -493,7 +503,8 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         UiRefused::Busy(_) => "busy",
         UiRefused::Down(_) => "down",
         UiRefused::SecretsRefused { .. } => "secrets_refused",
-        UiRefused::Failed(_) => "failed",
+        // A writer refusal keeps the failed write's audit code, as before.
+        UiRefused::WriterRefused | UiRefused::Failed(_) => "failed",
     };
     let class = if let UiRefused::ReloadRefused { class } = &refusal {
         Some(class)
@@ -510,7 +521,7 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         )
             .into_response();
     }
-    answer(refusal)
+    answer(refusal, asked)
 }
 
 fn bad_value(id: FieldId, reason: &str) -> Response {
@@ -543,19 +554,34 @@ fn bad_value(id: FieldId, reason: &str) -> Response {
     field_error(id, "bad_value", reason)
 }
 
-/// The refusals a client may retry as they are: the design lists Retry-After
-/// for these only; the others need someone to change the config first.
+/// The refusals that stay 5xx and that a client may retry as they are: the
+/// design lists Retry-After for these only. A refusal that attempted nothing
+/// gets its header from `refusal` instead.
 fn retryable(refusal: &UiRefused) -> bool {
     matches!(
         refusal,
-        UiRefused::Busy(_)
-            | UiRefused::StaleUnpreviewable(_)
-            | UiRefused::Preview(PreviewRefused::Recovering)
+        UiRefused::Preview(PreviewRefused::Recovering)
             | UiRefused::SecretsRefused { timeout: true }
             | UiRefused::ReloadRefused {
                 class: RefusalClass::ShuttingDown
             }
     )
+}
+
+/// The class of a settings refusal that attempted nothing (409), and whether
+/// to retry; `None` keeps the arm's answer. `Busy`, `StaleUnpreviewable`,
+/// `NoAuditLog` and `WriterRefused` come from a save only.
+fn save_class(refusal: &UiRefused, asked: Asked) -> Option<Retry> {
+    match (refusal, asked) {
+        (UiRefused::Busy(_) | UiRefused::StaleUnpreviewable(_), _)
+        | (UiRefused::Preview(PreviewRefused::Recovering), Asked::Save) => Some(Retry::Now),
+        (UiRefused::NoAuditLog | UiRefused::WriterRefused, _)
+        | (
+            UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)),
+            Asked::Save,
+        ) => Some(Retry::No),
+        _ => None,
+    }
 }
 
 /// The core's parameter reasons are fixed texts from the field table; any
@@ -575,8 +601,35 @@ fn bad_param_reason(reason: &str) -> &'static str {
     }
 }
 
-fn answer(refusal: UiRefused) -> Response {
+/// A reload refusal's answer, by the class of what refused it.
+fn reload_refused(class: RefusalClass) -> Response {
+    let error = |status, code, text| structured_error(status, code, text).into_response();
+    match class {
+        RefusalClass::Posture => error(
+            StatusCode::CONFLICT,
+            "posture_refused",
+            "the change was refused by the gateway's network posture",
+        ),
+        RefusalClass::Invalid => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
+        // The first-key question's own sentence names no value: shown.
+        RefusalClass::KeyList(refusal) => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            refusal.sentence(),
+        ),
+        RefusalClass::ShuttingDown => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "the gateway is shutting down; retry",
+        ),
+        RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
+        RefusalClass::RestartPending { waiting } => super::errors::restart_pending(waiting.names()),
+    }
+}
+
+fn answer(refusal: UiRefused, asked: Asked) -> Response {
     let retryable = retryable(&refusal);
+    let class = save_class(&refusal, asked);
     let error = |status, code, text| structured_error(status, code, text).into_response();
     let response = match refusal {
         UiRefused::WrongKind(id) => field_error(
@@ -587,41 +640,23 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::BadValue(id, reason) => bad_value(id, &reason),
         UiRefused::BadParam(id, reason) => field_error(id, "bad_param", bad_param_reason(&reason)),
         UiRefused::Invalid(_) => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
-        UiRefused::ReloadRefused { class } => match class {
-            RefusalClass::Posture => error(
-                StatusCode::CONFLICT,
-                "posture_refused",
-                "the change was refused by the gateway's network posture",
-            ),
-            RefusalClass::Invalid => {
-                error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED)
-            }
-            // The first-key question's own sentence names no value: shown.
-            RefusalClass::KeyList(refusal) => error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "invalid",
-                refusal.sentence(),
-            ),
-            RefusalClass::ShuttingDown => error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "shutting_down",
-                "the gateway is shutting down; retry",
-            ),
-            RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
-            RefusalClass::RestartPending { waiting } => {
-                super::errors::restart_pending(waiting.names())
-            }
-        },
+        UiRefused::ReloadRefused { class } => reload_refused(class),
         UiRefused::Unsupported(_) => error(
             StatusCode::CONFLICT,
             "unsupported",
             "the edit cannot be followed in gateway.yaml",
         ),
-        UiRefused::NoAuditLog => error(
+        // No log is the posture (nothing started, 409); a refused append was
+        // started (503). One body for both.
+        UiRefused::NoAuditLog => error(StatusCode::CONFLICT, "audit_log_required", NO_AUDIT_LOG),
+        UiRefused::AuditRefused => error(
             StatusCode::SERVICE_UNAVAILABLE,
             "audit_log_required",
             NO_AUDIT_LOG,
         ),
+        // The writer refused before the target changed: the failed write's
+        // body, unchanged, at the refusal's 409.
+        UiRefused::WriterRefused => error(StatusCode::CONFLICT, "failed", FAILED),
         UiRefused::Unprovable(patch) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"error": "not_in_place", "patch": patch_steps(patch)})),
@@ -633,19 +668,26 @@ fn answer(refusal: UiRefused) -> Response {
             (status, Json(body)).into_response()
         }
         UiRefused::StaleUnpreviewable(_) => error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::CONFLICT,
             "stale",
             "gateway.yaml changed and could not be previewed; retry",
         ),
+        // A read (the diff) cannot answer now (503); a save attempted
+        // nothing (409, through `save_class`).
         UiRefused::Preview(PreviewRefused::Recovering) => flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            match asked {
+                Asked::Save => StatusCode::CONFLICT,
+                Asked::Diff => StatusCode::SERVICE_UNAVAILABLE,
+            },
             "the config write is recovering; retry",
         )
         .into_response(),
         UiRefused::Preview(PreviewRefused::NoConfigFile) => no_config_file().into_response(),
-        UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => {
-            config_refusal().into_response()
-        }
+        UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => match asked
+        {
+            Asked::Save => config_refusal().into_response(),
+            Asked::Diff => config_refusal_read().into_response(),
+        },
         // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
         // not confirmed). Still retryable, so it keeps its Retry-After.
         UiRefused::Busy(reason) => flat_error(
@@ -669,7 +711,8 @@ fn answer(refusal: UiRefused) -> Response {
         .into_response(),
         UiRefused::Failed(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
     };
-    if retryable { retry(response) } else { response }
+    let response = if retryable { retry(response) } else { response };
+    super::errors::classed(class, response)
 }
 
 fn restart_fields(fields: &[&str], reload: &ReloadOutcome) -> Vec<String> {

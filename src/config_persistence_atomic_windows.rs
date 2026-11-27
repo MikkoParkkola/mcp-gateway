@@ -117,8 +117,7 @@ pub(super) fn prepare_from(model: &File, target: &Path, scratch: &Path) -> io::R
         Ok(()) => Ok(KeptScratch::Kept(file)),
         Err(e) => {
             drop(file);
-            let _ = std::fs::remove_file(scratch);
-            Err(e)
+            Err(super::drop_scratch(scratch, e))
         }
     }
 }

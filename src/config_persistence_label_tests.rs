@@ -494,6 +494,38 @@ fn l9_a_backup_source_relabelled_during_the_copy_refuses() {
     );
 }
 
+/// L9b (site 6): a target relabelled after its scratch was verified refuses
+/// at the last check, and keeps its bytes.
+#[test]
+fn l9b_a_target_relabelled_after_verify_refuses() {
+    let (dir, source, labels) = labelled(|_| {});
+    let (store, relabel) = (labels.clone(), source.clone());
+    let armed = arm_with(
+        dir.path(),
+        &labels,
+        Seams {
+            before_verify: Some(Box::new(move |_target, _scratch| {
+                store.label(&relabel, SELINUX, b"other");
+            })),
+            ..Seams::default()
+        },
+    );
+    let error = write_atomic(&source, b"new", FileMode::Inherit, Symlink::Replace)
+        .expect_err("L9b: the save refuses");
+    drop(armed);
+    assert_eq!(
+        refusal_code(&error),
+        Some("target-changed"),
+        "L9b: code ({error})"
+    );
+    assert_eq!(names(dir.path()), ["state.json"], "L9b: no scratch");
+    assert_eq!(
+        std::fs::read(&source).expect("read"),
+        b"old",
+        "L9b: the bytes stay"
+    );
+}
+
 /// L10: a target its owner cannot read, carrying no label, saves as before:
 /// labels are read without opening the file. Once through the store and once
 /// through the kernel's own calls (no store armed), so a read that opens the
