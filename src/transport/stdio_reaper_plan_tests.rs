@@ -330,13 +330,13 @@ impl super::StopDeadline {
 #[test]
 fn a_handover_plans_only_what_its_snapshot_left() {
     let budget = KILL_RESERVE + Duration::from_secs(3);
-    let after = super::ending_after_snapshot(budget, Duration::from_secs(1), true, None);
+    let after = super::plan::ending_after_snapshot(budget, Duration::from_secs(1), true, None);
     assert_eq!(
         after.waits(),
         Duration::from_secs(2),
         "the snapshot's second was planned"
     );
-    let untouched = super::ending_after_snapshot(budget, Duration::ZERO, true, None);
+    let untouched = super::plan::ending_after_snapshot(budget, Duration::ZERO, true, None);
     assert_eq!(untouched.waits(), Duration::from_secs(3));
 }
 
