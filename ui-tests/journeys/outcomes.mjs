@@ -49,6 +49,9 @@ function main(argv) {
   try { text = readFileSync(file, 'utf8'); } catch (e) { return { code: 2, lines: [`jh-outcomes: cannot read ${file}: ${e.message}`] }; }
   let report;
   try { report = JSON.parse(text); } catch (e) { return { code: 2, lines: [`jh-outcomes: ${file} is not JSON: ${e.message}`] }; }
+  if (report === null || typeof report !== 'object' || !Array.isArray(report.suites) || typeof report.stats !== 'object' || report.stats === null) {
+    return { code: 2, lines: [`jh-outcomes: ${file} is not a Playwright JSON report (no suites list and stats object)`] };
+  }
   const fault = process.env.JH_FAULT ?? '';
   if (fault === 'JOURNEY7:drop-J4') {
     const drop = (suite) => ({ ...suite, specs: (suite.specs ?? []).filter((s) => idOf(s.title) !== 'J4'), suites: (suite.suites ?? []).map(drop) });

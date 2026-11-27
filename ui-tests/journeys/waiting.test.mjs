@@ -144,7 +144,8 @@ test('outcomes CLI: 0 on a clean report; 1 with each problem; 2 on no argument, 
   const failing = outcomesCli(JSON.stringify(report(ran().filter((s) => !s.title.startsWith('J4')))));
   assert.equal(failing.status, 1);
   assert.match(failing.out, /J4: neither a real test nor waiting/);
-  for (const [r, why] of [[outcomesCli(undefined, []), /usage/], [outcomesCli(undefined), /cannot read/], [outcomesCli('{ not json'), /not JSON/]]) {
+  for (const [r, why] of [[outcomesCli(undefined, []), /usage/], [outcomesCli(undefined), /cannot read/], [outcomesCli('{ not json'), /not JSON/], [outcomesCli('null'), /not a Playwright JSON report/],
+    [outcomesCli('{}'), /not a Playwright JSON report/]]) {
     assert.equal(r.status, 2, r.out);
     assert.match(r.out, why);
   }
