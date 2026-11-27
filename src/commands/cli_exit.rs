@@ -553,17 +553,17 @@ impl crate::cli::output::Printed {
     pub(crate) fn error(kind: CliExit, message: &str, remedy: &str) -> Self {
         Self {
             stdout: String::new(),
-            stderr: error_outcome(kind, message, remedy).stderr,
-            exit: kind.code(),
+            stderr: mutant!("N1", format!("error: {message}\n{remedy}\n"), mutant!("N2", error_outcome(kind, remedy, message).stderr, error_outcome(kind, message, remedy).stderr)),
+            exit: mutant!("N3", 1, kind.code()),
         }
     }
 
     /// A finished command's negative answer: what it printed, and its code.
     pub(crate) fn verdict(code: u8, stdout: String, stderr: String) -> Self {
         Self {
-            stdout,
+            stdout: mutant!("N4", String::new(), stdout),
             stderr,
-            exit: code,
+            exit: mutant!("N5", 1, code),
         }
     }
 }
