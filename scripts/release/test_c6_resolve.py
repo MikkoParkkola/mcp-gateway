@@ -756,6 +756,22 @@ class DeclaredAssertions(unittest.TestCase):
         self.killer("#[test]\nfn guard_admits_only_its_host() {\n    assert!(ok());\n    assert!(ok());\n}\n")
         self.refused("statement at src/checks.rs:3 occurs 2 times in guard_admits_only_its_host")
 
+    CHAIN = "    assert_eq!(\n        make()\n            .take()\n            .unwrap_err(),\n        {n}\n    );\n"
+
+    def test_a_chained_call_line_repeated_in_the_killer_names_its_whole_statement(self) -> None:
+        # Rust reports a chained call's panic at its continuation line. `.unwrap_err(),` occurs
+        # twice here, but it belongs to two different statements (1 and 2), so the site is
+        # unique; the digest covers the whole statement it continues.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + self.CHAIN.format(n=1) + self.CHAIN.format(n=2) + "}\n")
+        self.repo.declare("src/checks.rs:6 .unwrap_err(), [stmt:3998f696]")
+        self.accepted()
+
+    def test_two_identical_whole_chained_statements_still_fail_closed(self) -> None:
+        # The same chain twice, values included: the check cannot tell which one panics.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + self.CHAIN.format(n=1) + self.CHAIN.format(n=1) + "}\n")
+        self.repo.declare("src/checks.rs:6 .unwrap_err(), [stmt:3998f696]")
+        self.refused("statement at src/checks.rs:6 occurs 2 times in guard_admits_only_its_host")
+
     # -- [via F]: the panic is reported inside a helper the killer calls ---------------------
 
     HELP = "fn check(x: u8) {\n    assert!(ok(x));\n}\nfn other(x: u8) {\n    assert!( ok(x + 1) );\n}\n"
