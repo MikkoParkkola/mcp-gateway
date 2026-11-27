@@ -538,6 +538,66 @@ fn a_stop_after_four_cut_readings_still_kills_what_they_found() {
         report.incomplete_reads >= 4,
         "shortfall not reported: {report:?}"
     );
+    assert!(report.needs_warn(), "the stop would not warn: {report:?}");
+}
+
+/// The stop's warn decision (`SweepReport::needs_warn`, read by the child
+/// tree's sweep): each reason alone raises it, a clean report does not. Red
+/// if any one reason is dropped from the decision (mutant M22 drops the short
+/// readings).
+#[test]
+fn each_reason_alone_makes_the_stop_warn_and_a_clean_report_does_not() {
+    assert!(
+        !SweepReport::default().needs_warn(),
+        "a clean report warned"
+    );
+    let reasons: [(&str, SweepReport); 6] = [
+        (
+            "a residual member",
+            SweepReport {
+                residual: vec![id(5)],
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a short reading",
+            SweepReport {
+                incomplete_reads: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "an unconfirmed kill",
+            SweepReport {
+                unconfirmed: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a stuck stop",
+            SweepReport {
+                stuck_stopped: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a rescue",
+            SweepReport {
+                rescued: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a stop mismatch",
+            SweepReport {
+                stop_mismatch: 1,
+                ..SweepReport::default()
+            },
+        ),
+    ];
+    for (reason, report) in reasons {
+        assert!(report.needs_warn(), "{reason} alone did not warn");
+    }
 }
 
 /// E5 (D5''''): between unsettled readings the sweep pauses 1, 2, 4, 8, then

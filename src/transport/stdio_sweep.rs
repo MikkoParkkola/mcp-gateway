@@ -201,6 +201,20 @@ pub(super) struct SweepReport {
     pub(super) passes: u32,
 }
 
+impl SweepReport {
+    /// Whether the stop must warn that it could not confirm every descendant
+    /// gone: a member left over, a short reading, or a signal it could not
+    /// confirm, land or undo.
+    pub(super) fn needs_warn(&self) -> bool {
+        !self.residual.is_empty()
+            || self.incomplete_reads > 0
+            || self.unconfirmed > 0
+            || self.stuck_stopped > 0
+            || self.rescued > 0
+            || self.stop_mismatch > 0
+    }
+}
+
 /// The process-wide budget of held handles (pidfds) that every sweep draws on.
 pub(super) struct PidfdBudget {
     limit: usize,
