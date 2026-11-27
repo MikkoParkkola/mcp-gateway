@@ -548,8 +548,10 @@ function svgPath(side) {
  * A caller's gold dot: a link to its calls when it has an account, text when not. Each caller row keeps
  * one dot for its whole life and shows it only while the caller has blocked calls, so a dot that comes
  * or goes changes a class, not the row's layout. A dot that comes pulses once while fewer than three do.
+ * Wide, it sits on its line where the line leaves the callers' column, at the row's height: clear of
+ * the row's words (the list's right padding) and of the hub.
  */
-function fillDot(nodes, row, y, mid, drawLines) {
+function fillDot(nodes, row, y, drawLines) {
   const on = row.blocks > 0;
   if (!nodes.dot) {
     const linked = row.account && !row.fold;
@@ -571,9 +573,9 @@ function fillDot(nodes, row, y, mid, drawLines) {
   const put = (name, v, write) => { if (dw[name] !== v) { write(v); dw[name] = v; } };
   if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
   put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
-  if (drawLines) put('at', `${mid}% ${(y + 50) / 2}%`, () => {
-    nodes.dot.style.setProperty('--at-x', `${(mid / CALLER_COLUMN) * 100}%`);
-    nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
+  if (drawLines) put('at', `${y}%`, () => {
+    nodes.dot.style.setProperty('--at-x', `${(EDGE.agents / CALLER_COLUMN) * 100}%`);
+    nodes.dot.style.setProperty('--at-y', `${y}%`);
   });
 }
 /** A line's width: 1 to 8 px by its calls against the column's busiest; no number gives the neutral 1. */
@@ -631,7 +633,7 @@ function fillRow(nodes, row, side, i, count, max, drawLines) {
   if (drawLines) set('w', String(width(row.calls, max)), (v) => nodes.path.setAttribute('stroke-width', v));
   if (drawLines) set('dashed', Boolean(row.dashed), (v) => nodes.path.classList.toggle('ov-dashed', v));
   nodes.was = was;
-  if (side === 'agents') fillDot(nodes, row, y, mid, drawLines);
+  if (side === 'agents') fillDot(nodes, row, y, drawLines);
 }
 
 /**

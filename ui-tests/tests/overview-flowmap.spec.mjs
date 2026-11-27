@@ -484,19 +484,23 @@ test('A2 Tab reaches every row link and dot of the map, in page order', async ({
   expect(await tabStops(page, links.length)).toEqual(links);
 });
 
-test('G1 on a wide screen the dot sits on its line, halfway from the caller to the hub', async ({ page }) => {
-  await showMap(page, WITH_DOT, 1440);
+for (const [where, body] of [['a low row', WITH_DOT], ['a lone caller, level with the hub', flowBody({ edges: [edge('key:x', 'github', 5, 2)], servers: [srv('github')] })]]) test(`G1 on a wide screen the dot sits on its line where it leaves the callers' column, covered by nothing: ${where}`, async ({ page }) => {
+  await showMap(page, body, 1440);
   const off = await map(page).locator('.ov-map').evaluate((box) => {
     const rows = [...box.querySelectorAll('ol.ov-agents > li')];
     const i = rows.findIndex((li) => li.querySelector('.ov-dot:not(.ov-dot-off)'));
     const m = box.getBoundingClientRect();
-    const d = rows[i].querySelector('.ov-dot').getBoundingClientRect();
+    const dot = rows[i].querySelector('.ov-dot');
+    const d = dot.getBoundingClientRect();
     const y = ((i + 0.5) / rows.length) * 100;
-    // The curve's middle: x halfway between the callers' edge (37.5) and the hub (50), y halfway to 50.
-    return { x: d.left + d.width / 2 - (m.left + m.width * 0.4375), y: d.top + d.height / 2 - (m.top + (m.height * (y + 50)) / 200) };
+    const cx = d.left + d.width / 2;
+    const cy = d.top + d.height / 2;
+    // Where the line leaves the callers' column (37.5 of the map's 100), at the row's centre.
+    return { x: cx - (m.left + m.width * 0.375), y: cy - (m.top + (m.height * y) / 100), top: document.elementFromPoint(cx, cy)?.closest('.ov-dot') === dot };
   });
   expect(Math.abs(off.x), 'across').toBeLessThanOrEqual(2);
   expect(Math.abs(off.y), 'down').toBeLessThanOrEqual(2);
+  expect(off.top, 'nothing covers the dot').toBe(true);
 });
 
 test('G2 no line is wider than 8 px, the callers fold row included', async ({ page }) => {
