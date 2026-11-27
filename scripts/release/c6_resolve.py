@@ -881,7 +881,7 @@ def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int
     or list, and the scan goes on). Any other line starts its own statement at its first
     non-blank source character. From the start the text runs forward up to a `;` or `,` at
     depth 0 (kept), a closer that would take the depth below 0 (left out), or a line end at
-    depth 0."""
+    depth 0 that the next line does not continue with `.`."""
     col = len(src[line - 1]) - len(src[line - 1].lstrip())
     j, c = (_statement_start(src, blanked, line - 1, col) if src[line - 1].lstrip().startswith(".")
             else (line - 1, col))
@@ -903,20 +903,28 @@ def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int
                 end, done = i + 1, True
                 break
         parts.append(src[k][start:end])
-        if done or depth == 0:
+        # A line end at depth 0 ends the statement unless the next line continues its chain.
+        if done or (depth == 0 and not _chain_continues(src, k)):
             break
     return (j, c), _collapse(" ".join(parts))
 
 
+def _chain_continues(src: list[str], k: int) -> bool:
+    """True when the next non-blank source line after line index `k` opens with `.`."""
+    return next((s.lstrip().startswith(".") for s in src[k + 1:] if s.strip()), False)
+
+
 def _statement_start(src: list[str], blanked: list[str], k: int, col: int) -> tuple[int, int]:
     """Where the statement holding position (line index `k`, column `col`) starts: the first
-    non-blank source character after the nearest boundary before it (see `_statement`)."""
-    depth, j, c = 0, k, col - 1
+    non-blank source character after the nearest boundary before it (see `_statement`). While
+    the scan has crossed only `.`-lines, a `}` at depth 0 closes the chain's block receiver
+    (`async { .. }` then `.await`), not a statement, so the scan steps into that block."""
+    depth, j, c, receiver = 0, k, col - 1, True
     while j >= 0:
         text = blanked[j]
         while c >= 0:
             ch = text[c]
-            if ch in ")]" or (ch == "}" and depth):
+            if ch in ")]" or (ch == "}" and (depth or receiver)):
                 depth += 1
             elif ch in "([":
                 depth -= 1 if depth else 0
@@ -925,6 +933,7 @@ def _statement_start(src: list[str], blanked: list[str], k: int, col: int) -> tu
             elif ch in ";,{}" and not depth:
                 return _first_code(src, j, c + 1)
             c -= 1
+        receiver = receiver and src[j].lstrip().startswith(".")
         j -= 1
         c = len(blanked[j]) - 1 if j >= 0 else -1
     return _first_code(src, 0, 0)
