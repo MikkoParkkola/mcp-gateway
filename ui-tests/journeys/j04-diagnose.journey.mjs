@@ -67,6 +67,8 @@ test('J4 diagnose: a silent server is found, retried and removed', async ({ page
   await page.locator('nav.tabs').getByRole('link', { name: 'Actions', exact: true }).click();
   const retry = /^(Restart|Retry now) tide$/;
   await page.locator('#content').getByRole('button', { name: retry }).click();
+  // The count starts at the confirm: anything the navigation caused would show here, not be credited to Retry.
+  expect(initializes(await gw.stubLog('tide')), 'stop and report: tide reconnected while the pages loaded').toBe(mark);
   await page.locator('dialog.confirm').getByRole('button', { name: retry }).click();
   await expect(page.getByText('tide was restarted.')).toBeVisible();
 
