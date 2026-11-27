@@ -898,8 +898,9 @@ class DeclaredAssertions(unittest.TestCase):
             yield (f"plain element mid-list{tail}", "let v = vec![a,", f"assert!(ok()), b];{tail}",
                    "let v = vec![a, assert!(ok()), b];", "let v = vec![c,")
 
-    def sweep_run(self, before: str, declared: str, digest_of: str) -> tuple[int, str]:
-        self.killer(f"#[test]\nfn guard_admits_only_its_host() {{\n    {before}\n        {declared}\n}}\n")
+    def sweep_run(self, before: str, declared: str, digest_of: str, after: str = "") -> tuple[int, str]:
+        closing = f"    {after}\n" if after else ""
+        self.killer(f"#[test]\nfn guard_admits_only_its_host() {{\n    {before}\n        {declared}\n{closing}}}\n")
         digest = hashlib.sha256(digest_of.encode()).hexdigest()[:8]
         self.repo.declare(f"src/checks.rs:4 {' '.join(declared.split())} [stmt:{digest}]")
         return self.repo.run()
@@ -913,6 +914,19 @@ class DeclaredAssertions(unittest.TestCase):
                 with self.subTest(case=name, check="edited head refused"):
                     code, out = self.sweep_run(stale, declared, statement)
                     self.assertEqual(code, 1, out)
+
+    def test_the_sweep_takes_a_final_element_without_a_comma_as_its_calls(self) -> None:
+        # The dimension the first sweep missed: the declared line is a call's or list's last
+        # element, with no trailing comma, and the closer comes on the next line.
+        for before, after, stale in (("check(a,", ");", "check(c,"), ("let v = vec![a,", "];", "let v = vec![c,"),
+                                     ("let v = (a,", ");", "let v = (c,")):
+            statement = f"{before} assert!(ok()) {after}"
+            with self.subTest(before=before, check="whole statement accepted"):
+                code, out = self.sweep_run(before, "assert!(ok())", statement, after)
+                self.assertEqual(code, 0, out)
+            with self.subTest(before=before, check="edited head refused"):
+                code, out = self.sweep_run(stale, "assert!(ok())", statement, after)
+                self.assertEqual(code, 1, out)
 
     def test_the_sweep_counts_a_duplicate_after_any_closer(self) -> None:
         # A statement after the closer of an earlier line's construct is counted like any other.
