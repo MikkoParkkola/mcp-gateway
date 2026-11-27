@@ -43,7 +43,7 @@ export const servers = (count) => Array.from({ length: count }, (_, i) => srv(`s
 export function big(variant = 0) {
   const rows = [srv('down-1', { state: 'unhealthy', calls: 3 }), srv('paused-1', { state: 'paused', calls: 0 }),
     ...Array.from({ length: 22 }, (_, i) => srv(`srv-${i + 1}`, { calls: 900 - i * 30 + variant * 7 }))];
-  const who = Array.from({ length: 9 }, (_, i) => (variant && i === 8 ? 'oidc:late' : `key:agent-${i + 1}`));
+  const who = Array.from({ length: 9 }, (_, i) => (variant && i === 0 ? 'oidc:late' : `key:agent-${i + 1}`));
   const edges = Array.from({ length: 48 }, (_, i) => edge(who[i % 9], rows[i % 24].name, 400 - i * 7 + variant * 3, (i % 9 === 1 || (variant && i % 9 === 2)) ? 2 : 0));
   return flowBody({ edges, edgesMore: { count: 12, calls: 345, overflow_calls: 0 }, servers: rows, serversMore: { count: 116, up: 110, down: 6 } });
 }
