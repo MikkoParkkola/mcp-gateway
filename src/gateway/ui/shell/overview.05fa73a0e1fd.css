@@ -88,7 +88,7 @@ a.ny-row:hover .ny-title { text-decoration: underline; }
   border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-raised);
   font: var(--type-small); color: var(--color-text-secondary); text-align: center; }
 .ov-row { min-width: 0; display: flex; align-items: center; min-height: var(--size-row-touch); }
-.ov-row-go { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-2);
+.ov-row-go { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) calc(var(--space-12) + var(--space-4)); column-gap: var(--space-2);
   /* A set height and contained layout: a changed number re-lays out this box alone, not the map.
      No paint containment, so a focus ring drawn outside the box stays visible. */
   height: var(--space-10); contain: size layout style;
@@ -96,7 +96,7 @@ a.ny-row:hover .ny-title { text-decoration: underline; }
 a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
 .ov-row-name { font: var(--type-body); color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ov-row-sub { grid-row: 2; font: var(--type-small); color: var(--color-text-tertiary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ov-row-calls { grid-row: 1 / span 2; grid-column: 2; align-self: center; font: var(--type-small); color: var(--color-text-secondary); }
+.ov-row-calls { grid-row: 1 / span 2; grid-column: 2; align-self: center; text-align: right; font: var(--type-small); color: var(--color-text-secondary); }
 .ov-fold .ov-row-name { color: var(--color-text-secondary); }
 .ov-dot { position: absolute; left: var(--at-x); top: var(--at-y); transform: translate(-50%, -50%);
   width: var(--space-3); height: var(--space-3); border-radius: var(--radius-full); background: var(--color-status-warning-icon);

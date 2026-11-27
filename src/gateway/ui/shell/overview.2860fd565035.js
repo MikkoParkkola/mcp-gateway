@@ -548,7 +548,7 @@ function svgPath(side) {
  * A caller's gold dot when it has blocked calls: a link to its calls when it has an account, text when
  * not; none at zero. A new dot pulses once while fewer than three do.
  */
-function fillDot(nodes, row, y, mid) {
+function fillDot(nodes, row, y, mid, drawLines) {
   const want = row.blocks > 0 ? (row.account && !row.fold ? 'a' : 'span') : null;
   if (nodes.dot && (!want || nodes.dot.localName !== want)) {
     nodes.dot.remove();
@@ -569,7 +569,7 @@ function fillDot(nodes, row, y, mid) {
   const put = (name, v, write) => { if (dw[name] !== v) { write(v); dw[name] = v; } };
   if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
   put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
-  put('at', `${mid}% ${(y + 50) / 2}%`, () => {
+  if (drawLines) put('at', `${mid}% ${(y + 50) / 2}%`, () => {
     nodes.dot.style.setProperty('--at-x', `${mid}%`);
     nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
   });
@@ -592,7 +592,7 @@ function rowNodes(side) {
 }
 
 /** Fill one row's nodes from its model row; the link is made again only when its target changes. */
-function fillRow(nodes, row, side, i, count, max) {
+function fillRow(nodes, row, side, i, count, max, drawLines) {
   // The link follows from the name (or account) alone, so it is worked out again only when that changes.
   const target = `${row.fold ? 'fold' : ''}|${side === 'servers' ? row.name : row.account ?? ''}`;
   if (nodes.target !== target) {
@@ -620,11 +620,11 @@ function fillRow(nodes, row, side, i, count, max) {
   const y = ((i + 0.5) / count) * 100;
   const x0 = side === 'agents' ? 0 : 100;
   const mid = (EDGE[side] + 50) / 2;
-  set('d', `M ${x0} ${y} L ${EDGE[side]} ${y} C ${mid} ${y}, ${mid} 50, 50 50`, (v) => nodes.path.setAttribute('d', v));
-  set('w', String(width(row.calls, max)), (v) => nodes.path.setAttribute('stroke-width', v));
-  set('dashed', Boolean(row.dashed), (v) => nodes.path.classList.toggle('ov-dashed', v));
+  if (drawLines) set('d', `M ${x0} ${y} L ${EDGE[side]} ${y} C ${mid} ${y}, ${mid} 50, 50 50`, (v) => nodes.path.setAttribute('d', v));
+  if (drawLines) set('w', String(width(row.calls, max)), (v) => nodes.path.setAttribute('stroke-width', v));
+  if (drawLines) set('dashed', Boolean(row.dashed), (v) => nodes.path.classList.toggle('ov-dashed', v));
   nodes.was = was;
-  if (side === 'agents') fillDot(nodes, row, y, mid);
+  if (side === 'agents') fillDot(nodes, row, y, mid, drawLines);
 }
 
 /**
@@ -648,6 +648,8 @@ export function updateMap(root, model) {
     state = { box, lines, hub, note, stale, empty, lists: { agents, servers }, rows: { agents: new Map(), servers: new Map() } };
     drawn.set(root, state);
   }
+  // Kept so a phone that widens draws the lines it skipped from the last model.
+  state.model = model;
   // Each element is written only when its own value changed: a same-value write still costs a relayout.
   const text = (el, v) => { if (el.textContent !== v) el.textContent = v; };
   const hide = (el, v) => { if (el.hidden !== v) el.hidden = v; };
@@ -675,7 +677,7 @@ export function updateMap(root, model) {
         nodes = rowNodes(side);
         held.set(row.key, nodes);
       }
-      fillRow(nodes, row, side, i, rows.length, max);
+      fillRow(nodes, row, side, i, rows.length, max, !state.phone);
       // A kept node moves to its new place in the ranking; one already in place is left alone.
       if (state.lists[side].children[i] !== nodes.li) state.lists[side].insertBefore(nodes.li, state.lists[side].children[i] ?? null);
       if (!nodes.path.isConnected) state.lines.append(nodes.path);
@@ -687,6 +689,10 @@ export function updateMap(root, model) {
 function orderLists(root, phone) {
   const state = drawn.get(root);
   if (!state) return;
+  // On a phone the lines and the hub are hidden, so updates skip writing them; widening draws them again.
+  const wasPhone = state.phone;
+  state.phone = phone;
+  if (wasPhone && !phone && state.model) updateMap(root, state.model);
   const { agents, servers } = state.lists;
   const [first, second] = phone ? [servers, agents] : [agents, servers];
   // Moved only when out of order: a node already in place is never touched (its focus and probes stay).
