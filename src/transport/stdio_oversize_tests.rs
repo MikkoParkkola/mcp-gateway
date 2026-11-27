@@ -67,6 +67,20 @@ fn u1_an_id_past_the_kept_head_names_nobody() {
     assert_eq!(owner(&far), None);
 }
 
+/// Review r1 (kimi): the kept head is exactly 4 KiB. A deciding key whose
+/// closing quote is the last kept byte names the owner; one byte later, the
+/// cut falls inside the key and nobody is named.
+#[test]
+fn u2_the_head_bound_is_exact() {
+    let tail = r#"","id":7,"result""#;
+    let pad = 4096 - r#"{"jsonrpc":""#.len() - tail.len();
+    let head = |pad: usize| format!(r#"{{"jsonrpc":"{}{tail}:{{}}"#, "x".repeat(pad));
+    // The colon after `"result"` is byte 4097: the kept head ends at its quote.
+    assert_eq!(head(pad).rfind(":{}"), Some(4096));
+    assert_eq!(owner(&head(pad)), Some("7".into()));
+    assert_eq!(owner(&head(pad + 1)), None);
+}
+
 #[test]
 fn u1_a_frame_cut_inside_its_id_names_nobody() {
     assert_eq!(owner(r#"{"jsonrpc":"2.0","id":"req-"#), None);
@@ -118,11 +132,11 @@ fn u2_id_text_inside_a_string_is_not_a_key() {
 #[test]
 fn u2_escaped_keys_and_ids_are_read_unescaped() {
     assert_eq!(
-        owner(&cut(r#"{"jsonrpc":"2.0","id":7,"result":"#)),
+        owner(&cut(r#"{"jsonrpc":"2.0","\u0069d":7,"result":"#)),
         Some("7".into())
     );
     assert_eq!(
-        owner(&cut(r#"{"jsonrpc":"2.0","id":"a\"bA","result":"#)),
+        owner(&cut(r#"{"jsonrpc":"2.0","id":"a\"b\u0041","\u0072esult":"#)),
         Some("a\"bA".into())
     );
 }
