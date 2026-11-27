@@ -22,7 +22,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::config_file::{Gateway, read_gateway};
-use super::errors::{flat_error, gate_refusal, stale, structured_error};
+use super::errors::{Retry, flat_error, gate_refusal, nothing_attempted, stale, structured_error};
 use super::guard::Guard;
 use super::settings::caller_is_cli_key;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
@@ -30,9 +30,9 @@ use crate::config_persistence::keyedit::{
     Change, FieldPath, Scalar, Segment, Template, edit_in_place,
 };
 use crate::config_reload::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, NO_AUDIT_LOG,
-    RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, ReplaceReload, Replaced, StatusChange,
-    Waiting, replace_audited, restart_pending_guard, waiting_first_key, waiting_names,
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, RELOAD_LOCK_WAIT,
+    Replace, ReplaceError, ReplaceOutcome, ReplaceReload, Replaced, StatusChange, Waiting,
+    replace_audited, restart_pending_guard, waiting_first_key, waiting_names,
 };
 use crate::gateway::auth::SessionMintedBy;
 use crate::gateway::router::AppState;
@@ -201,9 +201,14 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
     let (Ok(Ok(Gateway::File { revision, config })), Some(context)) =
         (read, state.meta_mcp.reload_context())
     else {
-        return Err(Box::new(fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "reload is off or gateway.yaml could not be loaded",
+        // Reload off or a gateway.yaml that cannot be loaded: nothing was
+        // attempted, so it is refused until someone acts (409).
+        return Err(Box::new(super::errors::refusal(
+            Retry::No,
+            fixed(
+                StatusCode::CONFLICT,
+                "reload is off or gateway.yaml could not be loaded",
+            ),
         )));
     };
     if config.auth.api_keys.iter().any(|k| k.name == body.name) {
@@ -407,10 +412,9 @@ async fn write_audited(
     let log = state
         .transparency_log
         .clone()
-        // No log is refused here, as the audit's own refusal, so the
-        // posture below never sees a missing log: its `NoAuditLog` can't
-        // reach this route.
-        .ok_or_else(|| ReplaceError::AuditRefused(NO_AUDIT_LOG.to_owned()))?;
+        // No log is the gateway's posture, and nothing was started: the
+        // posture refusal, answered 409 like every route's.
+        .ok_or(ReplaceError::NoAuditLog)?;
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
     let account = who.account.clone();
@@ -559,38 +563,47 @@ fn refused_write(
         (Some(Refusal::Expired), _) => invalid_field("expires_at"),
         (Some(Refusal::Waiting(keys)), _) => super::errors::restart_pending(&keys),
         (Some(Refusal::NotWritten), _) => not_written(state),
-        (None, Err(ReplaceError::Stale { current })) => stale(&current).into_response(),
-        (None, Err(ReplaceError::Busy)) => fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        ),
-        (None, Err(ReplaceError::Gated(refusal))) => gate_refusal(refusal),
-        (None, Err(ReplaceError::ReloadRefused { .. })) => {
-            fixed(StatusCode::CONFLICT, "reload_refused")
-        }
-        (None, Err(ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog)) => {
-            audit_unavailable()
-        }
+        (None, Err(error)) => refused_by_writer(error),
+        (None, Ok(_)) => state_uncertain(),
+    }
+}
+
+/// The writer's refusal of a key create, as fixed text: a refusal that
+/// attempted nothing is 409, with `Retry-After` when it clears by itself.
+fn refused_by_writer(error: ReplaceError) -> Response {
+    let class = nothing_attempted(&error);
+    let answer = match error {
+        ReplaceError::Stale { current } => stale(&current).into_response(),
+        ReplaceError::Busy => fixed(StatusCode::CONFLICT, "the config is being written; retry"),
+        ReplaceError::Gated(refusal) => gate_refusal(refusal),
+        ReplaceError::ReloadRefused { .. } => fixed(StatusCode::CONFLICT, "reload_refused"),
+        // No log is the posture (nothing started, 409); a refused append was
+        // started (503). One body for both.
+        ReplaceError::NoAuditLog => fixed(StatusCode::CONFLICT, "audit_unavailable"),
+        ReplaceError::AuditRefused(_) => audit_unavailable(),
         // The writer's own read check: nothing was written, so these are the
         // preconditions' answers, never the guard's text.
-        (None, Err(ReplaceError::NoConfigFile)) => fixed(StatusCode::CONFLICT, "no_config_file"),
-        (None, Err(ReplaceError::ConfigRefused(_))) => fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
+        ReplaceError::NoConfigFile => fixed(StatusCode::CONFLICT, "no_config_file"),
+        ReplaceError::ConfigRefused(_) => fixed(
+            StatusCode::CONFLICT,
             "reload is off or gateway.yaml could not be loaded",
         ),
-        (
-            None,
-            Err(
-                ReplaceError::Refused(_)
-                | ReplaceError::Unsupported(_)
-                | ReplaceError::Stage(_)
-                | ReplaceError::Write(_)
-                | ReplaceError::WriterRefused { .. }
-                | ReplaceError::Secrets(_),
-            ),
-        ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
-        (None, _) => state_uncertain(),
-    }
+        // The writer refused before the target changed and left no scratch.
+        ReplaceError::WriterRefused { .. } => {
+            fixed(StatusCode::CONFLICT, "the key was not created")
+        }
+        ReplaceError::Refused(_)
+        | ReplaceError::Unsupported(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::Secrets(_) => {
+            fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created")
+        }
+        ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Failed(_) => state_uncertain(),
+    };
+    super::errors::classed(class, answer)
 }
 
 /// `POST /ui/api/keys`.
@@ -713,3 +726,8 @@ pub(super) async fn create_key(
         other => refused_write(&state, refusal, other),
     }
 }
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_create_class_tests.rs"]
+mod class_tests;
