@@ -388,6 +388,13 @@ test.describe('review round 1: the replay contract, stale actions, final sign-in
     await settle(page);
     await expect(page).toHaveURL(new RegExp(`/ui/servers/${ENC}/status$`));
   });
+
+  test('T7 a Finish answered 200 with a body that does not parse is not called a refusal, and the attempt stays', async ({ page }) => {
+    await actions(page, OAUTH(), { backend: signInFake({ code: 200, raw: '{"outcome":"conf' }) });
+    await startAndFinish(page);
+    await expect(page.locator('.sp-error')).toHaveText("The gateway's answer could not be read. The sign-in may still be open: try again.");
+    await expect(page.getByRole('button', { name: 'Finish sign-in' })).toBeEnabled();
+  });
 });
 
 test.describe('T11 the open confirm, the keyboard and reduced motion', () => {
