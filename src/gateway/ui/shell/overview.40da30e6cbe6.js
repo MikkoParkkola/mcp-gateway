@@ -593,7 +593,13 @@ function rowNodes(side) {
 
 /** Fill one row's nodes from its model row; the link is made again only when its target changes. */
 function fillRow(nodes, row, side, i, count, max) {
-  const href = side === 'servers' ? (row.fold ? '/ui/servers/status' : serverPath(row.name)) : (row.account ? callsOfCaller(row.account) : null);
+  // The link follows from the name (or account) alone, so it is worked out again only when that changes.
+  const target = `${row.fold ? 'fold' : ''}|${side === 'servers' ? row.name : row.account ?? ''}`;
+  if (nodes.target !== target) {
+    nodes.target = target;
+    nodes.href = side === 'servers' ? (row.fold ? '/ui/servers/status' : serverPath(row.name)) : (row.account ? callsOfCaller(row.account) : null);
+  }
+  const { href } = nodes;
   if (!nodes.go || nodes.go.getAttribute('href') !== href) {
     const go = href ? h('a', { class: 'ov-row-go', href }) : h('div', { class: 'ov-row-go' });
     if (href?.includes('?')) viaGo(go);

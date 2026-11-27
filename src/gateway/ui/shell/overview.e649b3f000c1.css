@@ -119,7 +119,9 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
 @media (max-width: 639px) {
   .ov-map { display: block; min-height: 0; }
   .ov-lines, .ov-hub { display: none; }
-  .ov-agents, .ov-servers { padding: 0; }
+  /* Layout contained, size from content: a row's number or a swapped row keeps the list's size, so
+     the card around it is not laid out again. */
+  .ov-agents, .ov-servers { padding: 0; contain: layout style; }
   .ov-servers + .ov-agents, .ov-agents + .ov-servers { margin-top: var(--space-3); }
   .ov-row { position: relative; }
   .ov-dot { position: static; transform: none; width: auto; height: auto; margin-left: var(--space-2); padding: 0 var(--space-1);
