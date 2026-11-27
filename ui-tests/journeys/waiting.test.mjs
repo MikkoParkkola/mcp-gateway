@@ -121,6 +121,13 @@ test('outcomes: coverage comes from what ran: a missing J4, a waiting J6 that ra
   assert.ok(named(checkOutcomes(report(ran().filter((s) => !s.title.startsWith('harness')))), 'harness smoke', '0 real tests'));
 });
 
+test('outcomes: the smoke is held to the same rule, and an expected test with no attempt is not a pass', () => {
+  const smokeAs = (status, attempts) => ran().map((s) => (s.title.startsWith('harness') ? spec(s.title, status, attempts) : s));
+  assert.ok(named(checkOutcomes(report(smokeAs('unexpected', ['failed']))), 'harness smoke', 'did not pass as expected'));
+  assert.ok(named(checkOutcomes(report(smokeAs('skipped', []))), 'harness smoke', 'did not pass as expected'));
+  assert.ok(named(checkOutcomes(report(swapJ4('expected', []))), 'J4', 'did not pass as expected'));
+});
+
 test('outcomes: a journey inside a nested describe suite is found', () => {
   const outer = ran().filter((s) => !s.title.startsWith('J4'));
   assert.deepEqual(checkOutcomes(report(outer, { suites: [{ title: 'a group', specs: [spec('J4 diagnose: x')], suites: [] }] })), []);
@@ -138,6 +145,19 @@ function outcomesCli(body, args) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test('outcomes CLI: an unknown JOURNEY7 fault is refused with exit 2', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jh-outcomes-'));
+  try {
+    const file = join(dir, 'journeys.json');
+    writeFileSync(file, JSON.stringify(report(ran())));
+    const r = spawnSync(process.execPath, [OUTCOMES_CLI, file], { encoding: 'utf8', env: { ...process.env, JH_FAULT: 'JOURNEY7:drop-J9' } });
+    assert.equal(r.status, 2, `${r.stdout}${r.stderr}`);
+    assert.match(`${r.stdout}${r.stderr}`, /is not an outcomes fault/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 test('outcomes CLI: 0 on a clean report; 1 with each problem; 2 on no argument, a missing file or malformed JSON', () => {
   assert.equal(outcomesCli(JSON.stringify(report(ran()))).status, 0);
