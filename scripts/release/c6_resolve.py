@@ -871,9 +871,10 @@ def _apply_reanchored(source: str, patch: str) -> str:
     return text
 
 
-def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int, int], str]:
+def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int, int], str, int]:
     """The statement holding 1-based `line`, as (its start (line index, column), its
-    whitespace-collapsed source text), from the source lines `src` and the same lines blanked.
+    whitespace-collapsed source text, the index of its last line), from the source lines `src`
+    and the same lines blanked.
     Rust reports a chained call's panic at its continuation line (`.unwrap_err(),`), which
     starts no statement and can repeat inside one test: a line that opens with `.` belongs to
     the statement found by scanning back, in the blanked text, to the previous `;`, `,`, `{` or
@@ -881,7 +882,8 @@ def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int
     or list, and the scan goes on). Any other line starts its own statement at its first
     non-blank source character. From the start the text runs forward up to a `;` or `,` at
     depth 0 (kept), a closer that would take the depth below 0 (left out), or a line end at
-    depth 0 that the next line does not continue with `.`."""
+    depth 0 that does not visibly go on (see `_continues`). A declared line the statement does
+    not reach is refused by the caller: any continuation form not followed fails closed."""
     col = len(src[line - 1]) - len(src[line - 1].lstrip())
     j, c = (_statement_start(src, blanked, line - 1, col) if src[line - 1].lstrip().startswith(".")
             else (line - 1, col))
@@ -903,15 +905,29 @@ def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int
                 end, done = i + 1, True
                 break
         parts.append(src[k][start:end])
-        # A line end at depth 0 ends the statement unless the next line continues its chain.
-        if done or (depth == 0 and not _chain_continues(src, k)):
+        # A line end at depth 0 ends the statement unless the statement visibly goes on.
+        if done or (depth == 0 and not _continues(src, blanked, k)):
             break
-    return (j, c), _collapse(" ".join(parts))
+    return (j, c), _collapse(" ".join(parts)), k
 
 
-def _chain_continues(src: list[str], k: int) -> bool:
-    """True when the next non-blank source line after line index `k` opens with `.`."""
-    return next((s.lstrip().startswith(".") for s in src[k + 1:] if s.strip()), False)
+# A line ending in one of these, or a next code line opening with one (or with `.` or `?`),
+# continues the statement: an assignment, a binary operator, a chain or `?` split over lines.
+_OPERATOR_CHARS = "=+-*/%&|^<>"
+
+
+def _continues(src: list[str], blanked: list[str], k: int) -> bool:
+    """True when the statement running through line index `k` (at depth 0 at its end) goes on:
+    the line's code ends with `=` or a binary operator, or the next code line (blank and
+    comment-only lines skipped) opens with `.`, `?` or a binary operator."""
+    tail = blanked[k].rstrip()
+    if tail and tail[-1] in _OPERATOR_CHARS:
+        return True
+    for m in range(k + 1, len(src)):
+        if blanked[m].strip():
+            return blanked[m].lstrip()[0] in "." + "?" + _OPERATOR_CHARS
+        # A blank line, or a comment-only line (blanked to spaces), carries no code.
+    return False
 
 
 def _statement_start(src: list[str], blanked: list[str], k: int, col: int) -> tuple[int, int]:
@@ -999,16 +1015,20 @@ def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: 
         if path != killer_file or not kdecl.start <= line <= kdecl.end:
             return f"{site} is not inside {killer}"
         span = kdecl
-    _, statement = _statement(src, blanked, line)
+    _, statement, last = _statement(src, blanked, line)
     actual = hashlib.sha256(statement.encode()).hexdigest()[:8]
     if _collapse(src[line - 1]) != _collapse(text):
         return f"{site} does not carry the recorded text (statement digest there is {actual})"
+    # The statement must run through the declared line: a chain continued by something other
+    # than a `.` line (an operator, a comment) ends early, and its head alone vouches for nothing.
+    if last < line - 1:
+        return f"statement at {path}:{line} does not reach its declared line (it ends at line {last + 1})"
     if actual != digest:
         return f"{site} statement digest is {actual}, recorded {digest}"
     # Distinct statements in the span (each line maps to the statement holding it), counted by
     # start, so a multi-line statement counts once and two identical statements count twice.
-    found = dict(_statement(src, blanked, k) for k in range(span.start, span.end + 1))
-    same = sum(text == statement for text in found.values())
+    found = {where: other for where, other, _ in (_statement(src, blanked, k) for k in range(span.start, span.end + 1))}
+    same = sum(other == statement for other in found.values())
     if same != 1:
         return f"statement at {path}:{line} occurs {same} times in {span.name}"
     return None

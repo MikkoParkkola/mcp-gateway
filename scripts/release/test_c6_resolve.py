@@ -790,6 +790,30 @@ class DeclaredAssertions(unittest.TestCase):
         self.repo.declare("src/checks.rs:7 .unwrap_err(); [stmt:d7a63421]")
         self.accepted()
 
+    def test_an_assignment_and_an_operator_split_over_lines_continue_the_statement(self) -> None:
+        cases = (
+            # `let err =` ends in `=`: the statement goes on (the live OAuth 6 shape).
+            ("    let err =\n        make(a, b)\n            .take()\n            .unwrap_err();\n", "src/checks.rs:6 .unwrap_err(); [stmt:c18a9217]"),
+            # `+ other()` opens with an operator: the statement goes on.
+            ("    let total = make(a, b)\n        + other()\n            .take()\n            .unwrap_err();\n",
+             "src/checks.rs:6 .unwrap_err(); [stmt:62eb3ae6]"),
+        )
+        for body, cell in cases:
+            with self.subTest(cell=cell):
+                self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + body + "}\n")
+                self.repo.declare(cell)
+                self.accepted()
+
+    def test_a_continuation_form_not_followed_fails_closed(self) -> None:
+        # `as Total` opens with a keyword, a form the statement rule does not follow, so the
+        # statement found from the head ends at line 3 and never reaches the declared line 6.
+        # The recorded digest is that head's own (sha256("let total = make(a, b)")[:8]), so
+        # only the coverage check can refuse it.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    let total = make(a, b)\n        as Total\n            .take()\n            .unwrap_err();\n}\n")
+        self.repo.declare("src/checks.rs:6 .unwrap_err(); [stmt:494445d2]")
+        self.refused("statement at src/checks.rs:6 does not reach its declared line (it ends at line 3)")
+
     # -- [via F]: the panic is reported inside a helper the killer calls ---------------------
 
     HELP = "fn check(x: u8) {\n    assert!(ok(x));\n}\nfn other(x: u8) {\n    assert!( ok(x + 1) );\n}\n"
