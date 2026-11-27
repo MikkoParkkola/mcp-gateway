@@ -100,7 +100,11 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
 .ov-fold .ov-row-name { color: var(--color-text-secondary); }
 .ov-dot { position: absolute; left: var(--at-x); top: var(--at-y); transform: translate(-50%, -50%);
   width: var(--space-3); height: var(--space-3); border-radius: var(--radius-full); background: var(--color-status-warning-icon);
-  overflow: hidden; color: transparent; white-space: nowrap; font-size: 0; }
+  overflow: hidden; color: transparent; white-space: nowrap; font-size: 0;
+  /* A 12 px dot in a 24 px target (the minimum for a fine pointer): the padding is part of the hit area. */
+  box-sizing: content-box; padding: var(--space-1-5); background-clip: content-box; }
+/* The card's own display rules would otherwise outrank the hidden attribute. */
+.ov-flow [hidden] { display: none; }
 .ov-map-note, .ov-map-empty { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
 @media (pointer: coarse) { .ov-dot { min-width: var(--size-touch); min-height: var(--size-touch); background-clip: content-box; padding: var(--space-4); } }
 

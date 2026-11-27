@@ -286,6 +286,7 @@ test('L1 a status event re-reads once and updates the rows in place', async ({ p
     servers: [srv('github', { state: 'paused', calls: 150 }), srv('stripe', { calls: 50 }), srv('linear', { calls: 40 }), srv('jira', { state: 'paused', calls: 0 })] });
   await fire(page);
   await page.clock.runFor(1100);
+  await expect(names(agentRows(page))).toHaveText(['bob', 'new', 'alice']);
   expect(await probes(agentRows(page))).toEqual(['bob', '', 'alice']);
   expect(await probes(serverRows(page))).toEqual(['github', 'jira', 'stripe', 'linear']);
   // A dot comes when a caller's blocks go from 0 to 2 and goes when they return to 0.
