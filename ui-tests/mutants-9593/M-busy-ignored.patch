@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-page.2d7969744d37.js b/src/gateway/ui/shell/server-page.2d7969744d37.js
+index a39325f0fc..bc480f0902 100644
+--- a/src/gateway/ui/shell/server-page.2d7969744d37.js
++++ b/src/gateway/ui/shell/server-page.2d7969744d37.js
+@@ -373,7 +373,7 @@ function secretLine(r, server, ctx) {
+     };
+     // aria-busy marks a pending Save: typing then must not re-enable Save, nor Enter send a second PATCH.
+     const busy = () => form.getAttribute('aria-busy') === 'true';
+-    input.addEventListener('input', () => { save.disabled = input.value === '' || busy(); });
++    input.addEventListener('input', () => { save.disabled = input.value === ''; });
+     cancel.addEventListener('click', close);
+     form.addEventListener('submit', (event) => {
+       event.preventDefault();

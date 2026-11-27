@@ -1,0 +1,16 @@
+diff --git a/src/gateway/ui/shell/server-page.2d7969744d37.js b/src/gateway/ui/shell/server-page.2d7969744d37.js
+index a39325f0fc..e4e1208bae 100644
+--- a/src/gateway/ui/shell/server-page.2d7969744d37.js
++++ b/src/gateway/ui/shell/server-page.2d7969744d37.js
+@@ -396,10 +396,7 @@ function secretLine(r, server, ctx) {
+       });
+     } catch (err) {
+       // Left the page while it was pending: the field is detached but still holds the value; empty it.
+-      if (!form.isConnected) {
+-        input.value = '';
+-        return;
+-      }
++      if (!form.isConnected) return;
+       const why = err?.serverMessage ?? (!err?.status || err.unreadable
+         // No answer, or one that would not parse: the value may have been stored.
+         ? NOT_CONFIRMED

@@ -1,2 +1,4 @@
 # id	patch	spec	grep (one row each; each leg's killing line is listed in the PR body)
-M-dots-link	M-dots-link.patch	tests/server-page-settings.spec.mjs	T9c-who a key named . or ..
+M-busy-ignored	M-busy-ignored.patch	tests/server-page-settings.spec.mjs	T8e typing again cannot re-enable Save
+M-late-refused-keeps	M-late-refused-keeps.patch	tests/server-page-settings.spec.mjs	T8e a refused answer after the user left
+M-late-stored-keeps	M-late-stored-keeps.patch	tests/server-page-settings.spec.mjs	T8e a stored answer after the user left
