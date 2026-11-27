@@ -191,6 +191,11 @@ const SPAWN_ALLOWED: &[(&str, &str, &str)] = &[
         "runtime.spawn(async move {",
         "AuditJobs::spawn: a dropped request's invocation records, after the call",
     ),
+    (
+        "src/gateway/meta_mcp/invoke/audit_owner.rs",
+        "jobs.spawn(async move {",
+        "hand_off: a dropped request's records, as one AuditJobs job",
+    ),
 ];
 
 /// T20 (design C0b): a web UI call's cell is a task-local, which does not
