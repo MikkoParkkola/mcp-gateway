@@ -122,3 +122,16 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
     border-radius: var(--radius-sm); font: var(--type-small); color: var(--color-status-warning-fg); background: none; overflow: visible; }
   .ov-dot::after { content: ' ›'; }
 }
+
+/* A dot that is new in an update pulses once (the script lets at most three do so at one time); with
+   reduced motion nothing moves, neither the pulse nor a line's change of width. */
+.ov-dot.ov-pulse { animation: ov-pulse calc(var(--duration-slow) * 5) var(--easing-move) 1; }
+@keyframes ov-pulse {
+  from { box-shadow: 0 0 0 0 var(--color-status-warning-icon); }
+  to { box-shadow: 0 0 0 var(--space-3) transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-dot.ov-pulse { animation: none; }
+  .ov-lines path { transition: none; }
+}
+.ov-map-stale { font: var(--type-small); color: var(--color-status-warning-fg); margin: 0; }

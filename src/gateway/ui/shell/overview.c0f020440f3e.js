@@ -637,8 +637,9 @@ export function updateMap(root, model) {
     const box = h('div', { class: 'ov-map' }, lines, agents, hub, servers);
     const note = h('p', { class: 'ov-map-note' });
     const empty = h('p', { class: 'ov-map-empty' });
-    root.append(box, note, empty);
-    state = { box, lines, hub, note, empty, lists: { agents, servers }, rows: { agents: new Map(), servers: new Map() } };
+    const stale = h('p', { class: 'ov-map-stale', hidden: true });
+    root.append(box, note, stale, empty);
+    state = { box, lines, hub, note, stale, empty, lists: { agents, servers }, rows: { agents: new Map(), servers: new Map() } };
     drawn.set(root, state);
   }
   // Each element is written only when its own value changed: a same-value write still costs a relayout.
@@ -674,6 +675,74 @@ export function updateMap(root, model) {
       if (!nodes.path.isConnected) state.lines.append(nodes.path);
     });
   }
+}
+
+/** On a phone the servers' list comes first in the page, so what is seen is what is read and tabbed. */
+function orderLists(root, phone) {
+  const state = drawn.get(root);
+  if (!state) return;
+  const { agents, servers } = state.lists;
+  const [first, second] = phone ? [servers, agents] : [agents, servers];
+  // Moved only when out of order: a node already in place is never touched (its focus and probes stay).
+  if (second.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) state.box.insertBefore(first, second);
+  // Wide, the hub stands between the two lists; on a phone it is hidden, so its place does not matter.
+  if (!phone && agents.nextElementSibling !== state.hub) agents.after(state.hub);
+}
+
+/** How long after a stream event the map reads again: a fixed deadline that later events never push back. */
+const REREAD_MS = 1000;
+
+/**
+ * Keep the map live: the stream's status and reload events read the overview again after REREAD_MS,
+ * one read at a time; an event during a read asks for one more after it. Every step first checks that
+ * the card is still on the page, and lets go of everything when it is not. A failed read leaves the
+ * map as it was and says since when it has not changed.
+ */
+function keepLive(root, ctx) {
+  let timer = null;
+  let reading = false;
+  let again = false;
+  let lastGood = Date.now() / 1000;
+  const gone = () => {
+    if (root.isConnected) return false;
+    removeEventListener('gateway-status', onEvent);
+    removeEventListener('gateway-reload', onEvent);
+    clearTimeout(timer);
+    return true;
+  };
+  async function reread() {
+    timer = null;
+    if (gone()) return;
+    reading = true;
+    let fresh = null;
+    try {
+      fresh = (await ctx.api('/ui/api/overview')) ?? {};
+    } catch {
+      fresh = null;
+    }
+    reading = false;
+    if (gone()) return;
+    const line = drawn.get(root)?.stale;
+    if (fresh) {
+      updateMap(root, flowModel(fresh));
+      lastGood = Date.now() / 1000;
+      if (line) line.hidden = true;
+    } else if (line) {
+      line.textContent = `Not updated since ${clock(lastGood)}`;
+      line.hidden = false;
+    }
+    if (again) {
+      again = false;
+      onEvent();
+    }
+  }
+  function onEvent() {
+    if (gone()) return;
+    if (reading) again = true;
+    else if (!timer) timer = setTimeout(reread, REREAD_MS);
+  }
+  addEventListener('gateway-status', onEvent);
+  addEventListener('gateway-reload', onEvent);
 }
 
 const METRICS = ['calls', 'blocks', 'cache_hits'];
@@ -716,6 +785,8 @@ async function statusTab(body, ctx) {
   const flowMap = card('flow-map', 'Live traffic ', h('span', { class: 'ov-panel-when' }, 'last 24 h'));
   flowMap.classList.add('ov-flow');
   updateMap(flowMap, flowModel(data));
+  orderLists(flowMap, phone.matches);
+  keepLive(flowMap, ctx);
   for (const p of [checklistPanel(data), flowMap, needsYouPanel(data), callsChart, lastActionsPanel(data)]) if (p) place(root, p);
   root.setAttribute('data-overview-painted', '');
   body.append(root);
@@ -730,6 +801,7 @@ async function statusTab(body, ctx) {
       return;
     }
     arrange(strip, more, t, e.matches);
+    orderLists(flowMap, e.matches);
   };
   watching = { mql: phone, fn };
   phone.addEventListener('change', watching.fn);
