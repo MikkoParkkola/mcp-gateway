@@ -354,8 +354,8 @@ async function start({ seed, port, onSpawn }, owned) {
       await step(() => handle.kill());
       await step(() => closeServices(owned.services));
       const after = await step(() => fingerprint(decoy));
-      await rm(home, { recursive: true, force: true });
-      await rm(decoy, { recursive: true, force: true });
+      await step(() => rm(home, { recursive: true, force: true }));
+      await step(() => rm(decoy, { recursive: true, force: true }));
       if (failure) throw failure;
       if (after !== decoyPrint) throw new Error('the decoy home changed while the gateway ran');
     },
@@ -411,7 +411,7 @@ export async function startGateway(opts = {}) {
   } catch (e) {
     if (owned.handle) await owned.handle.stop().catch(() => {});
     else await closeServices(owned.services ?? []).catch(() => {});
-    for (const dir of owned.homes ?? []) await rm(dir, { recursive: true, force: true });
+    for (const dir of owned.homes ?? []) await rm(dir, { recursive: true, force: true }).catch(() => {});
     throw e;
   }
 }
