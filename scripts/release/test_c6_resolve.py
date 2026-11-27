@@ -8,6 +8,7 @@ verdict. The resolver reads the committed tree, so every fixture is committed fi
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
 import re
@@ -730,16 +731,17 @@ class DeclaredAssertions(unittest.TestCase):
         self.repo.declare(f"src/checks.rs:3 {SITE} [re-run: inner cause src/x.rs:9]")
         self.accepted()
 
-    def test_statement_extraction_follows_brackets_across_lines_and_stops_at_a_comma(self) -> None:
+    def test_statement_extraction_follows_brackets_and_an_argument_line_is_its_calls(self) -> None:
         cases = (
             ("    assert!(\n        ok(),\n        \"msg\");\n", "src/checks.rs:3 assert!( [stmt:3bf590c2]"),
-            ("    let e = (\n        ok(1).unwrap_err(),\n    );\n", "src/checks.rs:4 ok(1).unwrap_err(), [stmt:39ad1de7]"),
+            # An argument line belongs to the statement whose call or list holds it.
+            ("    let e = (\n        ok(1).unwrap_err(),\n    );\n", "src/checks.rs:4 ok(1).unwrap_err(), [stmt:29798dd7]"),
             # Brackets, a comma, a `;` and a `}` inside a string, and a comment after: the scan
             # reads code only, so the statement ends at the real `;`.
             ("    assert!(ok(), \"a ) , ; }\"); // ) ;\n",
              "src/checks.rs:3 assert!(ok(), \"a ) , ; }\"); // ) ; [stmt:c88e394b]"),
-            # A line that opens with a literal starts the statement at that literal.
-            ("    assert!(\n        ok(),\n        \"expected\",\n    );\n", "src/checks.rs:5 \"expected\", [stmt:78643ad7]"),
+            # A line that opens with a literal, as an argument, belongs to its call too.
+            ("    assert!(\n        ok(),\n        \"expected\",\n    );\n", "src/checks.rs:5 \"expected\", [stmt:9e93f9b7]"),
             # A `[stmt:...]` inside the source text is text, not the row's digest marker.
             ("    assert_eq!(tag(), \" [stmt:12345678]\");\n",
              "src/checks.rs:3 assert_eq!(tag(), \" [stmt:12345678]\"); [stmt:f6928722]"),
@@ -869,6 +871,57 @@ class DeclaredAssertions(unittest.TestCase):
                     "    fn inner() {\n        assert!(ok());\n    }\n    setup();\n}\n")
         self.repo.declare("src/checks.rs:4 assert!(ok()); [stmt:404cc513]")
         self.refused("declared assertion src/checks.rs:4 is in inner, not guard_admits_only_its_host")
+
+    # -- the sweep: line leader x how the line before ends x what the declared line holds -------
+    # Only valid Rust is built. A continuation leader needs an unfinished line before it; a plain
+    # line follows a finished statement, or an open `vec![a,` it then closes. The expected
+    # statement is written out by hand here, never taken from the resolver.
+
+    LEADS = {".": ".finish()", "?": "?", "=": "== other()", "+": "+ other()", "-": "- other()",
+             "*": "* other()", "/": "/ other()", "%": "% other()", "&": "& other()", "|": "| other()",
+             "^": "^ other()", "<": "< other()", ">": "> other()"}
+    UNFINISHED = {"}": "let v = { make(a) }", ")": "let v = make(a)", "]": "let v = items[a]", "expr": "let v = a"}
+
+    def sweep_cases(self):
+        """(name, line before, declared line, expected statement, stale line before or None)."""
+        for lead, body in self.LEADS.items():
+            for end, before in self.UNFINISHED.items():
+                for tail in ("", " mark();"):
+                    yield (f"{lead!r} after {end}{tail}", before, f"{body};{tail}",
+                           f"{before} {body};", before.replace("a", "c"))
+        for end, before in ((";", "setup();"), ("}", "if c { a() }")):
+            for tail in ("", " mark();"):
+                yield f"plain after {end}{tail}", before, f"assert!(ok());{tail}", "assert!(ok());", None
+        for tail in ("", " mark();"):
+            yield (f"plain closing an open list{tail}", "let v = vec![a,", f"assert!(ok())];{tail}",
+                   "let v = vec![a, assert!(ok())];", "let v = vec![c,")
+            yield (f"plain element mid-list{tail}", "let v = vec![a,", f"assert!(ok()), b];{tail}",
+                   "let v = vec![a, assert!(ok()), b];", "let v = vec![c,")
+
+    def sweep_run(self, before: str, declared: str, digest_of: str) -> tuple[int, str]:
+        self.killer(f"#[test]\nfn guard_admits_only_its_host() {{\n    {before}\n        {declared}\n}}\n")
+        digest = hashlib.sha256(digest_of.encode()).hexdigest()[:8]
+        self.repo.declare(f"src/checks.rs:4 {' '.join(declared.split())} [stmt:{digest}]")
+        return self.repo.run()
+
+    def test_the_sweep_accepts_each_whole_statement_and_refuses_a_stale_head(self) -> None:
+        for name, before, declared, statement, stale in self.sweep_cases():
+            with self.subTest(case=name, check="whole statement accepted"):
+                code, out = self.sweep_run(before, declared, statement)
+                self.assertEqual(code, 0, out)
+            if stale is not None:
+                with self.subTest(case=name, check="edited head refused"):
+                    code, out = self.sweep_run(stale, declared, statement)
+                    self.assertEqual(code, 1, out)
+
+    def test_the_sweep_counts_a_duplicate_after_any_closer(self) -> None:
+        # A statement after the closer of an earlier line's construct is counted like any other.
+        for opener, closer in (("check(", ");"), ("let v = vec![", "];"), ("let v = {", "};")):
+            with self.subTest(closer=closer):
+                self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                            f"    {opener}\n        a,\n    {closer} assert!(ok());\n    assert!(ok());\n}}\n")
+                self.repo.declare("src/checks.rs:6 assert!(ok()); [stmt:404cc513]")
+                self.refused("statement at src/checks.rs:6 occurs 2 times in guard_admits_only_its_host")
 
     # -- [via F]: the panic is reported inside a helper the killer calls ---------------------
 
