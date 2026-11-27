@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/overview.e2403a90fd23.css b/src/gateway/ui/shell/overview.e2403a90fd23.css
+--- a/src/gateway/ui/shell/overview.e2403a90fd23.css
++++ b/src/gateway/ui/shell/overview.e2403a90fd23.css
+@@ -130,7 +130,6 @@
+   }
+   .ov-dot::after { content: ' ›'; }
+ }
+-@media (max-width: 639px) and (pointer: fine) { .ov-dot { display: inline-block; line-height: var(--space-6); } }
+ 
+ /* A dot that comes in an update pulses once (the script lets at most three do so at one time): a ring
+    that grows and fades, only transform and opacity, so nothing is laid out again. A dot with nothing

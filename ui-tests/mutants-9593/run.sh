@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-off mutant run for the Reload now rows (throwaway branch only, never merged).
+# One-off mutant run for the Overview flow map rows (throwaway branch only, never merged).
 # Baseline first: every row named in the manifest must pass on the clean tree, else
 # every mutant is VOID. Then, per manifest row: apply the patch to the clean tree,
 # run only its rows in chromium with no retries, judge from Playwright's own summary
@@ -34,12 +34,13 @@ clean() { git -C "$root" diff --quiet -- src; }
 
 clean || { echo "run.sh: src/ is not clean at the start" >&2; exit 2; }
 
-# Baseline: the two spec files whole (every row the manifest names), on the clean tree.
-npx playwright test --project=chromium --reporter=line --retries=0 tests/overview-chart.spec.mjs tests/overview-tiles.spec.mjs > "$out/baseline.log" 2>&1
+# Baseline: the flow map's spec whole (every row the manifest names) and the panel order rows, on the clean tree.
+npx playwright test --project=chromium --reporter=line --retries=0 tests/overview-flowmap.spec.mjs tests/overview-panels.spec.mjs > "$out/baseline.log" 2>&1
 base_rc=$?
 base_ok=0
 [ "$base_rc" = 0 ] && grep -qE '^ *[0-9]+ passed' "$out/baseline.log" && base_ok=1
 echo "baseline rc=$base_rc ok=$base_ok $(grep -oE '^ *[0-9]+ (passed|failed)' "$out/baseline.log" | tr -s ' ' | tr '\n' ' ')" | tee "$out/baseline.txt"
+[ "$base_ok" = 1 ] || { echo "--- baseline failures"; grep -m3 -A30 -E '^ +Error: ' "$out/baseline.log"; }
 
 while IFS=$'\t' read -r id patch spec grep; do
   case "$id" in '#'*|'') continue ;; esac
@@ -67,7 +68,8 @@ while IFS=$'\t' read -r id patch spec grep; do
   first=$(grep -m1 -oE '^ +1\) \[chromium\] › .*' "$out/$id.log" | sed -E 's/^ +1\) //' | cut -c1-160)
   # A kill needs a failed assertion, not a browser or fixture setup error.
   # Both forms: "Error: expect(...) failed" and "Error: Timed out ... waiting for expect(...)".
-  asserted=$(grep -cE 'Error: .*expect\(' "$out/$id.log")
+  asserted=$(grep -cE 'Error: .*expect\(|^ +expect\((locator|received|page)\)\.' "$out/$id.log")
+  # A labelled expect prints "Error: <label>" and the expect( line under it (round 1 F2 and F12).
   if [ "$rc" != 0 ] && [ "$failed" -gt 0 ] && [ "$asserted" -gt 0 ]; then verdict=KILLED
   elif [ "$rc" = 0 ] && [ "$passed" -gt 0 ]; then verdict=SURVIVED
   elif [ "$rc" != 0 ] && [ "$failed" -gt 0 ]; then verdict="VOID(no assertion failed)"
@@ -82,6 +84,8 @@ while IFS=$'\t' read -r id patch spec grep; do
     fi
   fi
   printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$id" "$verdict" "$rc" "$failed" "$passed" "$selected" "${first:--}" | tee -a "$verdicts"
+  # Artifacts are not downloaded: any verdict but KILLED prints its first error block into the job log.
+  [ "$verdict" = KILLED ] || { echo "--- $id first error block"; grep -m1 -A30 -E '^ +Error: ' "$out/$id.log"; }
 done < "$here/manifest.tsv"
 
 grep '^# K33' "$here/manifest.tsv" | sed 's/^# //' >> "$verdicts"

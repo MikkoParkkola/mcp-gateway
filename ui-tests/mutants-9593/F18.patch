@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -562,7 +562,7 @@
+     nodes.dotOn = on;
+     nodes.dot.classList.toggle('ov-dot-off', !on);
+     const map = on ? nodes.box : null;
+-    if (map && map.querySelectorAll('.ov-pulse').length < 3) {
++    if (map && true) {
+       nodes.dot.classList.add('ov-pulse');
+       nodes.dot.addEventListener('animationend', () => nodes.dot?.classList.remove('ov-pulse'), { once: true });
+     }

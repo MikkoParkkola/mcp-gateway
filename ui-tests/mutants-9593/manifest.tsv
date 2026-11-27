@@ -1,28 +1,2 @@
 # id	patch	spec	grep (run from ui-tests/)
-M1	M1.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M2	M2.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M3	M3.patch	tests/overview-chart.spec.mjs	K0 the chart and the sparkline
-M4	M4.patch	tests/overview-chart.spec.mjs	K2 the chart asks
-M5	M5.patch	tests/overview-chart.spec.mjs	K3 a previous day
-M6	M6.patch	tests/overview-chart.spec.mjs	K3 a previous day
-M7	M7.patch	tests/overview-chart.spec.mjs	K4 a failed calls read
-M8	M8.patch	tests/overview-chart.spec.mjs	K4b a calls read with malformed
-M9	M9.patch	tests/overview-chart.spec.mjs	K5 with no counter store
-M10	M10.patch	tests/overview-chart.spec.mjs	K6 markers read as text
-M11	M11.patch	tests/overview-chart.spec.mjs	K6 markers read as text
-M12	M12.patch	tests/overview-chart.spec.mjs	K6 markers read as text
-M13	M13.patch	tests/overview-chart.spec.mjs	K7 a marker subject
-M14	M14.patch	tests/overview-chart.spec.mjs	K8 nothing in the chart
-M15	M15.patch	tests/overview-chart.spec.mjs	K9 on a 390 px phone
-M16	M16.patch	tests/overview-chart.spec.mjs	K11 a gap is never bridged
-M17	M17.patch	tests/overview-chart.spec.mjs	K11 a gap is never bridged
-M18	M18.patch	tests/overview-chart.spec.mjs	K11 a gap is never bridged
-M19	M19.patch	tests/overview-chart.spec.mjs	K12 the two days differ
-M20	M20.patch	tests/overview-chart.spec.mjs	K13 the half-hour values
-M21	M21.patch	tests/overview-chart.spec.mjs	K14 the module alone
-M22	M22.patch	tests/overview-chart.spec.mjs	K14 the module alone
-M23	M23.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M24	M24.patch	tests/overview-chart.spec.mjs	K1 the chart draws
-M25	M25.patch	tests/overview-chart.spec.mjs	K12 the two days differ
-M26	M26.patch	tests/overview-tiles.spec.mjs	T7 numbers paint
-M27	M27.patch	tests/overview-chart.spec.mjs	K14 the module alone
+F24	F24.patch	tests/overview-flowmap.spec.mjs	G5 with a mouse

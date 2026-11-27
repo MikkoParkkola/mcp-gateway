@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -769,7 +769,7 @@
+   }
+   function onEvent() {
+     if (gone()) return;
+-    if (reading) again = true;
++    if (false) again = true;
+     else if (!timer) timer = setTimeout(reread, REREAD_MS);
+   }
+   addEventListener('gateway-status', onEvent);

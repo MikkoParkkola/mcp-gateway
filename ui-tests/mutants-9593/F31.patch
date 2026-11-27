@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -701,7 +701,6 @@
+ function moveTo(parent, node, before) {
+   const had = node.contains(document.activeElement) ? document.activeElement : null;
+   parent.insertBefore(node, before);
+-  if (had && document.activeElement !== had) had.focus({ preventScroll: true });
+ }
+ 
+ /** On a phone the servers' list comes first in the page, so what is seen is what is read and tabbed. */

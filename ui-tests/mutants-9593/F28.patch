@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -680,7 +680,7 @@
+       held.delete(key);
+     }
+     // Every row with a number counts, the callers' fold row too, so no line is wider than 8 px.
+-    const max = Math.max(0, ...rows.filter((r) => r.calls !== null).map((r) => r.calls));
++    const max = Math.max(0, ...rows.filter((r) => !r.fold && r.calls !== null).map((r) => r.calls));
+     rows.forEach((row, i) => {
+       let nodes = held.get(row.key);
+       if (!nodes) {

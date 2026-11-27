@@ -1,0 +1,11 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -683,6 +683,7 @@
+     const max = Math.max(0, ...rows.filter((r) => r.calls !== null).map((r) => r.calls));
+     rows.forEach((row, i) => {
+       let nodes = held.get(row.key);
++      if (nodes) { nodes.li.remove(); nodes.path.remove(); nodes = null; }
+       if (!nodes) {
+         nodes = rowNodes(side);
+         // A new row is not in the page while it is filled, so its dot is told where the map is.

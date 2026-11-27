@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -606,7 +606,7 @@
+   const target = `${row.fold ? 'fold' : ''}|${side === 'servers' ? row.name : row.account ?? ''}`;
+   if (nodes.target !== target) {
+     nodes.target = target;
+-    nodes.href = side === 'servers' ? (row.fold ? '/ui/servers/status' : serverPath(row.name)) : (row.account ? callsOfCaller(row.account) : null);
++    nodes.href = side === 'servers' ? (row.fold ? '/ui/servers/status' : serverPath(row.name)) : (row.account ? callsOfCaller(row.account) : '/ui/activity/status');
+   }
+   const { href } = nodes;
+   if (!nodes.go || nodes.go.getAttribute('href') !== href) {

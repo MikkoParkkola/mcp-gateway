@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -552,7 +552,7 @@
+  * the row's words (the list's right padding) and of the hub.
+  */
+ function fillDot(nodes, row, y, drawLines) {
+-  const on = row.blocks > 0;
++  const on = row.blocks >= 0;
+   if (!nodes.dot) {
+     const linked = row.account && !row.fold;
+     nodes.dot = linked ? viaGo(h('a', { class: 'ov-dot ov-dot-off', href: callsOfCaller(row.account) })) : h('span', { class: 'ov-dot ov-dot-off' });

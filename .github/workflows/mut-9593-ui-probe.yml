@@ -1,20 +1,19 @@
-name: Reload now mutants (one-off)
+name: Flow map mutants (one-off)
 
-# One-off probe on a throwaway branch, never merged: applies each Reload-now
+# One-off probe on a throwaway branch, never merged: applies each flow map
 # mutant patch in ui-tests/mutants-9593/ to a clean tree, runs only the rows
 # that must kill it, judges from Playwright's own result, and reverts (run.sh).
-# It also takes the frame-26 screenshots for the review-carried comparison.
 # Fires only on pushes to its own branch.
 on:
   push:
-    branches: ["throwaway/mut-9582-ui-tests"]
+    branches: ["throwaway/mut-9580r4-ui-tests"]
 
 permissions:
   contents: read
 
 jobs:
   mutants:
-    name: Reload now mutants
+    name: Flow map mutants
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     defaults:

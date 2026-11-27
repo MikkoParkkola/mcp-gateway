@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/overview.12a03f65eaab.js b/src/gateway/ui/shell/overview.12a03f65eaab.js
+--- a/src/gateway/ui/shell/overview.12a03f65eaab.js
++++ b/src/gateway/ui/shell/overview.12a03f65eaab.js
+@@ -713,7 +713,7 @@
+   state.phone = phone;
+   if (wasPhone && !phone && state.model) updateMap(root, state.model);
+   const { agents, servers } = state.lists;
+-  const [first, second] = phone ? [servers, agents] : [agents, servers];
++  const [first, second] = [agents, servers];
+   // Moved only when out of order: a node already in place is never touched (its focus and probes stay).
+   if (second.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) moveTo(state.box, first, second);
+   // Wide, the hub stands between the two lists; on a phone it is hidden, so its place does not matter.
