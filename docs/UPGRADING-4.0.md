@@ -1631,10 +1631,13 @@ a running gateway.
 
 Two leased logs exist: the invocation log at `security.transparency_log.path`, and, with auth on,
 the governance log `audit.jsonl` in the control-plane store (`control_plane.store_dir`). An install
-that starts two gateway processes on one config now sees the second one exit at startup, before
-it listens, with:
+that starts two gateway processes on one config with an audit log on now sees the second one
+exit at startup, before it listens, with:
 
     refusing to start: audit log <path> is being written by another gateway process (its lease <path>.lock is held); run one gateway per log path
+
+With no audit log on, a shared `tasks.store_dir` refuses the second process instead, with the
+task store's own message.
 
 A relative `transparency_log.path` is opened against each process's working directory, so a
 second process started from another directory gets its own invocation log, and the shared
