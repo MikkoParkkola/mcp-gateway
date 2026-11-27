@@ -26,8 +26,9 @@ const READY_BOUND: Duration = Duration::from_secs(60);
 const INVOCATION_LOG: &str = "audit/transparency.jsonl";
 
 /// One config both processes start on. Auth on also opens the governance
-/// store at `<root>/cp`. The modern protocol is off so the task store, which
-/// holds a lease of its own, stays out of the row.
+/// store at `<root>/cp`. The task store, which
+/// holds a lease of its own, is opened after both audit logs: the exact refusal
+/// sentence asserted below is what shows the audit-log lease refused first.
 fn write_config(root: &Path, auth: bool) -> PathBuf {
     let auth_yaml = if auth {
         "auth:\n  enabled: true\n  bearer_token: second-process-token\n"

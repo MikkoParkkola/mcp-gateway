@@ -1639,7 +1639,9 @@ it listens, with:
 A relative `transparency_log.path` is opened against each process's working directory, so a
 second process started from another directory gets its own invocation log, and the shared
 governance log is then the one that refuses it. To fix it, stop the other process (or wait for
-it to exit), or give each gateway its own config with its own log paths and store directory.
+it to exit), or give each gateway its own config with its own log paths, its own
+`control_plane.store_dir` and its own `tasks.store_dir`: the task store holds a lease of its own
+too, so a shared one refuses the second gateway once the logs no longer do.
 Do not delete the `.lock` file while a gateway runs: the running writer keeps its lock on the
 deleted file, so a new process would create and lock a fresh one and both would write.
 
