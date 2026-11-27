@@ -665,3 +665,6 @@ mod reconcile_table;
 
 #[path = "lifecycle_revoke_notice_tests.rs"]
 mod revoke_notice;
+
+#[path = "lifecycle_unsub_durable_tests.rs"]
+mod unsub_durable;
