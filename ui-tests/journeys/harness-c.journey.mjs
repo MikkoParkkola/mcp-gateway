@@ -4,13 +4,14 @@
 // Part C's harness rows (part C design, "The harness contract"): the additions the journeys use, each proved here
 // where no journey row proves it yet. M1 gw.mcp and the key-acceptance read (C-H2); R1-R5 and R3b restart (C-H1;
 // R6 and the command check also run as units in startcmd.test.mjs); Q1 stub silent mode (C-H4); S5 the J4 seed;
-// S6-S9 the J1, J3, J9 and J8 seeds.
+// S6-S9 the J1, J3, J9 and J8 seeds; O1 and S10 the J10 seed and its OAuth provider stub.
 import { readFileSync, realpathSync } from 'node:fs';
 import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { test, expect, answers, parseStartCommand, startGateway, TIMING_FILE, until } from './gateway.mjs';
+import { signInOf } from './seeds.mjs';
 
 const BIN = process.env.JOURNEYS_GATEWAY_BIN;
 
@@ -153,6 +154,25 @@ test.describe('seed spend (C-H3, J8)', () => {
   test('S9 the costs read holds spend charged to the spender key', async ({ gw }) => {
     const costs = await (await gw.api('/ui/api/costs')).json();
     expect(JSON.stringify(costs.by_key ?? {}), JSON.stringify(costs)).toContain('spender');
+  });
+});
+
+test.describe('seed needsYou (C-H3, J10)', () => {
+  test.use({ seed: 'needsYou' });
+  test('O1 S10 with its provider stub up, signin needs signing in, and a restart-only change is pending', async ({ gw }) => {
+    expect(await signInOf(gw, 'signin')).toEqual({ status: 'never_signed_in', needsSignIn: true });
+    const { pending_restart: pending } = await (await gw.api('/ui/api/gateway')).json();
+    expect(JSON.stringify(pending?.fields ?? []), JSON.stringify(pending)).toContain('cost_governance');
+  });
+});
+
+test.describe('seed needsYou, provider down (C-H3, O1 control)', () => {
+  test.use({ seed: 'needsYou-provider-down' });
+  test('O1 with its provider stopped before the start, signin stays not yet checked and needs no one', async ({ gw }) => {
+    await until(Date.now() + 10_000, 'the status read never listed signin', async () => (await signInOf(gw, 'signin')) !== null);
+    // An absence: give discovery the time it took in the provider-up row, then read again.
+    await new Promise((done) => setTimeout(done, 3000));
+    expect(await signInOf(gw, 'signin')).toEqual({ status: 'not_yet_checked', needsSignIn: false });
   });
 });
 

@@ -192,6 +192,14 @@ async function setPort(configPath, port) {
   await writeFile(configPath, text.replace(/^ {2}port: 39400$/m, `  port: ${port}`), { mode: 0o600 });
 }
 
+/** Closes every seed-started service; each port must refuse afterwards. */
+async function closeServices(services) {
+  for (const service of services) await service.close();
+  for (const service of services) {
+    if (await answers(service.port)) throw new Error(`port ${service.port} of a seed's service still answers after teardown`);
+  }
+}
+
 /** Polls `probe` until it returns something truthy (returned) or `deadline` passes (throws `what`). A probe that
  * throws counts as "not yet", unless its error is marked `fatal`. Shared by the fixture, the seeds and the rows. */
 export async function until(deadline, what, probe) {
@@ -215,6 +223,7 @@ async function start({ seed, port, onSpawn }, owned) {
   const home = await mkdtemp(join(tmpdir(), 'jh-home-'));
   const decoy = await mkdtemp(join(tmpdir(), 'jh-decoy-'));
   owned.homes = [home, decoy];
+  owned.services = []; // local services a seed started (an OAuth provider stub): closed at teardown, ports must refuse
   const path = process.env.PATH;
   const env = gatewayEnv({ home, decoy, path });
   const configPath = join(home, 'gateway.yaml');
@@ -237,7 +246,7 @@ async function start({ seed, port, onSpawn }, owned) {
   // The port lives in the config: the start command the gateway shows names none (part C, C-H1).
   const chosen = port ?? await freePort();
   await setPort(configPath, chosen);
-  const seeded = await applySeed(seed ?? 'fresh', { home, configPath, marker, bin });
+  const seeded = await applySeed(seed ?? 'fresh', { home, configPath, marker, bin, own: (service) => owned.services.push(service) });
   const seedMs = Date.now() - t0;
 
   if (await answers(chosen)) throw new Error(`port ${chosen} already has a listener: refusing to start (a journey never attaches to a gateway it did not start)`);
@@ -301,6 +310,7 @@ async function start({ seed, port, onSpawn }, owned) {
     },
     stop: async () => {
       await handle.kill();
+      await closeServices(owned.services);
       const after = await fingerprint(decoy);
       await rm(home, { recursive: true, force: true });
       await rm(decoy, { recursive: true, force: true });
@@ -357,6 +367,7 @@ export async function startGateway(opts = {}) {
     return await start(opts, owned);
   } catch (e) {
     if (owned.handle) await owned.handle.stop().catch(() => {});
+    else await closeServices(owned.services ?? []).catch(() => {});
     for (const dir of owned.homes ?? []) await rm(dir, { recursive: true, force: true });
     throw e;
   }

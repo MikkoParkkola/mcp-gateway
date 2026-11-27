@@ -7,6 +7,7 @@
 import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { createServer } from 'node:http';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { until } from './gateway.mjs';
@@ -103,6 +104,11 @@ const SEEDS = {
       },
     };
   },
+  // J10 (part C): populated, an HTTP backend `signin` with OAuth on, whose provider metadata a local stub serves and
+  // for which no token is stored (so it reads never_signed_in), then a restart-only change made while it runs.
+  needsYou: async (ctx) => signInSeed(ctx, { provider: 'up' }),
+  // For the harness's own row O1 only: the same backend with its provider stopped before the start.
+  'needsYou-provider-down': async (ctx) => signInSeed(ctx, { provider: 'down' }),
   // For the harness's own row H11 only: a config the gateway refuses, so it never becomes healthy.
   'refused-config': async ({ configPath }) => {
     await writeFile(configPath, 'server: [unterminated\n', { mode: 0o600 });
@@ -204,6 +210,51 @@ function keysAccepted(keys) {
       for (const k of keys) last[k.name] = (await gw.api('/ui/api/status', { key: k.secret })).status;
       return keys.every((k) => last[k.name] === 200);
     }).catch((e) => { throw new Error(`${e.message}: ${JSON.stringify(last)}`); });
+  };
+}
+
+/** A local OAuth provider: only the authorization-server metadata, every other path 404 (the gateway's discovery
+ * then takes the origin as the issuer). The fixture owns it through ctx.own. */
+async function oauthProvider() {
+  const server = createServer((req, res) => {
+    const origin = `http://127.0.0.1:${server.address().port}`;
+    if (req.method !== 'GET' || req.url !== '/.well-known/oauth-authorization-server') { res.writeHead(404).end(); return; }
+    res.writeHead(200, { 'content-type': 'application/json' })
+      .end(JSON.stringify({ issuer: origin, authorization_endpoint: `${origin}/authorize`, token_endpoint: `${origin}/token` }));
+  });
+  await new Promise((done) => server.listen(0, '127.0.0.1', done));
+  const { port } = server.address();
+  return { port, close: () => new Promise((done) => { server.closeAllConnections(); server.close(() => done()); }) };
+}
+
+/** The sign-in state of server `name` in GET /ui/api/status (its row's sign_in and needs_sign_in), or null. */
+export async function signInOf(gw, name) {
+  const { servers } = await (await gw.api('/ui/api/status')).json();
+  const row = (servers ?? []).find((s) => s.name === name);
+  return row ? { status: row.sign_in?.status ?? null, needsSignIn: row.needs_sign_in } : null;
+}
+
+async function signInSeed(ctx, { provider }) {
+  const seeded = await SEEDS.populated(ctx);
+  if (!/\n {2}harbour:\n {4}command: .*\n$/.test(await readFile(ctx.configPath, 'utf8'))) {
+    throw new Error('the populated seed\'s backends block is not the end of the config: nowhere to add the signin backend');
+  }
+  const oauth = await oauthProvider();
+  ctx.own(oauth);
+  if (provider === 'down') await oauth.close();
+  await appendFile(ctx.configPath, `  signin:\n    http_url: "http://127.0.0.1:${oauth.port}/mcp"\n    oauth:\n      enabled: true\n`);
+  if (provider === 'down') return seeded;
+  return {
+    ...seeded,
+    ready: async (gw, deadline) => {
+      await until(deadline, 'signin never read never_signed_in', async () => (await signInOf(gw, 'signin'))?.status === 'never_signed_in');
+      if (/^cost_governance:/m.test(await readFile(ctx.configPath, 'utf8'))) {
+        throw new Error('init\'s starter config now has a cost_governance block: toggle another restart-only field');
+      }
+      await appendFile(ctx.configPath, '\ncost_governance:\n  enabled: true\n');
+      await until(deadline, 'no restart is pending after a restart-only change', async () =>
+        ((await (await gw.api('/ui/api/gateway')).json()).pending_restart?.fields ?? []).length > 0);
+    },
   };
 }
 
