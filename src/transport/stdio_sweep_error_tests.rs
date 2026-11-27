@@ -508,6 +508,36 @@ fn a_snapshot_that_keeps_being_cut_stops_after_four_readings() {
     assert_eq!(sweep.incomplete_reads, 4, "every cut reading is counted");
 }
 
+/// Lead ruling (the cap is reachable: two runs in 80 on Spark were cut three
+/// times in a row): a full stop after a snapshot whose four readings were ALL
+/// cut. They saw 91 and 92 below the root; by the stop's own readings both
+/// were reparented to pid 1, outside the tree (alive, so never named gone),
+/// so only the cut readings' finds can get them killed. Both are killed, and
+/// the report carries the short readings the stop's warning is raised on.
+/// Red if a snapshot that hit the cap drops what its cut readings found
+/// (mutant M21).
+#[test]
+fn a_stop_after_four_cut_readings_still_kills_what_they_found() {
+    let mut fake = Fake::new(&[(90, 1), (91, 1), (92, 1)]);
+    fake.cut_reads = 4;
+    fake.cut_rows = vec![(id(91), 90), (id(92), 91)];
+    let mut sweep = Sweep::new(id(90), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 4, "premise: four readings, all cut");
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    for pid in [91, 92] {
+        assert!(
+            report.killed.contains(&id(pid)),
+            "{pid} not killed: {report:?}"
+        );
+        assert_eq!(fake.state_of(pid), ProcState::Gone, "pid {pid}");
+    }
+    assert!(
+        report.incomplete_reads >= 4,
+        "shortfall not reported: {report:?}"
+    );
+}
+
 /// E5 (D5''''): between unsettled readings the sweep pauses 1, 2, 4, 8, then
 /// 16 ms (the cap), not at all before the first reading, and back to 1 ms after
 /// a pass that froze a new member (pid 900, appearing at the fourth freeze
