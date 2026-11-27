@@ -195,7 +195,7 @@ impl TokenInfo {
         if let Some(expires_at) = self.expires_at {
             // Expired 60 seconds early, and on a clock that cannot be read
             // (before 1970) whatever the stamp: an access check fails closed,
-            // so the caller refreshes or refuses (MIK-8202).
+            // so the caller refreshes or refuses.
             use crate::clock::{Validity, expired_by};
             expired_by(|now| {
                 if now.saturating_add(60) >= expires_at {
