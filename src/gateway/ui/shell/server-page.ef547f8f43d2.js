@@ -402,6 +402,7 @@ function secretLine(r, server, ctx) {
       // Refused while still on the page: the field comes back with the value, for a retry.
       input.disabled = false;
       input.value = value;
+      input.focus(); // the Save that had focus was disabled while pending
       const why = err?.serverMessage ?? (!err?.status || err.unreadable
         // No answer, or one that would not parse: the value may have been stored.
         ? NOT_CONFIRMED
