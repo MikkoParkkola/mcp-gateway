@@ -93,13 +93,14 @@ async fn a_record_handed_off_at_the_listener_deadline_lands_before_shutdown_ends
                 }
             }
             // The in-flight drain holds every permit but the row's: the
-            // still-finishing request hands its write off, then ends.
-            () = tokio::time::sleep(Duration::from_millis(10)),
-                if finishing.is_some() && inflight.available_permits() == 0 =>
-            {
-                let landed = Arc::clone(&job_b);
-                Arc::clone(&jobs).spawn(async move { landed.store(true, Ordering::SeqCst) });
-                finishing = None;
+            // still-finishing request hands its write off, then ends. Polled,
+            // as the drain gives no signal of its own.
+            () = tokio::time::sleep(Duration::from_millis(5)), if finishing.is_some() => {
+                if inflight.available_permits() == 0 {
+                    let landed = Arc::clone(&job_b);
+                    Arc::clone(&jobs).spawn(async move { landed.store(true, Ordering::SeqCst) });
+                    finishing = None;
+                }
             }
             ended = &mut server => break ended,
         }

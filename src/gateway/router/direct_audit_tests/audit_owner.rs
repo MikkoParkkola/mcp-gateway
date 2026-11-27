@@ -173,3 +173,37 @@ async fn p4_3_a_failed_meta_append_keeps_both_failure_policies() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// P4 (3), drop of an abandoned request: a `/mcp` call dropped after its
+/// record was built and before its commit (the client went away) still
+/// writes exactly one record, through the handed-off job, with today's class
+/// and counts.
+#[tokio::test]
+async fn p4_3_an_abandoned_meta_request_writes_its_record_once() {
+    use std::sync::atomic::Ordering;
+    let fx = fixture(Setup::default()).await;
+    let store = attach(&fx);
+    let jobs = std::sync::Arc::clone(&fx.state.meta_mcp.audit_jobs);
+    jobs.seams.hold_commit.store(true, Ordering::SeqCst);
+    let call = meta_invoke("alpha", "t", &json!({}));
+    {
+        let request = post_to(&fx, "/mcp", &call, &Caller::Anonymous);
+        tokio::pin!(request);
+        tokio::select! {
+            _ = &mut request => panic!("the request answered past its parked commit"),
+            () = jobs.seams.parked.notified() => {}
+        }
+    }
+    let open = jobs.drain(std::time::Duration::from_secs(30)).await;
+    assert_eq!(open, 0, "the handed-off write did not end");
+    assert_eq!(
+        totals(&store),
+        [1, 0, 0, 0, 0],
+        "counted once, as delivered"
+    );
+    let records = invocations(&fx);
+    let [record] = records.as_slice() else {
+        panic!("{} records, want exactly 1", records.len());
+    };
+    assert_eq!(record["outcome"], "ok", "{record}");
+}
