@@ -5,7 +5,7 @@
 // shell's one confirm; Sign in again posts to the two sign-in routes (T3-T7 of
 // the frozen test plan). Every route answers with a body written here.
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady } from './shell.mjs';
+import { shellReady, recordAnnouncements, announced } from './shell.mjs';
 import { served } from './copy-check.mjs';
 import { entry, fullView, fakeServerGateway, gate, shellCall } from './server-page.mjs';
 
@@ -41,7 +41,7 @@ test.describe('T3 Remove states its consequences in numbers', () => {
     );
     await actions(page, entry(NAME, 'running', { tools_cached: 7, calls_24h: 31 }), { keys });
     const c = page.locator('#content');
-    await expect(c.locator('.sp-card').last()).toContainText('Actions on this page are recorded in Activity under your name.');
+    await expect(c.locator('.sp > .sp-audit')).toHaveText('Actions on this page are recorded in Activity under your name.');
     await expect(c.getByRole('button', { name: 'Keep it paused' })).toHaveCount(0);
     await expect(c.getByRole('button', { name: 'Reconnect' })).toHaveCount(0);
     await c.getByRole('button', { name: `Remove ${NAME}` }).click();
@@ -213,6 +213,7 @@ test.describe('T6 Sign in again', () => {
     const reads = seen.status;
     await page.getByRole('button', { name: 'Finish sign-in' }).click();
     await expect.poll(() => seen.status).toBe(reads + 1);
+    expect([posts(seen, '/signin').length, posts(seen, '/signin/confirm').length]).toEqual([1, 1]);
     const [start] = posts(seen, '/signin');
     const [finish] = posts(seen, '/signin/confirm');
     expect([start.path, start.body]).toEqual([`/ui/api/backends/${ENC}/signin`, {}]);
@@ -328,6 +329,38 @@ test.describe('review round 1: the replay contract, stale actions, final sign-in
   test('T5 Restart opens its confirm with replay safe (source)', () => {
     const { name, text } = served(PAGE_FILE);
     expect(text, name).toMatch(/key: `revive:\$\{name\}`[^\n]*replay: 'safe'/);
+  });
+
+  test('T7 a confirm that gets no answer keeps the attempt and says the gateway did not answer', async ({ page }) => {
+    await actions(page, OAUTH(), { backend: signInFake({ code: 200, drop: true }) });
+    await startAndFinish(page);
+    await expect(page.locator('.sp-error')).toHaveText('The gateway did not answer. The sign-in may still be open: try again.');
+    await expect(page.getByRole('button', { name: 'Finish sign-in' })).toBeEnabled();
+  });
+
+  test('T7 one decision at a time: Finish and Cancel wait for the answer', async ({ page }) => {
+    const hold = gate();
+    await actions(page, OAUTH(), { backend: signInFake({ code: 200, body: { outcome: 'confirmed' }, hold: hold.shut }) });
+    await startAndFinish(page);
+    await expect(page.getByRole('button', { name: 'Cancel sign-in' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Finish sign-in' })).toBeDisabled();
+    hold.open();
+  });
+
+  test('T3c a keys read that never answers is given up after 15 s, and Remove still opens', async ({ page }) => {
+    await page.clock.install();
+    const never = gate();
+    await actions(page, entry(NAME, 'running'), { keys: { code: 200, body: { keys: [] }, hold: never.shut } });
+    await page.locator('#content').getByRole('button', { name: `Remove ${NAME}` }).click();
+    await page.clock.fastForward(16_000);
+    await expect(dialog(page).locator('li').nth(1)).toHaveText('The keys that reach it could not be counted.');
+  });
+
+  test('T6 the sign-in start and a refusal are announced', async ({ page }) => {
+    await recordAnnouncements(page);
+    await actions(page, OAUTH(), { backend: signInFake({ code: 404, body: { error: 'no_sign_in', message: 'msg-said' } }) });
+    await startAndFinish(page);
+    await expect.poll(() => announced(page)).toEqual(expect.arrayContaining(['Sign-in started.', 'msg-said']));
   });
 
   test('T4 Remove opens no confirm when the user left while the keys were read', async ({ page }) => {
