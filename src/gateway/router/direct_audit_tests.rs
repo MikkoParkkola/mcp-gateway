@@ -31,6 +31,10 @@ mod anon_key;
 mod backend_oracle;
 #[cfg(tp1)]
 mod backend_origin;
+/// One class for a blocked call on the counters and in Activity.
+#[cfg(tp1)]
+#[cfg(all(feature = "firewall", feature = "webui"))]
+mod blocked_meaning;
 mod composite_refusals;
 mod counting;
 #[cfg(tp1)]
