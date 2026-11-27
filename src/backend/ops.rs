@@ -489,6 +489,14 @@ impl Backend {
         if crate::oauth::client::is_credential_lock_busy(error) {
             return;
         }
+        // An answer over the size limit: the backend answered, so it is no
+        // sample of failing health. Counted as a failure, a few big answers
+        // would open the breaker and shed every other caller.
+        if matches!(error, Error::ResponseTooLarge { .. }) {
+            entry.failsafe.record_success(latency);
+            self.count_outcome("error");
+            return;
+        }
         let rate_limited =
             super::fill_check::record_request_failure(entry, &error.to_string(), latency);
         if rate_limited {

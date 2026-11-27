@@ -22,11 +22,21 @@ fn max_frame_bytes_round_trips_on_a_stdio_backend() {
 }
 
 #[test]
-fn max_frame_bytes_is_refused_outside_its_range_and_on_a_url_backend() {
+fn max_frame_bytes_round_trips_on_a_url_backend() {
+    let cfg = load_backend_yaml(
+        "backends:\n  big:\n    url: \"http://127.0.0.1:39400/mcp\"\n    max_frame_bytes: 67108864\n",
+    )
+    .expect("an HTTP backend may raise its answer limit too");
+    assert_eq!(cfg.backends["big"].max_frame_bytes, Some(64 * 1024 * 1024));
+}
+
+#[test]
+fn max_frame_bytes_is_refused_outside_its_range_and_on_a_socket_backend() {
     for yaml in [
         "backends:\n  b:\n    command: \"echo hi\"\n    max_frame_bytes: 100\n",
         "backends:\n  b:\n    command: \"echo hi\"\n    max_frame_bytes: 2147483648\n",
-        "backends:\n  b:\n    http_url: \"http://127.0.0.1:39400/mcp\"\n    max_frame_bytes: 1048576\n",
+        "backends:\n  b:\n    url: \"http://127.0.0.1:39400/mcp\"\n    max_frame_bytes: 100\n",
+        "backends:\n  b:\n    ws_url: \"ws://127.0.0.1:39400/mcp\"\n    max_frame_bytes: 1048576\n",
     ] {
         let err = load_backend_yaml(yaml).expect_err(yaml).to_string();
         assert!(err.contains("max_frame_bytes"), "{err}");

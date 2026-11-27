@@ -67,9 +67,8 @@ impl Backend {
         &self,
         key: &PoolKey,
         entry: &PooledEntry,
-        era: EraResolution,
+        era_mode: EraResolution,
     ) -> Result<Arc<dyn Transport>> {
-        let era_mode = era;
         let mut deferred = None;
         // Held for the whole start. From the moment a process is spawned until
         // it is either published or closed, shutdown must not consider itself
@@ -160,6 +159,7 @@ impl Backend {
                 // not wait for a verdict.
                 transport.attach_era(Arc::clone(&entry.era));
                 self.attach_needles_to(&transport);
+                self.cap_answers_of(&transport);
                 // Connect without handshaking: the probe needs the credential
                 // and the message endpoint, and nothing else.
                 self.begin_connecting(built_under)?;
