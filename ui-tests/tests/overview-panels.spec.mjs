@@ -315,8 +315,8 @@ test('L2 one panel order, whichever panel arrives first', async ({ page }) => {
       const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/ui\/assets\/overview\.[0-9a-f]+\.js$/.test(n));
       const { place } = await import(url);
       const root = document.querySelector('#content .ov');
-      // The real chart steps aside for its stand-in, so the order holds one of each.
-      root.querySelector(':scope > [data-panel="calls-chart"]')?.remove();
+      // The real map and chart step aside for their stand-ins, so the order holds one of each.
+      root.querySelectorAll(':scope > [data-panel="flow-map"], :scope > [data-panel="calls-chart"]').forEach((s) => s.remove());
       const made = ['flow-map', 'calls-chart'].map((id) => Object.assign(document.createElement('section'), { className: 'tk' }));
       made.forEach((s, i) => { s.dataset.panel = ['flow-map', 'calls-chart'][i]; s.style.minHeight = '40px'; });
       const mine = [...root.querySelectorAll('[data-panel="needs-you"], [data-panel="last-actions"]')];
