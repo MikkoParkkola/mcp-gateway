@@ -7,7 +7,7 @@
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { shellReady, recordAnnouncements, announced } from './shell.mjs';
 import { readCopy, readScreens, scanScreens } from './copy-check.mjs';
-import { entry, fullView, fakeServerGateway, key, keysBody, goTo, HARD, HARD_ENC } from './server-page.mjs';
+import { entry, fullView, fakeServerGateway, key, keysBody, goTo, gate, HARD, HARD_ENC } from './server-page.mjs';
 
 // The flat map carries entries the records do not: none of them may show.
 const FLAT = { 'backends.git.env.FLAT_ONLY': 'env:FLAT_SENTINEL', 'backends.svc.env.FLAT_TOO': 'env:FLAT_SENTINEL_2' };
@@ -113,6 +113,20 @@ async function typeSecret(page, field = 'API_TOKEN') {
   await page.getByLabel(field, { exact: true }).fill(SENT);
 }
 
+/** Leave Settings for the same server's Status tab and wait for it to draw. */
+async function toStatus(page) {
+  await goTo(page, `/ui/servers/${SERVER_ENC}/status`);
+  await expect(page.locator('dl.sp-facts')).toHaveCount(1);
+}
+
+/** Open the one slot's Settings with `backend` answering, type the sentinel and press Save. */
+async function saveSecret(page, backend, field = 'API_TOKEN') {
+  const seen = await settings(page, entry(SERVER, 'running'), { config: slot(field), backend });
+  await typeSecret(page, field);
+  await page.getByRole('button', { name: 'Save' }).click();
+  return seen;
+}
+
 test.describe('T8 Replace stores a value or says why not, and keeps no copy', () => {
   test('T8a Save sends one PATCH with the one slot; a stored answer says replaced, announces it and focuses Replace', async ({ page }) => {
     await recordAnnouncements(page);
@@ -131,9 +145,7 @@ test.describe('T8 Replace stores a value or says why not, and keeps no copy', ()
 
   for (const [code, error] of [[422, 'secret_too_short'], [409, 'now_held'], [404, 'not_found'], [400, 'bad_request']]) {
     test(`T8b a ${code} ${error} shows the gateway's sentence under the field and keeps what was typed`, async ({ page }) => {
-      await settings(page, entry(SERVER, 'running'), { config: slot(), backend: () => ({ code, body: { error, message: `sentence ${code}` } }) });
-      await typeSecret(page);
-      await page.getByRole('button', { name: 'Save' }).click();
+      await saveSecret(page, () => ({ code, body: { error, message: `sentence ${code}` } }));
       await expect(page.locator('form.sp-replace .sp-error')).toHaveText(`sentence ${code}`);
       await expect(page.getByLabel('API_TOKEN', { exact: true })).toHaveValue(SENT);
       expect(await saidReplaced(page)).toBe(false);
@@ -145,9 +157,7 @@ test.describe('T8 Replace stores a value or says why not, and keeps no copy', ()
     ["only another slot's entry", stored('env.OTHER_TOKEN')],
   ]) {
     test(`T8c a 200 with ${label} is not called replaced, and the value is gone`, async ({ page }) => {
-      await settings(page, entry(SERVER, 'running'), { config: slot(), backend: () => answer });
-      await typeSecret(page);
-      await page.getByRole('button', { name: 'Save' }).click();
+      await saveSecret(page, () => answer);
       await expect(page.locator('#content .sp-error')).toHaveText(DEFENCE);
       expect(await saidReplaced(page)).toBe(false);
       expect(await holds(page, SENT)).toBe(false);
@@ -155,9 +165,7 @@ test.describe('T8 Replace stores a value or says why not, and keeps no copy', ()
   }
 
   test('T8b a dotted env field is sent as that one key', async ({ page }) => {
-    const seen = await settings(page, entry(SERVER, 'running'), { config: slot('a.b.TOKEN'), backend: () => stored('env.a.b.TOKEN') });
-    await typeSecret(page, 'a.b.TOKEN');
-    await page.getByRole('button', { name: 'Save' }).click();
+    const seen = await saveSecret(page, () => stored('env.a.b.TOKEN'), 'a.b.TOKEN');
     await expect(lines(page).locator('.sp-done')).toHaveText('a.b.TOKEN was replaced.');
     expect(patches(seen).map((r) => r.body)).toEqual([{ env: { 'a.b.TOKEN': SENT } }]);
   });
@@ -177,9 +185,7 @@ test.describe('T8d the typed value leaves the page on every way out', () => {
   };
 
   test('T8d after a stored answer', async ({ page }) => {
-    await settings(page, entry(SERVER, 'running'), { config: slot(), backend: () => stored('env.API_TOKEN') });
-    await typeSecret(page);
-    await page.getByRole('button', { name: 'Save' }).click();
+    await saveSecret(page, () => stored('env.API_TOKEN'));
     await expect(lines(page).locator('.sp-done')).toHaveCount(1);
     await gone(page);
   });
@@ -195,8 +201,7 @@ test.describe('T8d the typed value leaves the page on every way out', () => {
   test('T8d after another tab and back', async ({ page }) => {
     await settings(page, entry(SERVER, 'running'), { config: slot() });
     await typeSecret(page);
-    await goTo(page, `/ui/servers/${SERVER_ENC}/status`);
-    await expect(page.locator('dl.sp-facts')).toHaveCount(1);
+    await toStatus(page);
     await gone(page);
     await goTo(page, `/ui/servers/${SERVER_ENC}/settings`);
     await expect(fields(page)).toHaveText(['API_TOKEN']);
@@ -213,6 +218,34 @@ test.describe('T8d the typed value leaves the page on every way out', () => {
     await expect(fields(page)).toHaveText(['API_TOKEN']);
     await gone(page);
   });
+});
+
+test.describe('T8e while a Save is pending', () => {
+  test('T8e typing again cannot re-enable Save or send a second PATCH', async ({ page }) => {
+    const held = gate();
+    const seen = await saveSecret(page, () => ({ ...stored('env.API_TOKEN'), hold: held.shut }));
+    await expect.poll(() => patches(seen).length).toBe(1);
+    const field = page.getByLabel('API_TOKEN', { exact: true });
+    await field.fill(`${SENT}-more`);
+    await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
+    await field.press('Enter');
+    held.open();
+    await expect(lines(page).locator('.sp-done')).toHaveCount(1);
+    expect(patches(seen)).toHaveLength(1);
+  });
+
+  for (const [label, answer] of [['stored', stored('env.API_TOKEN')], ['refused', { code: 422, body: { error: 'secret_too_short', message: 'sentence 422' } }]]) {
+    test(`T8e a ${label} answer after the user left clears the field it leaves behind`, async ({ page }) => {
+      const held = gate();
+      await saveSecret(page, () => ({ ...answer, hold: held.shut }));
+      const left = await page.locator('#content input[type="password"]').elementHandle();
+      await toStatus(page);
+      const answered = page.waitForResponse('**/ui/api/backends/**');
+      held.open();
+      await answered;
+      await expect.poll(() => left.evaluate((i) => i.value)).toBe('');
+    });
+  }
 });
 
 const ALL = 'All of its tools';
