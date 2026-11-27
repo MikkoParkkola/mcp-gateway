@@ -2299,6 +2299,8 @@ jobs:
       # checkout the test fetches that one commit itself (and fails, rather than skipping, if it cannot).
       - name: Test the release coverage grade script
         run: python3 scripts/release/test_coverage_grade.py
+      - name: Test the gate-day C6 build-host script
+        run: python3 scripts/release/test_c6_build_host_batch.py
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"

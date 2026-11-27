@@ -12,10 +12,11 @@ use mcp_gateway::{
     },
 };
 use serde::Serialize;
+use std::process::ExitCode;
 
-pub(super) fn print_cards(cards: &[TrustCard], format: OutputFormat) {
+pub(super) fn print_cards(cards: &[TrustCard], format: OutputFormat) -> ExitCode {
     match format {
-        OutputFormat::Json => print_json(cards),
+        OutputFormat::Json => return print_json(cards),
         OutputFormat::Plain => {
             for card in cards {
                 println!("{}", card.server.name);
@@ -23,11 +24,12 @@ pub(super) fn print_cards(cards: &[TrustCard], format: OutputFormat) {
         }
         OutputFormat::Table => print_card_table(cards),
     }
+    ExitCode::SUCCESS
 }
 
-pub(super) fn print_card(card: &TrustCard, format: OutputFormat) {
+pub(super) fn print_card(card: &TrustCard, format: OutputFormat) -> ExitCode {
     match format {
-        OutputFormat::Json => print_json(card),
+        OutputFormat::Json => return print_json(card),
         OutputFormat::Plain | OutputFormat::Table => {
             println!("Name: {}", card.server.name);
             println!("Status: {:?}", card.evaluation_status);
@@ -39,13 +41,14 @@ pub(super) fn print_card(card: &TrustCard, format: OutputFormat) {
             print_decision_prompts(&TrustCardAssistant::plan(card).human_decisions);
         }
     }
+    ExitCode::SUCCESS
 }
 
-pub(super) fn print_validation_report(cards: &[TrustCard], format: OutputFormat) {
+pub(super) fn print_validation_report(cards: &[TrustCard], format: OutputFormat) -> ExitCode {
     match format {
         OutputFormat::Json => {
             let rows: Vec<_> = cards.iter().map(ValidationRow::from_card).collect();
-            print_json(&rows);
+            return print_json(&rows);
         }
         OutputFormat::Plain => {
             for card in cards {
@@ -75,11 +78,15 @@ pub(super) fn print_validation_report(cards: &[TrustCard], format: OutputFormat)
             }
         }
     }
+    ExitCode::SUCCESS
 }
 
-pub(super) fn print_lab_evaluations(evaluations: &[TrustLabEvaluation], format: OutputFormat) {
+pub(super) fn print_lab_evaluations(
+    evaluations: &[TrustLabEvaluation],
+    format: OutputFormat,
+) -> ExitCode {
     match format {
-        OutputFormat::Json => print_json(evaluations),
+        OutputFormat::Json => return print_json(evaluations),
         OutputFormat::Plain => {
             for evaluation in evaluations {
                 println!(
@@ -90,6 +97,7 @@ pub(super) fn print_lab_evaluations(evaluations: &[TrustLabEvaluation], format: 
         }
         OutputFormat::Table => print_lab_table(evaluations),
     }
+    ExitCode::SUCCESS
 }
 
 pub(super) fn print_lab_table(evaluations: &[TrustLabEvaluation]) {
@@ -171,10 +179,19 @@ pub(super) fn print_decision_prompts(prompts: &[TrustAssistantPrompt]) {
     }
 }
 
-pub(super) fn print_json<T: Serialize + ?Sized>(value: &T) {
+/// The JSON form of `value` on stdout, exit 0; when it cannot be built, the two error lines, exit 1, and nothing on
+/// stdout, so a script never reads an empty answer as success.
+pub(super) fn print_json<T: Serialize + ?Sized>(value: &T) -> ExitCode {
     match serde_json::to_string_pretty(value) {
-        Ok(json) => println!("{json}"),
-        Err(e) => eprintln!("Error: failed to serialize JSON: {e}"),
+        Ok(json) => {
+            println!("{json}");
+            ExitCode::SUCCESS
+        }
+        Err(e) => crate::commands::fail(
+            crate::commands::CliExit::LocalFailure,
+            &format!("failed to serialize JSON: {e}"),
+            "Rerun with --format table, and report this as a bug.",
+        ),
     }
 }
 

@@ -15,6 +15,8 @@ use std::process::ExitCode;
 
 use super::config_write::CommentLoss;
 
+use super::{CliExit, check_config_command, fail, usage, write_remedy};
+
 use mcp_gateway::{
     cli_support::store_backend_literals,
     config::TransportConfig,
@@ -73,8 +75,15 @@ pub async fn run_add_command(
     let env_file = match values.env_file.map(read_env_file).transpose() {
         Ok(bytes) => bytes,
         Err(msg) => {
-            eprintln!("Error: {msg}");
-            return ExitCode::from(2);
+            let file = values.env_file.unwrap_or(Path::new("-"));
+            return fail(
+                CliExit::Usage,
+                &msg,
+                &format!(
+                    "Check that {} exists and that you can read it.",
+                    file.display()
+                ),
+            );
         }
     };
     let env = match env_inputs(values.env_vars, env_file.as_deref(), |name| {
@@ -83,8 +92,7 @@ pub async fn run_add_command(
         Ok(e) => e.into_iter().collect::<std::collections::HashMap<_, _>>(),
         // A usage error, before any side effect.
         Err(msg) => {
-            eprintln!("Error: {msg}");
-            return ExitCode::from(2);
+            return usage("add", &msg);
         }
     };
 
@@ -92,13 +100,16 @@ pub async fn run_add_command(
     let resolved = match resolve_backend(name, cmd, url, desc, env) {
         Ok(r) => r,
         Err(msg) => {
-            eprintln!("Error: {msg}");
             // A credential in the command or URL is a usage error, like a
             // value given to -e (the library's CREDENTIAL_IN_ARGV phrase).
             if msg.contains("would write a credential into gateway.yaml as text") {
-                return ExitCode::from(2);
+                return usage("add", &msg);
             }
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &msg,
+                "Check the name, --command and --url given, then rerun 'mcp-gateway add'.",
+            );
         }
     };
     let transport = resolved.backend.transport.clone();
@@ -139,8 +150,7 @@ pub async fn run_add_command(
         None => Vec::new(),
     };
     if let Err(e) = written {
-        eprintln!("Error: {e}");
-        return ExitCode::FAILURE;
+        return fail(CliExit::LocalFailure, &e, &write_remedy(Some(config)));
     }
 
     // ── Report ─────────────────────────────────────────────────────────────
@@ -182,8 +192,7 @@ pub fn run_remove_command(name: &str, config: &Path, mode: CommentLoss) -> ExitC
             .map_err(|msg| format!("{msg} (in {})", config.display()))
     });
     if let Err(e) = written {
-        eprintln!("Error: {e}");
-        return ExitCode::FAILURE;
+        return fail(CliExit::LocalFailure, &e, &write_remedy(Some(config)));
     }
 
     println!("Removed '{name}'.");
@@ -197,8 +206,11 @@ pub fn run_list_command(json: bool, config: &Path) -> ExitCode {
     let gateway_config = match load_existing_or_default(config) {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("Error: Failed to load {}: {e}", config.display());
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &format!("Failed to load {}: {e}", config.display()),
+                &format!("Run '{}' to see why.", check_config_command(config)),
+            );
         }
     };
 
@@ -278,16 +290,22 @@ pub fn run_get_command(name: &str, config: &Path, render: crate::cli::output::Re
     let gateway_config = match load_existing_or_default(config) {
         Ok(config) => config,
         Err(e) => {
-            eprintln!("Error: Failed to load {}: {e}", config.display());
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &format!("Failed to load {}: {e}", config.display()),
+                &format!("Run '{}' to see why.", check_config_command(config)),
+            );
         }
     };
 
     let info = match get_backend(&gateway_config, name) {
         Ok(i) => i,
         Err(msg) => {
-            eprintln!("Error: {msg} (in {})", config.display());
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &format!("{msg} (in {})", config.display()),
+                "Run 'mcp-gateway list' with the same --config to see its backends.",
+            );
         }
     };
     if render == crate::cli::output::Render::Json {
