@@ -16,6 +16,10 @@ on:
         "codex/v4-*",
         fix/mrtr2-continuation-handle,
       ]
+    # GitHub's three default types, plus ready_for_review: marking a draft
+    # ready starts a run at the same head, so the full set does not wait for
+    # the next push. Pinned by scripts/ci/test_docs_only_gating.py.
+    types: [opened, synchronize, reopened, ready_for_review]
   # Rehearsal path for the container publish (NFR.PKG.1). docker-build and
   # docker-manifest fire on a `v*` tag only, so their first execution would
   # otherwise be the real release publish, and no probe tag can stand in:
