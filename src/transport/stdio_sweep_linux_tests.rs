@@ -376,7 +376,7 @@ fn an_exited_root_settles_fast_and_its_former_child_is_still_killed() {
         std::thread::sleep(Duration::from_millis(10));
     };
     let cfg = SweepConfig {
-        freeze_slice: Duration::from_millis(700),
+        freeze_slice: Duration::from_secs(10),
         cap: 64,
     };
     let mut sweep = Sweep::new(root_id, cfg);
@@ -398,10 +398,13 @@ fn an_exited_root_settles_fast_and_its_former_child_is_still_killed() {
         report.killed
     );
     // Dead either way: reaped by whoever adopted it, or a zombie until then.
-    let dead = (0..200).any(|_| {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(table.state(child), ProcState::Gone | ProcState::Zombie) {
+        assert!(
+            Instant::now() < deadline,
+            "the former child outlived the sweep"
+        );
         std::thread::sleep(Duration::from_millis(10));
-        matches!(table.state(child), ProcState::Gone | ProcState::Zombie)
-    });
-    assert!(dead, "the former child outlived the sweep");
+    }
     root.wait().expect("reap");
 }

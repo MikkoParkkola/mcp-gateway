@@ -76,9 +76,26 @@ pub(super) fn ending_around_snapshot(
     close_stdin: impl FnOnce() -> bool,
     deadline: Option<&StopDeadline>,
 ) -> Ending {
-    let began = std::time::Instant::now();
+    ending_around_snapshot_by(
+        std::time::Instant::now,
+        budget,
+        snapshot,
+        close_stdin,
+        deadline,
+    )
+}
+
+/// [`ending_around_snapshot`] on the clock `now` (rows supply the readings).
+pub(super) fn ending_around_snapshot_by(
+    mut now: impl FnMut() -> std::time::Instant,
+    budget: Duration,
+    snapshot: impl FnOnce(Duration),
+    close_stdin: impl FnOnce() -> bool,
+    deadline: Option<&StopDeadline>,
+) -> Ending {
+    let began = now();
     snapshot(budget);
-    let took = began.elapsed();
+    let took = now().saturating_duration_since(began);
     ending_after_snapshot(budget, took, close_stdin(), deadline)
 }
 
