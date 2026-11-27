@@ -6,7 +6,7 @@
 //! a chunk boundary may fall anywhere, and a notification is only reachable
 //! once the whole body has arrived, which is one round-trip too late. This
 //! decoder is sans-io -- bytes in, events out -- so the framing is testable
-//! without a socket, and [`decode_sse_exchange`] drives it over a stream,
+//! without a socket, and [`decode_sse_answer`] drives it over a stream,
 //! publishing notifications as each event completes.
 //!
 //! Contract pinned here so implementation and tests agree:
@@ -40,19 +40,12 @@ use futures::StreamExt;
 use crate::error::{Error, Result};
 use crate::protocol::{JsonRpcMessage, JsonRpcResponse};
 
-/// Bytes of a still-incomplete event a stream may retain before the decoder
-/// gives up.
-///
-/// Fixed on purpose, and deliberately not derived from
-/// `ServerConfig::max_body_size`: that one is operator-tunable and governs the
-/// gateway's own inbound listener, so a backend-frame bound inheriting from it
-/// would shrink whenever an operator tightened an unrelated knob.
-///
-/// Generous on purpose too. While a legitimate response frame is arriving it
-/// *is* the pending event, so tightening this toward "a retained tail should
-/// be small" would reject large tool results -- exactly the defect this
-/// decoder exists to remove.
-pub(crate) const MAX_PENDING_SSE_BYTES: usize = 10 * 1024 * 1024;
+/// The per-event bound the decoder's own rows use, equal to the default
+/// answer limit. A live stream takes its bound from the backend's limit key,
+/// one value however an answer arrives: while a large result is arriving it
+/// *is* the pending event, so the bound must be the answer limit itself.
+#[cfg(test)]
+pub(crate) const MAX_PENDING_SSE_BYTES: usize = super::super::DEFAULT_MAX_FRAME_BYTES;
 
 /// One decoded `event:`/`data:` block.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,10 +166,9 @@ impl SseDecoder {
 
     fn oversized(&self, len: usize) -> Result<()> {
         if len > self.max_pending_bytes {
-            return Err(Error::Transport(format!(
-                "SSE event exceeded {} bytes without completing",
-                self.max_pending_bytes
-            )));
+            return Err(Error::ResponseTooLarge {
+                limit: self.max_pending_bytes,
+            });
         }
         Ok(())
     }
@@ -302,19 +294,23 @@ fn withheld(
 }
 
 /// Drive an SSE body: publish each notification to the request-scoped sink as
-/// it completes, and return the response frame when it arrives.
+/// it completes, and return the response frame when it arrives. Only the
+/// event being assembled is held, so `max_event` (the backend's per-answer
+/// limit) bounds what this exchange keeps in memory.
 ///
 /// The caller maps its `reqwest::Error` to [`crate::error::Error::Transport`]
 /// before feeding, so this driver is exercisable from a plain stream fixture.
-pub(crate) async fn decode_sse_exchange<S>(
+pub(crate) async fn decode_sse_answer<S>(
     stream: S,
     needles: Option<&crate::security::needles::NeedleSet>,
+    max_event: usize,
 ) -> Result<JsonRpcResponse>
 where
     S: futures::Stream<Item = Result<bytes::Bytes>>,
 {
-    let mut decoder = SseDecoder::new(MAX_PENDING_SSE_BYTES);
-    tokio::pin!(stream);
+    let mut decoder = SseDecoder::new(max_event);
+    // Boxed, not `tokio::pin!`: that macro's line never registers in llvm's line counts.
+    let mut stream = Box::pin(stream);
     while let Some(chunk) = stream.next().await {
         if let Some(response) = drain_events(decoder.push(&chunk?)?, needles)? {
             return Ok(response);
@@ -324,4 +320,17 @@ where
         return Ok(response);
     }
     Err(Error::Transport("No data in SSE response".to_string()))
+}
+
+/// [`decode_sse_answer`] at the default answer limit, for the rows that
+/// exercise decoding rather than the limit.
+#[cfg(test)]
+pub(crate) async fn decode_sse_exchange<S>(
+    stream: S,
+    needles: Option<&crate::security::needles::NeedleSet>,
+) -> Result<JsonRpcResponse>
+where
+    S: futures::Stream<Item = Result<bytes::Bytes>>,
+{
+    decode_sse_answer(stream, needles, MAX_PENDING_SSE_BYTES).await
 }
