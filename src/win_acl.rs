@@ -26,7 +26,7 @@ use windows_sys::Win32::Security::{
     LABEL_SECURITY_INFORMATION, OBJECT_INHERIT_ACE, OWNER_SECURITY_INFORMATION,
     PSECURITY_DESCRIPTOR, PSID, SCOPE_SECURITY_INFORMATION, SE_DACL_PROTECTED, SECURITY_ATTRIBUTES,
     SECURITY_DESCRIPTOR, SetSecurityDescriptorControl, SetSecurityDescriptorDacl,
-    SetSecurityDescriptorOwner, TOKEN_QUERY, TOKEN_USER, TokenUser,
+    SetSecurityDescriptorOwner, TOKEN_INFORMATION_CLASS, TOKEN_QUERY, TokenOwner, TokenUser,
 };
 use windows_sys::Win32::Storage::FileSystem::{
     CREATE_NEW, CreateDirectoryW, CreateFileW, DELETE, FILE_ALL_ACCESS, FILE_DISPOSITION_INFO,
@@ -89,6 +89,18 @@ fn last() -> io::Error {
 
 /// The SID of the user this process runs as.
 pub(crate) fn current_user_sid() -> io::Result<Sid> {
+    token_sid(TokenUser)
+}
+
+/// The SID this process's token gives new objects as their owner: the user,
+/// or BUILTIN\Administrators for an elevated administrator.
+pub(crate) fn current_owner_sid() -> io::Result<Sid> {
+    token_sid(TokenOwner)
+}
+
+/// One SID from this process's token: `TokenUser` or `TokenOwner`, whose
+/// structures (`TOKEN_USER`, `TOKEN_OWNER`) both start with the SID pointer.
+fn token_sid(class: TOKEN_INFORMATION_CLASS) -> io::Result<Sid> {
     let mut raw: HANDLE = std::ptr::null_mut();
     // SAFETY: contract 1/6 — out-pointer to a stack HANDLE; BOOL result checked.
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw mut raw) } == 0 {
@@ -101,7 +113,7 @@ pub(crate) fn current_user_sid() -> io::Result<Sid> {
     unsafe {
         GetTokenInformation(
             token.as_raw_handle(),
-            TokenUser,
+            class,
             std::ptr::null_mut(),
             0,
             &raw mut len,
@@ -116,7 +128,7 @@ pub(crate) fn current_user_sid() -> io::Result<Sid> {
     if unsafe {
         GetTokenInformation(
             token.as_raw_handle(),
-            TokenUser,
+            class,
             buf.as_mut_ptr().cast(),
             u32::try_from(bytes).map_err(|_| io::Error::other("token too large"))?,
             &raw mut len,
@@ -126,8 +138,9 @@ pub(crate) fn current_user_sid() -> io::Result<Sid> {
         return Err(last());
     }
     let base = buf.as_ptr().cast::<u8>();
-    // SAFETY: contract 2/4 — the buffer is aligned for TOKEN_USER and alive.
-    let sid = unsafe { (*buf.as_ptr().cast::<TOKEN_USER>()).User.Sid }
+    // SAFETY: contract 2/4 — the buffer is aligned for TOKEN_USER/TOKEN_OWNER
+    // and alive; both begin with the SID pointer.
+    let sid = unsafe { *buf.as_ptr().cast::<PSID>() }
         .cast::<u8>()
         .cast_const();
     let offset = (sid as usize)

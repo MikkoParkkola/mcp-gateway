@@ -309,7 +309,8 @@ where
     S: futures::Stream<Item = Result<bytes::Bytes>>,
 {
     let mut decoder = SseDecoder::new(max_event);
-    tokio::pin!(stream);
+    // Boxed, not `tokio::pin!`: that macro's line never registers in llvm's line counts.
+    let mut stream = Box::pin(stream);
     while let Some(chunk) = stream.next().await {
         if let Some(response) = drain_events(decoder.push(&chunk?)?, needles)? {
             return Ok(response);
