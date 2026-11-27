@@ -300,7 +300,12 @@ async function start({ seed, port, onSpawn }, owned) {
   };
   // Every server the gateway knows by name: GET /ui/api/status servers[] (registry backends and switched-off config
   // entries). /ui/api/backends takes only POST (it adds a server), so it is no read.
-  const serverNames = async () => ((await read('/ui/api/status')).servers ?? []).map((s) => s.name);
+  const serverNames = async () => {
+    const { servers } = await read('/ui/api/status');
+    // A missing list is an error, never an empty one: the decoy check would otherwise pass without looking.
+    if (!Array.isArray(servers)) throw new Error('GET /ui/api/status carries no servers list (not the admin view?)');
+    return servers.map((s) => s.name);
+  };
   const handle = {
     origin, port: chosen, get pid() { return child.pid; }, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
     stubs: seeded.stubs ?? [], api, read, serverNames,
@@ -342,11 +347,16 @@ async function start({ seed, port, onSpawn }, owned) {
       if (await answers(chosen)) throw new Error(`port ${chosen} still answers after the gateway was stopped`);
     },
     stop: async () => {
-      await handle.kill();
-      await closeServices(owned.services);
-      const after = await fingerprint(decoy);
+      // Every cleanup step runs even when an earlier one fails, so a seed's service (an OAuth provider stub) never
+      // outlives a gateway whose port still answers; the first failure is the one reported.
+      let failure = null;
+      const step = async (fn) => { try { return await fn(); } catch (e) { failure ??= e; return null; } };
+      await step(() => handle.kill());
+      await step(() => closeServices(owned.services));
+      const after = await step(() => fingerprint(decoy));
       await rm(home, { recursive: true, force: true });
       await rm(decoy, { recursive: true, force: true });
+      if (failure) throw failure;
       if (after !== decoyPrint) throw new Error('the decoy home changed while the gateway ran');
     },
   };
