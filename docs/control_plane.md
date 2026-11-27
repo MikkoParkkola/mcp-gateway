@@ -133,15 +133,20 @@ control_plane:
   write succeeds, so a crash can resend entries: deduplicate on each entry's
   `entry_hash`. The saved place sits beside each log, in a file named like the
   log with the extension `.export-cursor.json`.
-- An entry that fails its hash or HMAC check stops the export, and that entry is
-  never written.
+- An entry that fails its hash or HMAC check stops the export from that log, and
+  that entry is never written. The other log keeps exporting.
 - The export follows the gateway's own log rotation. If retention has already
   removed the segment it had reached, it restarts at the oldest segment left and
   counts `mcp_audit_export_segments_skipped_total`. Rotating the logs with an
   outside tool (logrotate, `copytruncate`) breaks the chain.
-- If the transparency log's signing secret does not resolve, or the sink file
-  cannot be opened, the export stays off and the gateway logs a WARN saying why.
-  The gateway still starts.
+- If the transparency log's signing secret does not resolve, or the sink file's
+  directory cannot be created, the export stays off and the gateway logs a WARN
+  saying why. The gateway still starts.
+- A write to the sink file that fails is logged and tried again on the next
+  poll; the export's saved place does not move past an entry until its write
+  succeeds.
+- With auth off the gateway logs a WARN at start that the governance log may be
+  absent; the tool-call log still exports.
 - The file is the only sink. There is no OTel or HTTP sink.
 
 ## Local Web UI
