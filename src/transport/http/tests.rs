@@ -403,6 +403,9 @@ async fn drop_aborts_refresh_task_without_close() {
 #[path = "status_typing_tests.rs"]
 mod status_typing;
 
+#[path = "response_cap_tests.rs"]
+mod response_cap;
+
 /// MIK-8339: an OAuth transport always shares one login gate with its client.
 /// A gated client keeps its own gate; an ungated one is given the transport's.
 #[tokio::test]

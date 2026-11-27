@@ -230,6 +230,7 @@ impl SseListenSession {
             |data| t.resolve_message_url(data),
             Some(sink),
             t.body_budget.get().cloned(),
+            t.max_response_bytes(),
         )
         .await?;
         *self.channel.lock() = Some(Arc::clone(&channel));

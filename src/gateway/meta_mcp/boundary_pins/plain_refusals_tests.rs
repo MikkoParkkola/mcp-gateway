@@ -21,9 +21,10 @@ const PENDING: [&str; 0] = [];
 /// Every `crate::Error` variant that is not one of the twelve: covered by
 /// the refusal scan in `delivery_framing.rs` (`Forbidden`, `GatewayRefused`,
 /// `ResponseFirewallRefused`), or not a gateway decision.
-const OTHER_VARIANTS: [&str; 24] = [
+const OTHER_VARIANTS: [&str; 25] = [
     "Forbidden",
     "ResponseFirewallRefused",
+    "ResponseTooLarge",
     "AuditUnavailable",
     "ConfigValidation",
     "ConfigWatcher",
