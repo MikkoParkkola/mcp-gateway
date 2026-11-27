@@ -77,7 +77,7 @@ async fn unsubscribe_details(audit: &std::path::Path, want: usize) -> Vec<String
 /// owner's retry finds the row durably gone and answers `{}` ("absent").
 #[tokio::test]
 async fn unsub2_the_owner_hears_an_error_not_success() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let audit = dir.path().join("audit.jsonl");
     let subs = dir.path().join("subs");
     let hub = hub_at(dir.path(), &audit);
@@ -105,7 +105,7 @@ async fn unsub2_the_owner_hears_an_error_not_success() {
         "the failed call was recorded"
     );
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let subs = dir.path().join("subs");
     {
         let hub = hub_at(dir.path(), &dir.path().join("first.jsonl"));
@@ -124,7 +124,7 @@ async fn unsub2_the_owner_hears_an_error_not_success() {
 /// second run whose sync succeeds.
 #[tokio::test]
 async fn unsub2_withdraw_and_revoke_take_the_error() {
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let subs = dir.path().join("subs");
     let hub = hub_at(dir.path(), &dir.path().join("audit.jsonl"));
     let id = subscribed(&hub).await;
@@ -142,7 +142,7 @@ async fn unsub2_withdraw_and_revoke_take_the_error() {
     assert!(hub.withdraw_rows(&[row]));
     assert!(hub.store.get(&id).is_none());
 
-    let dir = tempfile::tempdir().expect("dir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let subs = dir.path().join("subs");
     let hub = hub_at(dir.path(), &dir.path().join("audit.jsonl"));
     let id = subscribed(&hub).await;
