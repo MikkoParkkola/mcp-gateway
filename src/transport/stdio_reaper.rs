@@ -83,6 +83,8 @@ mod participant;
 mod plan;
 #[cfg(test)]
 use plan::DEFAULT_STOP_BUDGET;
+// Production plans through `ending_around_snapshot`; the rows still call it.
+#[cfg(test)]
 pub(super) use plan::graceful_ending;
 use plan::{ending_around_snapshot, stop_budget};
 
