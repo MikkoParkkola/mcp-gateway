@@ -39,6 +39,12 @@ const SEEDS = {
       throw new Error('init\'s starter config now has a failsafe block: set health_check inside it instead of appending one');
     }
     await appendFile(ctx.configPath, '\nfailsafe:\n  health_check:\n    enabled: false\n');
+    // tide's calls time out at 2 s, not the 30 s default: three failed calls (the health tracker's "unhealthy")
+    // then fit well inside a test, and each fails inside the gateway before gw.mcp's own 5 s limit.
+    const text = await readFile(ctx.configPath, 'utf8');
+    const tide = /^ {2}tide:\n {4}command: .*\n/m;
+    if (!tide.test(text)) throw new Error('the populated seed wrote no tide backend block to set its timeout in');
+    await writeFile(ctx.configPath, text.replace(tide, (block) => `${block}    timeout: 2s\n`), { mode: 0o600 });
     return seeded;
   },
   // J1 (part C): init's starter config and a client config file in the home naming two stub servers that are not
@@ -89,8 +95,7 @@ const SEEDS = {
       ready: async (gw, deadline) => {
         await keysAccepted([key])(gw, deadline);
         for (let i = 0; i < 2; i += 1) {
-          const charged = await gw.mcp({ key: key.secret, method: 'tools/call',
-            params: { name: 'gateway_invoke', arguments: { server: 'tide', tool: 'tide_table', arguments: {} } } });
+          const charged = await gw.invoke('tide', 'tide_table', { key: key.secret });
           if (charged.status !== 200) throw new Error(`a charged call was refused (${charged.status})`);
         }
         await until(deadline, 'GET /ui/api/costs shows no spend for the spender key', async () =>
@@ -129,8 +134,7 @@ const SEEDS = {
     return {
       ...seeded,
       ready: async (gw, deadline) => {
-        const reply = await gw.mcp({ key: gw.adminKey, method: 'tools/call',
-          params: { name: 'gateway_invoke', arguments: { server: 'tide', tool: 'tide_secret', arguments: {} } } });
+        const reply = await gw.invoke('tide', 'tide_secret');
         if (reply.status < 200 || reply.status > 299) {
           throw new Error(`the seeding MCP call was refused (${reply.status}): ${JSON.stringify(reply.body).slice(0, 300)}`);
         }

@@ -4,18 +4,16 @@
 // Row K1, the harness smoke (not J1): through the UI only, sign in with the seed's admin key, open Tools, try
 // tide_table, and see its answer; then two reads outside the browser prove the call really happened: the gateway's
 // Activity row carrying the trace id this call's own response returned, and the stub server's own log.
-import { test, expect, activityRowFor } from './gateway.mjs';
+import { test, expect, activityRowFor, signIn } from './gateway.mjs';
 
 test.use({ seed: 'populated' });
 
 test('harness smoke: try a tool', async ({ page, gw }) => {
-  await page.goto('/ui');
-  await page.locator('#signin-form input').first().fill(gw.adminKey);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await signIn(page, gw.adminKey);
   await page.getByRole('link', { name: 'Tools' }).first().click();
 
   const picker = page.locator('#try-tool');
-  // Both stubs serve tide_table; the option label is "<tool> <server> · ...", so pick tide's own.
+  // Each stub's tools carry its server's name; the option label is "<tool> <server> · ...", so pick tide's own.
   const label = await picker.locator('option').filter({ hasText: /^tide_table tide · / }).textContent();
   await picker.selectOption({ label: label.trim() });
   const tideCalls = async () => (await gw.stubLog('tide')).split('\n')

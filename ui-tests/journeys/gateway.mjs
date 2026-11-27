@@ -267,6 +267,9 @@ async function start({ seed, port, onSpawn }, owned) {
     // What a seed hands its rows beyond its stubs (keys it configured, a command line to add): seeds.mjs names each.
     data: seeded.data ?? {},
     mcp: (request) => mcpExchange(origin, request),
+    // One real tool call through the gateway (tools/call gateway_invoke), as gw.mcp's { status, body }.
+    invoke: (server, tool, { key = adminKey, args = {} } = {}) => mcpExchange(origin,
+      { key, method: 'tools/call', params: { name: 'gateway_invoke', arguments: { server, tool, arguments: args } } }),
     // C-H1: restarts this test's own gateway and keeps its home. With `argv` (parseStartCommand of the command the
     // page shows) it runs only the gateway's four words naming this test's binary and config, spawning the binary's
     // real path; a refusal throws before anything stops or runs. Re-proves identity as the first start does and
@@ -357,6 +360,13 @@ export async function startGateway(opts = {}) {
     for (const dir of owned.homes ?? []) await rm(dir, { recursive: true, force: true });
     throw e;
   }
+}
+
+/** Signs the page in to the gateway's UI with `key`, through the sign-in form as a user does. */
+export async function signIn(page, key) {
+  await page.goto('/ui');
+  await page.locator('#signin-form input').first().fill(key);
+  await page.getByRole('button', { name: 'Sign in' }).click();
 }
 
 export const test = base.extend({

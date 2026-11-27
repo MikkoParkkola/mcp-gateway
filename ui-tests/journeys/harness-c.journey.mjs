@@ -96,15 +96,13 @@ test.describe('stub silent mode (C-H4)', () => {
   test.use({ seed: 'populated' });
 
   test('Q1 a call answers; with the stub silenced the same call reaches its log and gets no answer', async ({ gw }) => {
-    const call = { key: gw.adminKey, method: 'tools/call',
-      params: { name: 'gateway_invoke', arguments: { server: 'tide', tool: 'tide_table', arguments: {} } } };
     const calls = async () => (await gw.stubLog('tide')).split('\n').filter((l) => l.includes('"tools/call"')).length;
-    const answered = await gw.mcp(call);
+    const answered = await gw.invoke('tide', 'tide_table');
     expect(JSON.stringify(answered.body), 'the unsilenced call did not answer').toContain('tide-answered');
     const mark = await calls();
     await gw.silence('tide');
     // The silent stub never answers, so the gateway's wait outlasts gw.mcp's 5 s request limit: a rejection is expected.
-    const silent = await gw.mcp(call).catch((error) => ({ error }));
+    const silent = await gw.invoke('tide', 'tide_table').catch((error) => ({ error }));
     expect(JSON.stringify(silent.body ?? null), 'a silenced stub answered').not.toContain('tide-answered');
     await until(Date.now() + 10_000, 'the silenced stub never logged the call', async () => (await calls()) > mark);
   });
@@ -115,6 +113,7 @@ test.describe('seed silentStub (C-H3, J4)', () => {
 
   test('S5 the J4 seed turns health checks off in init\'s config and the gateway serves both stubs with it', async ({ gw }) => {
     expect(await readFile(gw.configPath, 'utf8')).toMatch(/^failsafe:\n {2}health_check:\n {4}enabled: false$/m);
+    expect(await readFile(gw.configPath, 'utf8')).toMatch(/^ {2}tide:\n {4}command: .*\n {4}timeout: 2s$/m);
     const servers = JSON.stringify(await (await gw.api('/ui/api/backends')).json());
     for (const name of ['tide', 'harbour']) expect(servers).toContain(name);
   });
