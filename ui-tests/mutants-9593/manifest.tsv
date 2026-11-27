@@ -34,3 +34,4 @@ M-keys-wait	M-keys-wait.patch	tests/server-page-actions.spec.mjs	T3c a keys read
 M-silent	M-silent.patch	tests/server-page-actions.spec.mjs	T6 the sign-in start and a refusal are announced
 M-gone-stale	M-gone-stale.patch	tests/server-page-status.spec.mjs	T2e a server gone from a status event
 M-audit-in-card	M-audit-in-card.patch	tests/server-page-actions.spec.mjs	T3a it names the reaching keys
+M-unreadable-words	M-unreadable-words.patch	tests/server-page-actions.spec.mjs	T7 a Finish answered 200 with a body that does not parse

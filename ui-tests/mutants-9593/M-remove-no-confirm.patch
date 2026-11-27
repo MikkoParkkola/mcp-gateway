@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
---- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
-+++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
-@@ -265,6 +265,7 @@
+diff --git a/src/gateway/ui/shell/server-page.8abcae2314bd.js b/src/gateway/ui/shell/server-page.8abcae2314bd.js
+--- a/src/gateway/ui/shell/server-page.8abcae2314bd.js
++++ b/src/gateway/ui/shell/server-page.8abcae2314bd.js
+@@ -268,6 +268,7 @@
    }));
    const remove = el('button', { type: 'button', class: 'btn danger' }, `Remove ${name}`);
    remove.addEventListener('click', async () => {

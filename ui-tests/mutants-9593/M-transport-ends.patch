@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
---- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
-+++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
-@@ -216,7 +216,7 @@
+diff --git a/src/gateway/ui/shell/server-page.8abcae2314bd.js b/src/gateway/ui/shell/server-page.8abcae2314bd.js
+--- a/src/gateway/ui/shell/server-page.8abcae2314bd.js
++++ b/src/gateway/ui/shell/server-page.8abcae2314bd.js
+@@ -219,7 +219,7 @@
        } catch (err) {
          error(err);
          // Only the gateway's final refusals end this attempt; anything else (not ready, no answer) keeps it.

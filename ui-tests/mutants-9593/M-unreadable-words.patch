@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-page.8abcae2314bd.js b/src/gateway/ui/shell/server-page.8abcae2314bd.js
+--- a/src/gateway/ui/shell/server-page.8abcae2314bd.js
++++ b/src/gateway/ui/shell/server-page.8abcae2314bd.js
+@@ -151,7 +151,7 @@
+ /** The gateway's own sentence for a refusal, or one built from its status. */
+ const refusalText = (err) => err?.serverMessage ?? (!err?.status
+   ? 'The gateway did not answer. The sign-in may still be open: try again.'
+-  : err.unreadable
++  : false
+     // An ok status whose body would not parse: not a refusal, and the attempt may have gone through.
+     ? "The gateway's answer could not be read. The sign-in may still be open: try again."
+     : `The gateway refused the sign-in (HTTP ${err.status}).`);

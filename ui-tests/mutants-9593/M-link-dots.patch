@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/servers.100baeac7524.js b/src/gateway/ui/shell/servers.100baeac7524.js
---- a/src/gateway/ui/shell/servers.100baeac7524.js
-+++ b/src/gateway/ui/shell/servers.100baeac7524.js
+diff --git a/src/gateway/ui/shell/servers.a9f9de3fac60.js b/src/gateway/ui/shell/servers.a9f9de3fac60.js
+--- a/src/gateway/ui/shell/servers.a9f9de3fac60.js
++++ b/src/gateway/ui/shell/servers.a9f9de3fac60.js
 @@ -59,7 +59,7 @@
  
  const slug = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');

@@ -1,6 +1,6 @@
-diff --git a/src/gateway/ui/shell/server-page.6a28140f5c9d.js b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
---- a/src/gateway/ui/shell/server-page.6a28140f5c9d.js
-+++ b/src/gateway/ui/shell/server-page.6a28140f5c9d.js
+diff --git a/src/gateway/ui/shell/server-page.8abcae2314bd.js b/src/gateway/ui/shell/server-page.8abcae2314bd.js
+--- a/src/gateway/ui/shell/server-page.8abcae2314bd.js
++++ b/src/gateway/ui/shell/server-page.8abcae2314bd.js
 @@ -19,7 +19,6 @@
  
  /** Drop the page's status listener: called first by every tab function of the Servers module. */
