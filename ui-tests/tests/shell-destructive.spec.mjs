@@ -7,7 +7,7 @@
 // The fixture's Gateway › Actions row calls ctx.confirm against
 // /ui/api/destroy-probe; a test shapes the call through window.__confirm.
 import { test, expect, blockingViolations } from './base.mjs';
-import { withFixturePages, shellReady } from './shell.mjs';
+import { withFixturePages, shellReady, trackTimers, pendingFrom } from './shell.mjs';
 
 const PROBE = '**/ui/api/destroy-probe';
 const dialog = (page) => page.locator('dialog.confirm');
@@ -558,30 +558,24 @@ test.describe('code review round 1', () => {
   });
 
   test('D19 sign-in taking over while a request is out stops the dialog clocks: no 10 s or 30 s timer is left pending', async ({ page }) => {
-    // A ledger of live timers, by delay: the shell calls the global setTimeout, so it is counted.
-    await page.addInitScript(() => {
-      const set = window.setTimeout.bind(window);
-      const clear = window.clearTimeout.bind(window);
-      window.__timers = new Map();
-      window.setTimeout = (fn, ms, ...args) => {
-        const id = set((...x) => { window.__timers.delete(id); if (typeof fn === 'function') fn(...x); }, ms, ...args);
-        window.__timers.set(id, ms);
-        return id;
-      };
-      window.clearTimeout = (id) => { window.__timers.delete(id); clear(id); };
-    });
+    // Only the dialog's own clocks count: timers armed from its start function. The
+    // announcer also arms 10 s timers once a slow page announces, and those are not the dialog's.
+    await trackTimers(page);
+    // Sorted, so the row does not depend on the order start arms its two clocks.
+    const dialogClocks = async () => (await pendingFrom(page, 'start'))
+      .filter((ms) => ms === 10_000 || ms === 30_000).sort((a, b) => a - b);
     const h = held();
     await page.route(PROBE, h.answer);
     await page.route('**/ui/api/forbidden-probe', (r) => r.fulfill({ status: 401, json: {} }));
     await open(page);
     await page.click('#remove-probe');
     await action(page).click();
-    await expect.poll(() => page.evaluate(() => [...window.__timers.values()].filter((ms) => ms === 30_000).length)).toBe(1);
+    await expect.poll(dialogClocks).toEqual([10_000, 30_000]);
     // Another request answers 401: sign-in takes over and closes the dialog.
     await page.evaluate(async () => { const m = await import(document.querySelector('script[type="module"][src*="/shell."]').src); try { await m.api('/ui/api/forbidden-probe'); } catch {} });
     await expect(page.locator('#signin')).toBeVisible();
     await expect(dialog(page)).toHaveCount(0);
-    expect(await page.evaluate(() => [...window.__timers.values()].filter((ms) => ms === 10_000 || ms === 30_000))).toEqual([]);
+    expect(await dialogClocks()).toEqual([]);
     await expect.poll(async () => (await outcomes(page))[0]?.outcome).toBe('unconfirmed');
     h.release(204);
   });

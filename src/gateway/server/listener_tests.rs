@@ -78,7 +78,9 @@ async fn a_request_that_never_ends_does_not_hold_shutdown_past_the_timeout() {
             }
         }),
     );
-    let grace = Duration::from_millis(100);
+    // A whole second, so a server that let go at the signal itself could pass
+    // the lower bound below only through a scheduling stall that long.
+    let grace = Duration::from_secs(1);
     let (addr, stop, server) = start(app, grace).await;
     let client = tokio::spawn(reqwest::get(format!("http://{addr}/hang")));
     timeout(HANG_STOP, started_rx)
@@ -89,11 +91,19 @@ async fn a_request_that_never_ends_does_not_hold_shutdown_past_the_timeout() {
     // The request never ends, so only the shutdown deadline can return the
     // server: returning inside the hang guard is the oracle, not how long it
     // took against the grace (MIK-8222).
+    let signalled = std::time::Instant::now();
     stop.send(()).expect("server is running");
     let outcome = timeout(HANG_STOP, server)
         .await
         .expect("the server did not return within 5 s while a request was open");
     outcome.expect("server task").expect("serve");
+    // Nor early: the open request keeps its whole grace before it is dropped.
+    let open_for = signalled.elapsed();
+    // timing: lower-bound
+    assert!(
+        open_for >= grace,
+        "request dropped after {open_for:?}, grace was {grace:?}"
+    );
     // The deadline cancels the open request, so its in-flight permit is
     // released and nothing it holds outlives the listener.
     timeout(HANG_STOP, dropped_rx)
@@ -256,4 +266,74 @@ async fn a_client_disconnect_cancels_the_pending_handler() {
         .expect("guard sends on drop");
     let _ = stop.send(());
     let _ = timeout(HANG_STOP, server).await;
+}
+
+/// The code lines of a source file, comments left out.
+fn code_lines(source: &str) -> Vec<&str> {
+    source
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.starts_with("//"))
+        .collect()
+}
+
+/// HTTP and TLS share one budget: the gateway starts its listener from one
+/// place, with the stop budget's listener share as the grace, and `serve`
+/// gives the TLS path the very handle the grace is applied to. The rows above
+/// prove what one listener does with its grace; this one proves there is only
+/// one listener start for that grace to reach.
+#[test]
+fn one_listener_start_carries_the_budget_grace_to_both_transports() {
+    let run = code_lines(include_str!("run.rs"));
+    let starts: Vec<&&str> = run
+        .iter()
+        .filter(|line| line.contains("listener::serve("))
+        .collect();
+    assert_eq!(
+        starts.len(),
+        1,
+        "the gateway starts its listener in more than one place: {starts:?}"
+    );
+    assert!(
+        starts[0].contains(", grace, "),
+        "the listener start does not pass the grace: {}",
+        starts[0]
+    );
+    // Every place run.rs gives `grace` a value, so a later rebinding (say to
+    // the whole total) cannot shadow the budget's share unseen.
+    let bindings: Vec<&&str> = run
+        .iter()
+        .filter(|line| {
+            line.starts_with("let grace")
+                || line.starts_with("let mut grace")
+                || line.starts_with("grace =")
+        })
+        .collect();
+    assert_eq!(
+        bindings,
+        [&"let grace = StopBudget::listener_grace_for(total);"],
+        "the grace is not the stop budget's listener share, bound once"
+    );
+
+    let serve = code_lines(include_str!("listener.rs"));
+    let tls: Vec<&&str> = serve
+        .iter()
+        .filter(|line| line.contains("serve_tls("))
+        .collect();
+    assert_eq!(tls.len(), 1, "one TLS path expected: {tls:?}");
+    assert!(
+        tls[0].ends_with(", handle).await;"),
+        "the TLS path does not get the handle the grace is applied to: {}",
+        tls[0]
+    );
+    for wanted in [
+        "let bridge = handle.clone();",
+        "bridge.graceful_shutdown(Some(grace));",
+    ] {
+        assert_eq!(
+            serve.iter().filter(|line| **line == wanted).count(),
+            1,
+            "listener.rs must hold exactly one `{wanted}`"
+        );
+    }
 }

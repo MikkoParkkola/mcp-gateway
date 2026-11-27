@@ -5,6 +5,7 @@
 //! transport's own items, so nothing had to be widened to move it here.
 
 use super::*;
+use crate::protocol::initialize_params;
 use std::collections::HashMap;
 
 #[cfg(windows)]

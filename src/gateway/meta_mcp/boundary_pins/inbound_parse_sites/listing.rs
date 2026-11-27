@@ -5,12 +5,17 @@
 
 use super::{BTreeMap, Func, Guard, Sites};
 
-const CLASSES: [&str; 4] = [
+const CLASSES: [&str; 5] = [
     "scrubbed",
     "scrubbed-by",
     "post-transport",
     "not-backend-data",
+    "no-injected-values",
 ];
+
+/// The only files a `no-injected-values` row may name: the class rests on
+/// the preview Target pin in the parent module, which covers these alone.
+const NO_INJECTED_FILES: [&str; 1] = ["src/transport/preview_pipe.rs"];
 
 struct Row {
     count: usize,
@@ -123,6 +128,12 @@ pub(super) fn differences(sites: &Sites, text: &str) -> Vec<String> {
                     key.0, key.1
                 )),
             },
+            "no-injected-values" if !NO_INJECTED_FILES.contains(&key.0.as_str()) => {
+                wrong.push(format!(
+                    "no-injected-values outside the preview pipe: {}\t{}",
+                    key.0, key.1
+                ));
+            }
             _ => {}
         }
     }

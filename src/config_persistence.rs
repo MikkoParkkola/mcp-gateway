@@ -87,6 +87,13 @@ pub(crate) mod lock;
 #[path = "config_persistence_journal.rs"]
 pub(crate) mod journal;
 
+// The settlement refusal names only commands this build ships; beside the
+// journal, not in it, so a red run on the journal's old text still has the row.
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "config_persistence_journal_remedy_tests.rs"]
+mod journal_remedy_tests;
+
 // Names the comments a write drops, for the web UI and the CLI (MIK-8051).
 #[path = "config_persistence_comments.rs"]
 pub(crate) mod comments;
@@ -96,7 +103,11 @@ mod atomic;
 pub(crate) use atomic::write_atomic_checked;
 #[cfg(all(test, feature = "webui"))]
 pub(crate) use atomic::write_atomic_observed_for_test;
+pub(crate) use atomic::writer_refusal;
 pub use atomic::{FileMode, Symlink, copy_keeping_access, write_atomic};
+// The writer's seams, for the refusal-surface rows.
+#[cfg(all(test, unix))]
+pub(crate) use atomic::writer_seams;
 
 #[path = "config_persistence_scratch.rs"]
 mod scratch;

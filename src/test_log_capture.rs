@@ -494,20 +494,11 @@ fn a_commented_out_install_is_ignored() {
 #[cfg(tp3)]
 #[test]
 fn every_scoped_log_capture_keeps_interest_open() {
-    fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-        for entry in std::fs::read_dir(dir).expect("a source dir") {
-            let path = entry.expect("an entry").path();
-            if path.is_dir() {
-                walk(&path, out);
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                out.push(path);
-            }
-        }
-    }
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    walk(&root.join("src"), &mut files);
-    walk(&root.join("tests"), &mut files);
+    for tree in ["src", "tests"] {
+        crate::test_source_files::rust_files(&root.join(tree), &mut files);
+    }
     let mut missing = Vec::new();
     let mut unparseable = Vec::new();
     for path in &files {

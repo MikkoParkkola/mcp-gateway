@@ -63,7 +63,7 @@ pub(in crate::gateway::meta_mcp) fn stamp_written_untraced(
     notes: &mut [super::GrantNote],
     trace_id: &str,
 ) {
-    let written: Vec<*const super::GrantNote> = super::select_records(notes)
+    let written: Vec<*const super::GrantNote> = super::record::select_records(notes)
         .into_iter()
         .filter(|note| note.trace_id.is_none())
         .map(std::ptr::from_ref)

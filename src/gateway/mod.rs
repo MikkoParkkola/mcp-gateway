@@ -103,6 +103,9 @@ mod restart_status;
 #[cfg(test)]
 mod route_check_matrix_tests;
 mod router;
+/// The bind-host classifiers `setup export` shares with the router.
+#[cfg(feature = "config-export")]
+pub(crate) use router::{is_wildcard_bind, strip_brackets};
 pub(crate) mod routes;
 #[cfg(tp4)]
 #[cfg(test)]
@@ -120,6 +123,8 @@ mod stop_budget;
 /// (the reload loop) is what gives it a production caller.
 #[cfg(test)]
 pub(crate) use router::grant_subject_from_verified_identity;
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) use stop_budget::BACKEND_RESERVE_FOR_TEST;
 pub(crate) mod search_disclosure;
 mod server;
 /// The one stdio admission identifier, re-exported so a consumer outside
@@ -241,6 +246,25 @@ pub mod test_helpers {
         config.security.ssrf_protection = false;
         config
     }
+
+    /// What an import says for `name` when its capability file is already
+    /// there, so rows in `tests/` assert the sentence itself. For `tests/`
+    /// only, not a stable API.
+    #[must_use]
+    pub fn name_taken(name: &str) -> String {
+        crate::capability::name_taken(name)
+    }
+
+    /// The `OpenAPI` import's three refusal sentences, so rows in `tests/`
+    /// assert the sentences themselves. For `tests/` only, not a stable API.
+    #[cfg(feature = "webui")]
+    pub const DOCUMENT_CHANGED: &str = super::ui::DOCUMENT_CHANGED;
+    /// See [`DOCUMENT_CHANGED`].
+    #[cfg(feature = "webui")]
+    pub const CAPABILITIES_OFF: &str = super::ui::CAPABILITIES_OFF;
+    /// See [`DOCUMENT_CHANGED`].
+    #[cfg(feature = "webui")]
+    pub const DIGEST_REQUIRED: &str = super::ui::DIGEST_REQUIRED;
 
     /// The OS config directory the gateway resolves, exactly what the crate's
     /// own lookup returns, so an integration test can prove it routes to a

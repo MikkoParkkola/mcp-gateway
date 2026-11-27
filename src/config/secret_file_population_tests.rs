@@ -5,7 +5,9 @@
 //! the file it opens holds a secret or decides whom the gateway trusts.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use crate::test_source_files::rust_files;
 
 /// (path, why its raw file I/O needs no mode check, or where the check is).
 const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
@@ -132,6 +134,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
     (
         "src/config_persistence_atomic.rs",
         "the shared atomic writer: creates its own private scratch; opens the target only to probe its ACL, never reads it",
+    ),
+    (
+        "src/config_persistence_atomic_unix.rs",
+        "the atomic writer's unix half: looks at the save target without reading it (O_PATH, or events-only on macOS) to pin it; a backup reads its source's bytes once, through the descriptor it models, into a closed scratch",
     ),
     (
         "src/config_persistence_atomic_windows.rs",
@@ -385,6 +391,14 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "test-only (cfg(test)): copies the real uv and uvx into a fixture Python's scratch bin; no secret",
     ),
     (
+        "src/preview_sandbox/linux/helper.rs",
+        "debug builds only, at a row's request: /dev/null opened and kept as a stray descriptor the helper's own checks must catch; reads nothing, no secret",
+    ),
+    (
+        "src/preview_sandbox/linux/status_rows.rs",
+        "test-only (cfg(test)): /proc/<pid>/stat for the helper's pid and a target's marker, and a plain file written into a scratch dir; no secret",
+    ),
+    (
         "src/preview_sandbox/mod.rs",
         "the sandboxed child's stderr pipe, capped at 64 KiB, to classify a refusal; not a file",
     ),
@@ -507,17 +521,6 @@ fn is_test_path(path: &Path) -> bool {
             let name = name.to_string_lossy();
             name.contains("e2e") || name.contains("fixture")
         })
-}
-
-fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).expect("read src") {
-        let path = entry.expect("dir entry").path();
-        if path.is_dir() {
-            rust_files(&path, out);
-        } else if path.extension().is_some_and(|ext| ext == "rs") {
-            out.push(path);
-        }
-    }
 }
 
 /// Whether a source file's non-test code has a raw read or write. Each

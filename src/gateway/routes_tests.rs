@@ -21,6 +21,7 @@ const LISTENER_FILES: &[&str] = &[
     "src/gateway/ui/activity/mod.rs",
     "src/gateway/ui/backends.rs",
     "src/gateway/ui/capabilities.rs",
+    "src/gateway/ui/config_history.rs",
     "src/gateway/ui/control_plane.rs",
     "src/gateway/ui/decisions.rs",
     "src/gateway/ui/discovery.rs",
@@ -147,6 +148,11 @@ const REVIEWED_MERGES: &[(&str, &str, Option<&str>)] = &[
         "src/gateway/ui/mod.rs",
         "history::history_router()",
         Some("src/gateway/ui/history.rs"),
+    ),
+    (
+        "src/gateway/ui/mod.rs",
+        "config_history::config_history_router()",
+        Some("src/gateway/ui/config_history.rs"),
     ),
     (
         "src/gateway/ui/mod.rs",

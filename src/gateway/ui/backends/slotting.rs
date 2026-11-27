@@ -9,15 +9,17 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde_json::json;
 
-use super::super::errors::flat_error;
+use super::super::errors::{STORE_UNAVAILABLE, flat_error};
 #[cfg(test)]
 use super::super::secret_slots::Store;
 use super::super::secret_slots::{self, Unopened};
-use super::write::{STORE_UNAVAILABLE, Slotted};
-use crate::config::Config;
+use super::write::Slotted;
 use crate::config::secret_values::Syntax;
+use crate::config::{Config, is_reference};
 use crate::gateway::ui::backend_ops::{ValueClass, classify, literal_refusals};
+use crate::security::needles::SHORT_VALUE_BYTES;
 use crate::wiped_bytes::WipedBytes;
+use std::collections::BTreeSet;
 #[cfg(test)]
 use std::sync::Arc;
 
@@ -67,11 +69,15 @@ pub(super) fn refusals(
 /// field so every run stores them in one order: each value
 /// [`classify`] stores, from each header value that
 /// [`secret_slots::stores_header_value`] and each env value that
-/// [`secret_slots::stores_env_value`]. Every other value is written as typed.
-/// Call after [`refuse_values`].
+/// [`secret_slots::stores_env_value`], or that is long enough for the store
+/// and goes into a slot in `held` (one holding a secret reference today, so
+/// writing it as typed would turn a secret into plain text whatever the
+/// key's name). Every other value is written as typed. Call after
+/// [`refusals`] and, for an update, [`too_short`].
 pub(super) fn literals<'a>(
     env: impl Iterator<Item = (&'a String, &'a String)>,
     headers: impl Iterator<Item = (&'a String, &'a String)>,
+    held: &BTreeSet<String>,
 ) -> Vec<Literal> {
     let mut found: Vec<Literal> = env
         .map(|kv| (false, kv))
@@ -82,6 +88,7 @@ pub(super) fn literals<'a>(
                     secret_slots::stores_header_value(value)
                 } else {
                     secret_slots::stores_env_value(key, value)
+                        || (held.contains(key.as_str()) && secret_slots::stores_header_value(value))
                 }
         })
         .map(|(header, (key, value))| Literal {
@@ -225,7 +232,7 @@ pub(super) async fn before_store(
     #[cfg(test)] seam: Option<BackendStoreForTest>,
 ) -> Result<Option<Slotted>, Box<Response>> {
     let reasons = refusals(env, headers);
-    let found = literals(env.iter(), headers.iter());
+    let found = literals(env.iter(), headers.iter(), &BTreeSet::new());
     if reasons.is_empty() && found.is_empty() {
         return Ok(None);
     }
@@ -249,7 +256,10 @@ pub(super) async fn before_store(
 }
 
 /// An update's step before the store: only the env values the request sets
-/// are judged and stored; values already in gateway.yaml are carried as they are.
+/// are judged and stored; values already in gateway.yaml are carried as they
+/// are. gateway.yaml is read once, before any value is judged, because what
+/// a slot holds today decides how its new value is kept: a slot holding a
+/// secret reference never gets a literal written as typed.
 pub(super) async fn for_update(
     state: &crate::gateway::router::AppState,
     name: &str,
@@ -264,14 +274,115 @@ pub(super) async fn for_update(
             super::super::errors::config_path_unavailable().into_response(),
         ));
     };
-    before_store(
+    let config = read_expecting(config_file, name, Expect::Present).await?;
+    #[cfg(test)]
+    if let Some(hook) = seam.as_ref().and_then(|s| s.after_precheck.clone()) {
+        hook();
+    }
+    let no_headers = std::collections::HashMap::new();
+    let reasons = refusals(values, &no_headers);
+    if !reasons.is_empty() {
+        return Err(Box::new(secret_slots::refused_values(&reasons)));
+    }
+    let held = held_references(&config, name);
+    if let Some(key) = too_short(values, &held) {
+        return Err(Box::new(secret_too_short(key)));
+    }
+    prepare(
         config_file,
+        &config,
         name,
-        Expect::Present,
-        values,
-        &std::collections::HashMap::new(),
+        literals(values.iter(), no_headers.iter(), &held),
         #[cfg(test)]
-        seam,
+        seam.and_then(|s| s.store),
     )
     .await
+}
+
+/// The env keys of backend `name` whose value in `config` (as written) is a
+/// whole secret reference.
+fn held_references(config: &Config, name: &str) -> BTreeSet<String> {
+    config
+        .backends
+        .get(name)
+        .map_or_else(BTreeSet::new, |backend| {
+            backend
+                .env
+                .iter()
+                .filter(|(_, value)| is_reference(value))
+                .map(|(key, _)| key.clone())
+                .collect()
+        })
+}
+
+/// The first key, in key order, that `env` sets to a literal too short for
+/// the store over a slot in `held`. Such a value can be neither stored (it
+/// would blank ordinary text wherever it appears) nor written as typed (the
+/// slot's secret would become plain text), so the update is refused whole.
+fn too_short<'a>(
+    env: &'a std::collections::HashMap<String, String>,
+    held: &BTreeSet<String>,
+) -> Option<&'a str> {
+    env.iter()
+        .filter(|(key, value)| {
+            held.contains(key.as_str())
+                && classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
+                && !secret_slots::stores_header_value(value)
+        })
+        .map(|(key, _)| key.as_str())
+        .min()
+}
+
+/// The 422 for [`too_short`]: the field and one sentence, never the value.
+fn secret_too_short(key: &str) -> Response {
+    let field = format!("env.{key}");
+    let message = format!(
+        "{field} holds a secret reference today; a new value shorter than {SHORT_VALUE_BYTES} bytes cannot be kept as a secret, so nothing was changed"
+    );
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        axum::Json(json!({"error": "secret_too_short", "field": field, "message": message})),
+    )
+        .into_response()
+}
+
+/// Under the writer's lock, on `config` (the bytes about to be replaced): the
+/// refusal for an update whose `env` writes a literal as typed (not among
+/// `slotted`'s stored slots) into a slot of backend `name` that holds a
+/// reference now. The slot held none when [`for_update`] read gateway.yaml,
+/// or the value would have been stored or refused there: another writer
+/// changed it in between. A value kept as given (empty, a template, a
+/// reference) is never refused here.
+pub(super) fn now_held(
+    config: &Config,
+    name: &str,
+    env: &std::collections::HashMap<String, String>,
+    slotted: &BTreeSet<String>,
+) -> Option<String> {
+    let current = &config.backends.get(name)?.env;
+    env.iter()
+        .filter(|(key, value)| {
+            !slotted.contains(key.as_str())
+                && classify(value, &Syntax::Dollar) == Ok(ValueClass::Stored)
+                && current.get(key.as_str()).is_some_and(|now| is_reference(now))
+        })
+        .map(|(key, _)| key.as_str())
+        .min()
+        .map(|key| {
+            format!(
+                "env.{key} now holds a secret reference; nothing was changed; reload the server and try again"
+            )
+        })
+}
+
+/// The env keys `slotted` stores, for [`now_held`].
+pub(super) fn stored_env_keys(slotted: Option<&Slotted>) -> BTreeSet<String> {
+    slotted.map_or_else(BTreeSet::new, |slotted| {
+        slotted
+            .slots
+            .iter()
+            .filter(|(header, _)| !header)
+            .map(|(_, key)| key.clone())
+            .collect()
+    })
 }

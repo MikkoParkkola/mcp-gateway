@@ -8,7 +8,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady, tooltipCoversNothing } from './shell.mjs';
+import { countListeners, shellReady, tooltipCoversNothing } from './shell.mjs';
 import { readCopy, readScreens, scanScreens } from './copy-check.mjs';
 
 // ------------------------------------------------------------ fake gateway
@@ -59,19 +59,6 @@ function gate() {
 
 /** What the live stream does on a status frame: tell the screens. */
 const statusEvent = (page) => page.evaluate(() => window.dispatchEvent(new CustomEvent('gateway-status', { detail: {} })));
-
-/** From before the shell loads, keep a count of live gateway-status listeners as window.__statusListeners(). */
-const countListeners = (page) => page.addInitScript(() => {
-  const fns = new Set();
-  for (const [name, op] of [['addEventListener', 'add'], ['removeEventListener', 'delete']]) {
-    const real = window[name];
-    window[name] = function (type, fn, ...more) {
-      if (type === 'gateway-status') fns[op](fn);
-      return real.call(this, type, fn, ...more);
-    };
-  }
-  window.__statusListeners = () => fns.size;
-});
 
 async function openScreen(page, query = '') {
   await page.goto(`/ui/servers/status${query}`);
@@ -218,6 +205,56 @@ test('a state outside the table goes last under needs a look, in the shell badge
   await expect(statusRow(needs, 'drifter')).not.toContainText('raw_code_42');
   await expect(statusRow(needs, 'loner')).toContainText('Unmanaged');
   await expect(content(page).getByRole('rowheader', { name: 'drifter', exact: true })).toHaveCount(1);
+});
+
+/**
+ * Named exports of the loaded `servers` and `shell` modules. An import of a URL
+ * the page already loaded returns that same module, so nothing runs twice.
+ */
+async function screenWords(page) {
+  return page.evaluate(async () => {
+    const loaded = (stem) => performance.getEntriesByType('resource').map((e) => e.name)
+      .find((name) => new RegExp(`/ui/assets/${stem}\\.[0-9a-f]{12}\\.js$`).test(name));
+    const servers = await import(loaded('servers'));
+    const shell = await import(loaded('shell'));
+    return { block: servers.OFF_BLOCK_TITLE, word: shell.OFF_WORD };
+  });
+}
+
+// A server turned off in the config, in the wire shape the gateway sends it.
+const PARKED = {
+  name: 'parked', state: 'off', running: false, transport: 'http', reason: '', next_retry_at: null,
+  tools_cached: 0, calls_24h: 12, calls_prev_24h: 3, latency_p50_ms: null, latency_p95_ms: null, latency_p99_ms: null,
+  circuit_state: null, circuit_trips: null, current_failures: null, healthy: null,
+  request_count: null, success_count: null, failure_count: null,
+  cleartext_credentials_accepted: false, needs_sign_in: false,
+};
+
+test('a server turned off in the config has a block of its own, never answering and never a thing to look at', async ({ page }) => {
+  await fakeGateway(page, {
+    status: [fullView(srv('forge', 'running'), srv('lookout', 'running'), PARKED)],
+    // Discovery sees it on this machine too: it is a status row, so not outside the gateway.
+    discovery: finds(['parked', false]),
+  });
+  await openScreen(page);
+  const words = await screenWords(page);
+  expect(words.block, 'the screen exports its block title').toBeTruthy();
+  const off = block(page, words.block);
+  await expect(off.getByRole('heading')).toHaveText(`${words.block} · 1`);
+  await expect(off.getByRole('columnheader')).toHaveCount(5);
+  await expect(statusRow(off, 'parked').getByRole('cell')).toHaveText([new RegExp(`${words.word}$`), '0', '12', '—']);
+  await expect(block(page, 'Answering').getByRole('heading')).toHaveText('Answering · 2');
+  await expect(block(page, 'Needs a look')).toHaveCount(0);
+  await expect(block(page, 'Not behind the gateway')).toHaveCount(0);
+});
+
+test('a gateway whose every server is turned off shows the off block, not the empty state', async ({ page }) => {
+  await fakeGateway(page, { status: [fullView(PARKED)] });
+  await openScreen(page);
+  const words = await screenWords(page);
+  expect(words.block, 'the screen exports its block title').toBeTruthy();
+  await expect(block(page, words.block).getByRole('heading')).toHaveText(`${words.block} · 1`);
+  await expect(content(page).locator('[data-state="empty"]')).toHaveCount(0);
 });
 
 test('answering: groups by registry category, Other last, sums and the highest p95', async ({ page }) => {
@@ -479,37 +516,24 @@ test.describe('refresh on the gateway-status event', () => {
   }
 
   test('off the screen nothing listens; back on it, one listener', async ({ page }) => {
-    await page.addInitScript(() => {
-      const live = new Set();
-      const add = window.addEventListener;
-      const drop = window.removeEventListener;
-      window.addEventListener = function (type, fn, ...rest) {
-        if (type === 'gateway-status') live.add(fn);
-        return add.call(this, type, fn, ...rest);
-      };
-      window.removeEventListener = function (type, fn, ...rest) {
-        if (type === 'gateway-status') live.delete(fn);
-        return drop.call(this, type, fn, ...rest);
-      };
-      window.__statusListeners = () => live.size;
-    });
+    await countListeners(page, ['gateway-status']);
     const reads = await fakeGateway(page, { status: [MIXED] });
     await openScreen(page);
     await expect(block(page, 'Answering')).toBeVisible();
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(1);
     await page.getByRole('navigation').getByRole('link', { name: 'Tools', exact: true }).click();
     await expect(page).toHaveURL(/\/ui\/tools\//);
     await statusEvent(page);
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(0);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(0);
     await page.getByRole('navigation').getByRole('link', { name: 'Servers', exact: true }).click();
     await expect(block(page, 'Answering')).toBeVisible();
     // The away event made no read: the read on return is the second, not the third.
     expect(reads.status).toBe(2);
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(1);
   });
 
   test('leaving and coming back twice with no event between leaves one listener', async ({ page }) => {
-    await countListeners(page);
+    await countListeners(page, ['gateway-status']);
     await fakeGateway(page, { status: [MIXED] });
     await openScreen(page);
     await expect(block(page, 'Answering')).toBeVisible();
@@ -518,7 +542,7 @@ test.describe('refresh on the gateway-status event', () => {
       await expect(page).toHaveURL(link === 'Tools' ? /\/ui\/tools\// : /\/ui\/servers\//);
     }
     await expect(block(page, 'Answering')).toBeVisible();
-    expect(await page.evaluate(() => window.__statusListeners())).toBe(1);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(1);
   });
 
   test('a tooltip module that never loads holds up no refresh, and a group keeps its focus', async ({ page }) => {
@@ -590,7 +614,7 @@ const DRAWN_TIPS = ['servers.status.answering-24-grouped-by-the', 'servers.statu
 
 test('the status tab draws its three tips; no servers.status copy waits as unbuilt', () => {
   const scan = scanScreens(readScreens());
-  expect(scan.tabs.servers).toEqual({ status: true, actions: false, settings: false });
+  expect(scan.tabs.servers).toEqual({ status: true, actions: true, settings: false });
   for (const id of DRAWN_TIPS) expect(scan.drawn.has(id), id).toBe(true);
   const copy = readCopy();
   expect((copy._pending.servers ?? []).filter((id) => id.startsWith('servers.status.'))).toEqual([]);

@@ -55,18 +55,51 @@ pub(crate) struct Plan {
     pub(crate) program: String,
     /// The argv: the name the program was asked for, then its arguments.
     pub(crate) target: Vec<String>,
-    /// The fetch step's control socket, when the preview fetches its package
-    /// first; `None` runs the target at once, as before the fetch step.
+    /// The gateway's control socket (a host path in an owner-only directory),
+    /// which every helper connects to before it builds the root and reports
+    /// its setup over.
+    pub(crate) control: String,
+    /// The fetch step's paths, when the preview fetches its package first;
+    /// `None` runs the target once the setup is reported.
     pub(crate) fetch: Option<FetchPaths>,
+    /// Debug builds only: a failure or a stray descriptor a row plants in the
+    /// helper, which the helper's own checks must then catch. The gateway
+    /// never sets it, and a release build has no such field.
+    #[cfg(debug_assertions)]
+    #[serde(
+        default,
+        rename = "MCP_GATEWAY_TEST_SANDBOX_FAULT",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) fault: Option<Fault>,
 }
 
-/// Where the helper reaches the gateway for the fetch step: host paths, used
-/// before the helper enters its new root.
+/// What a debug build's helper is told to do wrong, for the rows. Each arm
+/// only adds a failure or a descriptor; none skips a check.
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Fault {
+    /// The step's first fallible call fails with an injected error, of kind
+    /// `PermissionDenied` when `denied`, else `Other`.
+    FailAt {
+        step: crate::preview_sandbox::control_msg::SetupStep,
+        denied: bool,
+    },
+    /// `/dev/null` opened and kept just before the status is sent.
+    PlantBeforeStatus,
+    /// `/dev/null` opened and kept just after the connection is dropped.
+    PlantAfterClose,
+    /// An order line on stderr at four points, and a hold on stdin between
+    /// the strict descriptor check and the spawn.
+    TraceAndHold,
+}
+
+/// Where the helper finds the fetch step's files: host paths, used before
+/// the helper enters its new root.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct FetchPaths {
-    /// The gateway's control socket, in the proxy's owner-only directory.
-    pub(crate) control: String,
-    /// The fetch's CA snapshot, beside it: opened by the helper before it
+    /// The fetch's CA snapshot, beside the control socket: opened by the helper before it
     /// stages the root (never a bind target, so not refused under `/tmp`).
     pub(crate) ca: String,
     /// The npm package fetched before the run; `None` is the handshake alone.

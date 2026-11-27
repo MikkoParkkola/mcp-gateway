@@ -7,28 +7,11 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
-import { PAGES, withFixturePages, shellReady, shellModuleUrl } from './shell.mjs';
+import { PAGES, withFixturePages, shellReady, shellModuleUrl, recordAnnouncements, announced } from './shell.mjs';
 
 const PROBE = '**/ui/api/page-probe*';
 const COUNT = '**/ui/api/decisions/count';
 const LIVE = '[aria-live], [role="status"], [role="alert"], [role="log"], [role="marquee"], [role="timer"], output';
-
-/** Record the text of every entry added to the announcer, from first paint. */
-async function recordAnnouncements(page) {
-  await page.addInitScript(() => {
-    window.__writes = [];
-    addEventListener('DOMContentLoaded', () => {
-      const region = document.getElementById('announcer');
-      if (!region) return;
-      new MutationObserver((records) => {
-        for (const r of records) for (const n of r.addedNodes) window.__writes.push((n.textContent ?? '').trim());
-      }).observe(region, { childList: true });
-    });
-  });
-}
-
-const writes = (page) => page.evaluate(() => window.__writes ?? []);
-const announced = async (page) => (await writes(page)).filter(Boolean);
 
 /** Call an export of the shell module inside the page. */
 async function callShell(page, name, ...args) {
@@ -211,8 +194,11 @@ test('L5c a new identity\'s first count is not announced', async ({ page }) => {
   count = 7;
   await page.locator('.top .signout').click();
   await expect(page.locator('#signin')).toBeVisible();
+  // The logout answer can land after the sign-in view shows: wait until it has been handled
+  // and "Signed out." is queued, then let the queue drain. When it lands within the
+  // announcer's pause it shares one entry with "Ending the session…", so match inside entries.
+  await expect.poll(async () => (await announced(page)).some((t) => t.includes('Signed out.'))).toBe(true);
   await drained(page);
-  expect(await announced(page)).toContain('Signed out.');
   await signIn(page);
   await expect(page.locator('nav.route-nav .count')).toHaveText('7');
   await drained(page);

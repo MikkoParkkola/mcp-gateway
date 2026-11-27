@@ -10,7 +10,7 @@ use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
 use crate::preview_sandbox::control_msg::{
-    Expired, FetchDone, FetchStart, FetchStep, Issued, MAX_LINE, Run,
+    Expired, FetchDone, FetchStart, FetchStep, Issued, MAX_LINE, Run, SetupStatus,
 };
 
 /// The helper's bounds: the first byte of each answer, the rest of a frame
@@ -160,6 +160,45 @@ pub(super) fn finish_fetch(
         return Err("the gateway sent expired false".into());
     }
     write_line(stream, &encode(&Run { run: true })?, bounds.write)
+}
+
+/// Send `status`, if any, then shut this side's writes and park until the
+/// gateway closes, so the gateway always reads the line and the end before
+/// `unshare` can exit. `sent` runs once the line is out, before the wait. A
+/// failed write returns at once.
+pub(super) fn report_and_leave(
+    stream: &mut UnixStream,
+    status: Option<SetupStatus>,
+    bound: Duration,
+    sent: impl FnOnce(),
+) -> Result<(), String> {
+    if let Some(status) = status {
+        write_line(stream, &status.encode(), bound)?;
+    }
+    sent();
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    wait_for_close(stream);
+    Ok(())
+}
+
+/// Park until the peer is gone. No timeout: the gateway either closes after
+/// reading the status or kills `unshare`, and its own death closes the
+/// socket too. A leftover read timeout or a signal just means read again.
+fn wait_for_close(stream: &mut UnixStream) {
+    let _ = stream.set_read_timeout(None);
+    let mut buf = [0_u8; 64];
+    loop {
+        match stream.read(&mut buf) {
+            Ok(0) => return,
+            Ok(_) => {}
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    ErrorKind::Interrupted | ErrorKind::WouldBlock | ErrorKind::TimedOut
+                ) => {}
+            Err(_) => return,
+        }
+    }
 }
 
 #[cfg(tp4)]

@@ -92,6 +92,55 @@ pub(crate) async fn fixture_firewalled_budget_built(
     fx
 }
 
+/// [`super::fixture_firewalled`] with the tenant guard on. One argument key,
+/// `tenant`, and a one-hour window. `max_tenants` is how many distinct values
+/// of that key one caller may name before the next is refused.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_firewalled_tenant(answer: Answer, max_tenants: usize) -> Fx {
+    super::TENANT.with(|cell| cell.set(Some(max_tenants)));
+    let fx = super::fixture_firewalled(answer).await;
+    super::TENANT.with(|cell| cell.set(None));
+    fx
+}
+
+/// Which one request-firewall arm [`fixture_task_firewalled`] turns on.
+/// The other two stay off.
+#[cfg(feature = "firewall")]
+pub(crate) enum TaskFirewall {
+    /// A call budget of this many calls per window.
+    Budget(usize),
+    /// The tenant guard, allowing this many distinct tenants per window.
+    Tenant(usize),
+    /// The anomaly detector, with the fixture's seeded pair map.
+    Anomaly,
+}
+
+/// [`super::fixture_firewalled_audited_built`] with one request-firewall arm
+/// on. `build` arms the meta layer, such as the surfaced names, before it
+/// is installed. The arm's cell is cleared once the gateway exists, so a
+/// later fixture on this thread does not inherit it.
+#[cfg(feature = "firewall")]
+pub(crate) async fn fixture_task_firewalled(
+    answer: Answer,
+    audit: std::path::PathBuf,
+    arm: TaskFirewall,
+    build: impl FnOnce(MetaMcp) -> MetaMcp,
+) -> Fx {
+    super::BUDGET.with(|cell| cell.set(0));
+    super::TENANT.with(|cell| cell.set(None));
+    super::ANOMALY.with(|cell| cell.set(false));
+    match arm {
+        TaskFirewall::Budget(limit) => super::BUDGET.with(|cell| cell.set(limit)),
+        TaskFirewall::Tenant(max_tenants) => super::TENANT.with(|cell| cell.set(Some(max_tenants))),
+        TaskFirewall::Anomaly => super::ANOMALY.with(|cell| cell.set(true)),
+    }
+    let fx = super::fixture_firewalled_audited_built(answer, audit, build).await;
+    super::BUDGET.with(|cell| cell.set(0));
+    super::TENANT.with(|cell| cell.set(None));
+    super::ANOMALY.with(|cell| cell.set(false));
+    fx
+}
+
 /// [`fixture_propagating`] with the production firewalls and a call budget of
 /// `calls` per window, audit rows to `audit` (MIK-8362 STEPFW.3: a refusal at
 /// the route mints nothing).

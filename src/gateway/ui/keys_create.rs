@@ -6,7 +6,9 @@
 //! The route checks, in order: admin, a config file, reload and a loadable
 //! file, a free name, a current revision, then the values themselves. Every
 //! refusal is fixed text that names a field at most, never the body or a
-//! value. The secret is generated here and nowhere else (see `write`).
+//! value. One refusal quotes a name: a name its own routes cannot address
+//! gets the shared name rule's message, the name escaped (a key's name is
+//! no secret). The secret is generated here and nowhere else (see `write`).
 
 use std::sync::{Arc, Mutex};
 
@@ -20,7 +22,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::config_file::{Gateway, read_gateway};
-use super::errors::{flat_error, gate_refusal, stale, structured_error};
+use super::errors::{Retry, flat_error, gate_refusal, nothing_attempted, stale, structured_error};
 use super::guard::Guard;
 use super::settings::caller_is_cli_key;
 use crate::config::{ApiKeyConfig, AuthConfig, Config, EnvOverlay};
@@ -28,9 +30,9 @@ use crate::config_persistence::keyedit::{
     Change, FieldPath, Scalar, Segment, Template, edit_in_place,
 };
 use crate::config_reload::{
-    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, NO_AUDIT_LOG,
-    RELOAD_LOCK_WAIT, Replace, ReplaceError, ReplaceOutcome, Replaced, refuse_multi_user_flip,
-    replace_audited,
+    AuditPosture, Expected, FileRevision, GatewayAuth, IntentKind, LiveConfig, RELOAD_LOCK_WAIT,
+    Replace, ReplaceError, ReplaceOutcome, ReplaceReload, Replaced, StatusChange, Waiting,
+    replace_audited, restart_pending_guard, waiting_first_key, waiting_names,
 };
 use crate::gateway::auth::SessionMintedBy;
 use crate::gateway::router::AppState;
@@ -184,7 +186,7 @@ fn expired_by(expires_at: Option<DateTime<Utc>>) -> Result<(), Box<Response>> {
 /// What the preconditions found: the file as read, for the write.
 struct Checked {
     revision: FileRevision,
-    auth: AuthConfig,
+    config: Config,
     context: Arc<crate::config_reload::ReloadContext>,
 }
 
@@ -199,9 +201,14 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
     let (Ok(Ok(Gateway::File { revision, config })), Some(context)) =
         (read, state.meta_mcp.reload_context())
     else {
-        return Err(Box::new(fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "reload is off or gateway.yaml could not be loaded",
+        // Reload off or a gateway.yaml that cannot be loaded: nothing was
+        // attempted, so it is refused until someone acts (409).
+        return Err(Box::new(super::errors::refusal(
+            Retry::No,
+            fixed(
+                StatusCode::CONFLICT,
+                "reload is off or gateway.yaml could not be loaded",
+            ),
         )));
     };
     if config.auth.api_keys.iter().any(|k| k.name == body.name) {
@@ -212,7 +219,7 @@ async fn preconditions(state: &AppState, body: &CreateBody) -> Result<Checked, B
     }
     Ok(Checked {
         revision,
-        auth: config.auth,
+        config: *config,
         context,
     })
 }
@@ -297,30 +304,50 @@ impl NewKeyEntry {
 
 /// Why the compute refused, for the route's own answer: the writer's `String`
 /// channel is never parsed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Refusal {
     Expired,
-    Flip,
+    /// API keys already wait in the file as read; their names.
+    Waiting(Vec<String>),
     NotWritten,
 }
 
-/// What the compute decided, filled under the lock and read after the writer.
-type Outcome = Arc<Mutex<Option<Refusal>>>;
+/// What the compute decided, filled under the lock and read after the writer:
+/// its refusal, if any, and whether the file with this key is a first key
+/// the writer will hold (to tell a held write's `Unconfirmed` apart).
+#[derive(Default)]
+struct Decided {
+    refusal: Option<Refusal>,
+    held: bool,
+}
 
-/// What the compute reads under the lock besides the file's bytes.
+type Outcome = Arc<Mutex<Decided>>;
+
+/// What the compute reads under the lock besides the file's bytes: the file
+/// as the preconditions loaded it (the writer's revision check makes them
+/// the same bytes) and the environment its references resolve in.
 struct Judge {
     live: Arc<LiveConfig>,
-    file_auth: AuthConfig,
+    env: Arc<crate::config::LiveEnv>,
+    file: Config,
     outcome: Outcome,
 }
 
 impl Judge {
-    fn refuse_with(&self, why: Refusal) -> String {
-        *self
-            .outcome
+    fn cell(&self) -> std::sync::MutexGuard<'_, Decided> {
+        self.outcome
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(why);
-        format!("{why:?}")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn refuse_with(&self, why: Refusal) -> String {
+        let label = match &why {
+            Refusal::Expired => "expired",
+            Refusal::Waiting(_) => "keys_waiting",
+            Refusal::NotWritten => "not_written",
+        };
+        self.cell().refusal = Some(why);
+        label.to_owned()
     }
 
     /// The expiry against the clock as read now, under the lock.
@@ -332,18 +359,31 @@ impl Judge {
         }
     }
 
-    /// The key list with this key must not change whether the gateway is
-    /// multi-user, judged on the running config.
-    fn check_flip(&self, entry: &NewKeyEntry) -> Result<(), String> {
-        let mut wanted = self.file_auth.clone();
-        wanted.api_keys.push(entry.as_key());
-        refuse_multi_user_flip(self.live.running(), &wanted)
-            .map_err(|_| self.refuse_with(Refusal::Flip))
+    /// One wait at a time: a file in which API keys already wait takes no
+    /// other key, even after a hand edit broke it. Otherwise the writer's own
+    /// question on the file with this key decides whether it is held; the
+    /// same answer is noted here for the route.
+    fn check_waiting(&self, entry: &NewKeyEntry) -> Result<(), String> {
+        let (generation, overlay) = (self.live.generation(), self.env.get());
+        let running = self.live.running();
+        let file = waiting_first_key(running, &generation, &self.file, &overlay);
+        let waiting = waiting_names(&generation, &self.file);
+        if let Some(waiting) = restart_pending_guard(&file, waiting) {
+            return Err(self.refuse_with(Refusal::Waiting(waiting.names().to_vec())));
+        }
+        let mut candidate = self.file.clone();
+        candidate.auth.api_keys.push(entry.as_key());
+        self.cell().held = matches!(
+            waiting_first_key(running, &generation, &candidate, &overlay),
+            Waiting::Yes { keys, .. } if keys.contains(&entry.name)
+        );
+        Ok(())
     }
 }
 
 /// The writer's compute: appends the entry to `auth.api_keys` in place, after
-/// the expiry and the flip are judged on the bytes it was handed.
+/// the expiry, and any key already waiting in the file, are judged on the
+/// bytes it was handed.
 fn compute(
     entry: NewKeyEntry,
     judge: Judge,
@@ -351,8 +391,8 @@ fn compute(
     move |bytes| {
         let text = std::str::from_utf8(bytes).map_err(|_| "not utf-8".to_owned())?;
         judge.check_expiry(entry.expires_at)?;
-        judge.check_flip(&entry)?;
-        let at = judge.file_auth.api_keys.len();
+        judge.check_waiting(&entry)?;
+        let at = judge.file.auth.api_keys.len();
         edit_in_place(text, &entry.changes(at)).map_err(|_| judge.refuse_with(Refusal::NotWritten))
     }
 }
@@ -372,10 +412,9 @@ async fn write_audited(
     let log = state
         .transparency_log
         .clone()
-        // No log is refused here, as the audit's own refusal, so the
-        // posture below never sees a missing log: its `NoAuditLog` can't
-        // reach this route.
-        .ok_or_else(|| ReplaceError::AuditRefused(NO_AUDIT_LOG.to_owned()))?;
+        // No log is the gateway's posture, and nothing was started: the
+        // posture refusal, answered 409 like every route's.
+        .ok_or(ReplaceError::NoAuditLog)?;
     let auth = GatewayAuth::of(state.live_config.running().auth.enabled);
     let who = super::admin_audit::caller_who(state, guard.client.as_ref(), guard.identity.as_ref());
     let account = who.account.clone();
@@ -417,6 +456,51 @@ fn created(name: &str, once: &str, revision: &FileRevision) -> Response {
     response
 }
 
+/// The 201 of a key written now and put in force by the next start, the only
+/// route answer that speaks of a restart (the writer's question checked that
+/// a start from these bytes is not refused). Never cached; the admin record
+/// says it is pending.
+fn held(name: &str, once: &str, revision: &FileRevision) -> Response {
+    let mut response = (
+        StatusCode::CREATED,
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(json!({
+            "name": name,
+            "secret": once,
+            "revision": revision.as_str(),
+            "pending_restart": true,
+            "message": format!(
+                "The key `{name}` is created; it takes effect at the next restart of the gateway."
+            ),
+        })),
+    )
+        .into_response();
+    let detail = json!({"key": name, "action": "create", "pending_restart": true});
+    if let Some(fields) = detail.as_object() {
+        let fields = super::admin_audit::AuditDetail(fields.clone());
+        response.extensions_mut().insert(fields);
+    }
+    response
+}
+
+/// A held create whose write could not be recorded: which gateway.yaml
+/// stands is settled by the next holder of the config lock, so the answer
+/// promises neither. No secret was handed out.
+fn held_unconfirmed() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({
+            "error": "state_uncertain",
+            "recovery": "nobody received this key's value, so it cannot be used. Which \
+                gateway.yaml is in place is not known yet: save any other setting first, which \
+                settles it. If the key then shows in the list, revoke it, and only then restart. \
+                Already restarted and the web UI no longer answers? Delete that key's entry \
+                from gateway.yaml by hand, then start the gateway again.",
+        })),
+    )
+        .into_response()
+}
+
 /// The hand steps when keyedit cannot edit in place.
 fn not_written(state: &AppState) -> Response {
     let path = state
@@ -450,6 +534,7 @@ fn variant_of(error: &ReplaceError) -> &'static str {
         ReplaceError::Unsupported(_) => "unsupported",
         ReplaceError::Stage(_) => "stage",
         ReplaceError::Write(_) => "write",
+        ReplaceError::WriterRefused { .. } => "writer_refused",
         ReplaceError::ReloadRefused { .. } => "reload_refused",
         ReplaceError::RollbackFailed { .. } => "rollback_failed",
         ReplaceError::Unconfirmed { .. } => "unconfirmed",
@@ -476,39 +561,49 @@ fn refused_write(
     }
     match (refusal, written) {
         (Some(Refusal::Expired), _) => invalid_field("expires_at"),
-        (Some(Refusal::Flip), _) => fixed(StatusCode::CONFLICT, "restart_required"),
+        (Some(Refusal::Waiting(keys)), _) => super::errors::restart_pending(&keys),
         (Some(Refusal::NotWritten), _) => not_written(state),
-        (None, Err(ReplaceError::Stale { current })) => stale(&current).into_response(),
-        (None, Err(ReplaceError::Busy)) => fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        ),
-        (None, Err(ReplaceError::Gated(refusal))) => gate_refusal(refusal),
-        (None, Err(ReplaceError::ReloadRefused { .. })) => {
-            fixed(StatusCode::CONFLICT, "reload_refused")
-        }
-        (None, Err(ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog)) => {
-            audit_unavailable()
-        }
+        (None, Err(error)) => refused_by_writer(error),
+        (None, Ok(_)) => state_uncertain(),
+    }
+}
+
+/// The writer's refusal of a key create, as fixed text: a refusal that
+/// attempted nothing is 409, with `Retry-After` when it clears by itself.
+fn refused_by_writer(error: ReplaceError) -> Response {
+    let class = nothing_attempted(&error);
+    let answer = match error {
+        ReplaceError::Stale { current } => stale(&current).into_response(),
+        ReplaceError::Busy => fixed(StatusCode::CONFLICT, "the config is being written; retry"),
+        ReplaceError::Gated(refusal) => gate_refusal(refusal),
+        ReplaceError::ReloadRefused { .. } => fixed(StatusCode::CONFLICT, "reload_refused"),
+        // No log is the posture (nothing started, 409); a refused append was
+        // started (503). One body for both.
+        ReplaceError::NoAuditLog => fixed(StatusCode::CONFLICT, "audit_unavailable"),
+        ReplaceError::AuditRefused(_) => audit_unavailable(),
         // The writer's own read check: nothing was written, so these are the
         // preconditions' answers, never the guard's text.
-        (None, Err(ReplaceError::NoConfigFile)) => fixed(StatusCode::CONFLICT, "no_config_file"),
-        (None, Err(ReplaceError::ConfigRefused(_))) => fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
+        ReplaceError::NoConfigFile => fixed(StatusCode::CONFLICT, "no_config_file"),
+        ReplaceError::ConfigRefused(_) => fixed(
+            StatusCode::CONFLICT,
             "reload is off or gateway.yaml could not be loaded",
         ),
-        (
-            None,
-            Err(
-                ReplaceError::Refused(_)
-                | ReplaceError::Unsupported(_)
-                | ReplaceError::Stage(_)
-                | ReplaceError::Write(_)
-                | ReplaceError::Secrets(_),
-            ),
-        ) => fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created"),
-        (None, _) => state_uncertain(),
-    }
+        // The writer refused before the target changed and left no scratch.
+        ReplaceError::WriterRefused { .. } => {
+            fixed(StatusCode::CONFLICT, "the key was not created")
+        }
+        ReplaceError::Refused(_)
+        | ReplaceError::Unsupported(_)
+        | ReplaceError::Stage(_)
+        | ReplaceError::Write(_)
+        | ReplaceError::Secrets(_) => {
+            fixed(StatusCode::INTERNAL_SERVER_ERROR, "the key was not created")
+        }
+        ReplaceError::RollbackFailed { .. }
+        | ReplaceError::Unconfirmed { .. }
+        | ReplaceError::Failed(_) => state_uncertain(),
+    };
+    super::errors::classed(class, answer)
 }
 
 /// `POST /ui/api/keys`.
@@ -550,6 +645,17 @@ pub(super) async fn create_key(
         Ok(checked) => checked,
         Err(refused) => return *refused,
     };
+    // A name the key's own routes could not address, or one holding a
+    // control character: the one shared rule says so, before the loader is
+    // asked about anything (the loader itself keeps accepting such a name).
+    if let Some(message) = crate::config::name_refusal("API key name", &body.name) {
+        return structured_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "name_not_addressable",
+            message,
+        )
+        .into_response();
+    }
     if let Some(field) = refused_field(&body) {
         return invalid_field(field);
     }
@@ -565,14 +671,18 @@ pub(super) async fn create_key(
     let outcome = Outcome::default();
     let judge = Judge {
         live: Arc::clone(&state.live_config),
-        file_auth: checked.auth,
+        env: Arc::clone(checked.context.live_env()),
+        file: checked.config,
         outcome: Arc::clone(&outcome),
     };
+    // Every create offers to hold: the writer's own question on the file
+    // with the key decides, never this route.
     let replace = Replace {
         expected: Expected::Revision(checked.revision),
         compute: Box::new(compute(entry, judge)),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: StatusChange::HoldForRestart,
     };
     #[cfg(test)]
     if let Some(axum::Extension(hook)) = &before_lock {
@@ -585,14 +695,39 @@ pub(super) async fn create_key(
     };
     #[cfg(not(test))]
     let written = write_audited(&state, &guard, (&name, checked.context), replace).await;
-    let refusal = *outcome
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Decided {
+        refusal,
+        held: holds,
+    } = std::mem::take(
+        &mut *outcome
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    );
     match written {
         Ok(ReplaceOutcome {
             revision: Some(revision),
+            reload: ReplaceReload::Applied(_),
             ..
         }) if landed(&state, &name, &digest) => created(&name, &secret, &revision),
+        // Written for the next start: the live table is the one from before,
+        // so `landed` cannot apply.
+        Ok(ReplaceOutcome {
+            revision: Some(revision),
+            reload: ReplaceReload::HeldForRestart { .. },
+            ..
+        }) => held(&name, &secret, &revision),
+        Err(ReplaceError::Unconfirmed { .. }) if refusal.is_none() && holds => {
+            tracing::warn!(
+                variant = "unconfirmed",
+                "key create: the held write could not be recorded"
+            );
+            held_unconfirmed()
+        }
         other => refused_write(&state, refusal, other),
     }
 }
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_create_class_tests.rs"]
+mod class_tests;

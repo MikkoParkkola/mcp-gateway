@@ -299,7 +299,7 @@ impl Gateway {
         });
         let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
             .map_err(|error| refuse(raw_id.clone(), &error))?;
-        // MIK-8154 SAN.1: mapped on the caller's view (the request's memo),
+        // Mapped on the caller's view (the request's memo),
         // then sanitized unless every target is `passthrough` (option (a)).
         if sanitize == InputSanitizing::On
             && !super::super::router::sanitize_exempt(meta_mcp, request, view)
@@ -315,11 +315,11 @@ impl Gateway {
         if let Some(context) = signing_context.as_mut() {
             context
                 .restore(request)
-                .map_err(|error| refuse(None, &error))?;
+                .map_err(|error| Unprepared::SigningRefused(AnswerId::Absent, error))?;
         }
         if let Some(context) = signing_context.as_ref() {
             let early = context.refuse_malformed_nonce_early();
-            early.map_err(|error| Unprepared::MalformedNonce(AnswerId::of(request), error))?;
+            early.map_err(|error| Unprepared::SigningRefused(AnswerId::of(request), error))?;
         }
         Ok((signing_context, chain_nonce))
     }

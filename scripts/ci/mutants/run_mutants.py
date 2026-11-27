@@ -315,11 +315,12 @@ def plan() -> list[Row]:
 
 
 def fetch_release_line() -> None:
-    """Fetches the release-line tip into FETCH_HEAD. `--depth=1` only in a
-    checkout that is already shallow (a CI checkout): in a full clone it would
-    make the object store shallow, and a local run shares that store with every
-    worktree of the repository, breaking their merge-bases."""
-    depth = ["--depth=1"] if git("rev-parse", "--is-shallow-repository") == "true" else []
+    """Fetches the release-line tip into FETCH_HEAD. `--depth=1` only under
+    GitHub Actions, whose checkout is throwaway. A local run never passes it,
+    even in a clone that is already partly shallow: the object store is shared
+    with every worktree, and a depth-1 fetch there would make the tip a shallow
+    boundary and break their merge-bases."""
+    depth = ["--depth=1"] if os.environ.get("GITHUB_ACTIONS") == "true" else []
     git("fetch", "--quiet", *depth, "origin", RELEASE_LINE)
 
 
@@ -360,19 +361,22 @@ def home_check() -> list[str]:
     return errs
 
 
-FETCH_CASES = 2  # full clone, shallow clone
+FETCH_CASES = 3  # full clone, CI shallow clone, a local partly shallow clone
 
 
 def fetch_check() -> list[str]:
-    """Runs fetch_release_line in a full clone and in a shallow clone of a
-    throwaway origin: the full clone must stay full (a local run shares the
-    developer's object store), and both must resolve FETCH_HEAD."""
+    """Runs fetch_release_line in three clones of a throwaway origin: a full
+    clone with no CI marker must stay full (a local run shares the developer's
+    object store), a shallow clone with GITHUB_ACTIONS=true (a CI checkout)
+    fetches one commit, and a partly shallow clone with no CI marker must not
+    gain the new tip as a shallow boundary. All three resolve FETCH_HEAD."""
     errors = []
     with tempfile.TemporaryDirectory() as tmp:
-        origin, full, shallow = (Path(tmp, n) for n in ("origin", "full", "shallow"))
+        origin, full, shallow, partly = (Path(tmp, n) for n in ("origin", "full", "shallow", "partly"))
         # Isolated from the caller's git setup: no inherited GIT_DIR, no global
-        # or system config (signing, hooks, url rewrites).
-        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        # or system config (signing, hooks, url rewrites), and no inherited CI
+        # marker: each case sets GITHUB_ACTIONS itself (this self-test runs in CI).
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_") and k != "GITHUB_ACTIONS"}
         env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.invalid",
                    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.invalid",
                    GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
@@ -389,20 +393,30 @@ def fetch_check() -> list[str]:
             url = origin.as_uri()
             fixture_git("clone", "-q", url, str(full))
             fixture_git("clone", "-q", "--depth=1", url, str(shallow))
+            fixture_git("clone", "-q", "--depth=1", url, str(partly))
             # A new tip after cloning: a depth-1 fetch brings 1 commit of history,
-            # a plain fetch into the shallow clone would bring 2 (tip + old tip).
+            # a plain fetch into a shallow clone brings 2 (tip + old tip), the old
+            # boundary staying the clone's only shallow point.
             fixture_git("commit", "-q", "--allow-empty", "-m", "c3", cwd=origin)
+            tip = subprocess.run(["git", "rev-parse", "HEAD"], cwd=origin, env=env,
+                                 capture_output=True, text=True).stdout.strip()
         except Abort as exc:
             return [str(exc)]
         # fetch_release_line runs through the module's git(), which reads the
         # process environment: give it the same isolated one for the duration.
         here, saved = os.getcwd(), dict(os.environ)
-        os.environ.clear()
-        os.environ.update(env)
         try:
-            for clone, want, history in ((full, "false", "3"), (shallow, "true", "1")):
+            # (clone, GITHUB_ACTIONS, shallow after, FETCH_HEAD history)
+            cases = ((full, None, "false", "3"), (shallow, "true", "true", "1"), (partly, None, "true", "2"))
+            for clone, marker, want, history in cases:
+                os.environ.clear()
+                os.environ.update(env)
+                if marker is not None:
+                    os.environ["GITHUB_ACTIONS"] = marker
                 os.chdir(clone)
+                boundaries = Path(".git", "shallow")
                 try:
+                    before = sorted(boundaries.read_text(encoding="utf-8").split()) if boundaries.exists() else []
                     fetch_release_line()
                     got = git("rev-parse", "--is-shallow-repository")
                     if got != want:
@@ -410,6 +424,12 @@ def fetch_check() -> list[str]:
                     got = git("rev-list", "--count", "FETCH_HEAD")
                     if got != history:
                         errors.append(f"{clone.name} clone: FETCH_HEAD history {got} commit(s), expected {history}")
+                    marks = sorted(boundaries.read_text(encoding="utf-8").split()) if boundaries.exists() else []
+                    if marker is None and tip in marks:
+                        errors.append(f"{clone.name} clone: a local fetch made the tip a shallow boundary")
+                    # A local fetch keeps the shallow points it found, no more and no fewer.
+                    if marker is None and marks != before:
+                        errors.append(f"{clone.name} clone: a local fetch changed the shallow boundaries {before} -> {marks}")
                 except Abort as exc:
                     errors.append(f"{clone.name} clone: {exc}")
                 finally:

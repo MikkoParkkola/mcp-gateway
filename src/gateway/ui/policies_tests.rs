@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::guard::Guard;
 use super::policies::read_policies;
-use super::policies_test_support::read_model;
+use super::policies_test_support::{read_model, reloaded, setting_obj, switch_obj};
 use crate::config::Config;
 use crate::gateway::auth::AuthenticatedClient;
 use crate::gateway::router::AppState;
@@ -56,7 +56,8 @@ fn client(admin: bool) -> AuthenticatedClient {
 
 async fn get(state: &Arc<AppState>, caller: Option<AuthenticatedClient>) -> (StatusCode, Value) {
     let guard = Guard::for_route(routes::UI_POLICIES, &Method::GET, caller);
-    let response = read_policies(State(Arc::clone(state)), guard).await;
+    let pinned = axum::extract::Extension(state.live_config.generation());
+    let response = read_policies(State(Arc::clone(state)), pinned, guard).await;
     let status = response.status();
     let bytes = to_bytes(response.into_body(), 1 << 20).await.expect("body");
     (
@@ -138,9 +139,9 @@ fn r1a_the_tool_policy_and_its_paths() {
     config.security.tool_policy.default_action = PolicyAction::Deny;
     let model = read_model(&config);
     let policy = &model["tool_policy"];
-    assert_eq!(policy["enabled"], true);
-    assert_eq!(policy["default_action"], "deny");
-    assert_eq!(policy["use_default_deny"], true);
+    assert_eq!(policy["enabled"]["on"], true);
+    assert_eq!(policy["default_action"]["enforced"], "deny");
+    assert_eq!(policy["use_default_deny"]["on"], true);
     let names: Vec<&str> = policy["default_denies"]
         .as_array()
         .expect("default denies")
@@ -398,7 +399,7 @@ fn r1g_inactive_default_denies_and_a_disabled_policy() {
     }
     config.security.tool_policy.enabled = false;
     let model = read_model(&config);
-    assert_eq!(model["tool_policy"]["enabled"], false);
+    assert_eq!(model["tool_policy"]["enabled"]["on"], false);
     assert_eq!(model["tool_policy"]["deny"][0]["entry"], "delete_*");
 }
 
@@ -453,7 +454,7 @@ fn r1k_identical_allows_are_both_named() {
 #[test]
 fn e0_an_empty_config_answers_with_the_defaults() {
     let model = read_model(&Config::default());
-    assert_eq!(model["tool_policy"]["enabled"], true);
+    assert_eq!(model["tool_policy"]["enabled"]["on"], true);
     assert_eq!(model["tool_policy"]["allow"], json!([]));
     assert_eq!(model["tool_policy"]["deny"], json!([]));
     #[cfg(feature = "firewall")]
@@ -509,4 +510,123 @@ fn e2_a_build_without_the_firewall_has_no_part_two_firewall_sections() {
         assert_eq!(model.get(section), Some(&Value::Null), "{section}");
     }
     assert!(model["tool_limits"].is_array(), "{model}");
+}
+
+/// A config whose tool policy has the three saveable values given.
+fn policy_values(enabled: bool, action: PolicyAction, use_default_deny: bool) -> Config {
+    let mut config = Config::default();
+    let policy = &mut config.security.tool_policy;
+    policy.enabled = enabled;
+    policy.default_action = action;
+    policy.use_default_deny = use_default_deny;
+    config
+}
+
+/// The tool policy's three saveable values as the read must serve them, all
+/// writable.
+fn assert_policy_values(model: &Value, enabled: bool, action: &str, use_default_deny: bool) {
+    let policy = &model["tool_policy"];
+    let at = |field: &str| format!("security.tool_policy.{field}");
+    assert_eq!(
+        policy["enabled"],
+        switch_obj(&at("enabled"), enabled, enabled, false),
+        "{model}"
+    );
+    assert_eq!(
+        policy["use_default_deny"],
+        switch_obj(
+            &at("use_default_deny"),
+            use_default_deny,
+            use_default_deny,
+            false
+        ),
+        "{model}"
+    );
+    assert_eq!(
+        policy["default_action"],
+        setting_obj(&at("default_action"), &json!(action), &json!(action), false),
+        "{model}"
+    );
+}
+
+// rc5: the tool policy's three values are setting objects with their save
+// paths. The two switches always differ, so one wired to the other fails; the
+// second config flips every value, and a reload to it shows it enforced.
+#[test]
+fn rc5_the_tool_policy_as_settings() {
+    let first = policy_values(true, PolicyAction::Deny, false);
+    let second = policy_values(false, PolicyAction::Allow, true);
+    assert_policy_values(&read_model(&first), true, "deny", false);
+    assert_policy_values(&read_model(&second), false, "allow", true);
+    assert_policy_values(&reloaded(&first, &[&second]), false, "allow", true);
+
+    let model = read_model(&first);
+    let mut keys: Vec<&str> = model["tool_policy"]
+        .as_object()
+        .map(|o| o.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "allow",
+            "default_action",
+            "default_denies",
+            "deny",
+            "enabled",
+            "use_default_deny",
+        ],
+        "{model}"
+    );
+}
+
+// rc6: without the firewall the read still serves the request checks and the
+// tool policy as writable settings, and the firewall sections are null.
+#[cfg(not(feature = "firewall"))]
+#[test]
+fn rc6_built_without_the_firewall() {
+    let mut config = policy_values(true, PolicyAction::Deny, false);
+    config.security.sanitize_input = true;
+    config.security.ssrf_protection = false;
+    let model = read_model(&config);
+    let mut keys: Vec<&str> = model
+        .as_object()
+        .map(|o| o.keys().map(String::as_str).collect())
+        .unwrap_or_default();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "credentials",
+            "finding_rules",
+            "guards",
+            "relay",
+            "request_checks",
+            "scan_types",
+            "tool_limits",
+            "tool_policy",
+        ],
+        "{model}"
+    );
+    for section in [
+        "finding_rules",
+        "scan_types",
+        "guards",
+        "credentials",
+        "relay",
+    ] {
+        assert_eq!(model[section], Value::Null, "{section}: {model}");
+    }
+    let checks = &model["request_checks"];
+    assert_eq!(
+        checks["sanitize_input"],
+        switch_obj("security.sanitize_input", true, true, false),
+        "{model}"
+    );
+    assert_eq!(
+        checks["ssrf_protection"],
+        switch_obj("security.ssrf_protection", false, false, false),
+        "{model}"
+    );
+    assert_policy_values(&model, true, "deny", false);
 }

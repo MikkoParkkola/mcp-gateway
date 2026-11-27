@@ -6,14 +6,14 @@ use std::{path::Path, process::ExitCode};
 
 use crate::{
     cli::{Cli, Command, SetupCommand, SkillsCommand},
-    commands,
+    commands::{self, CliExit, fail},
     config::{Config, EnvOverlay},
     gateway::Gateway,
     setup_tracing_flush,
     trust::run_provenance_command,
     validator::ValidateConfig,
 };
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 #[path = "main_runtime.rs"]
 mod runtime;
@@ -42,8 +42,11 @@ pub fn run(args: Cli) -> ExitCode {
     let flush_logs = match setup_tracing_flush(&args.log_level, args.log_format.as_deref()) {
         Ok(flush) => flush,
         Err(e) => {
-            eprintln!("Failed to setup tracing: {e}");
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &format!("logging could not start: {e}"),
+                "Check the --log-level and --log-format values.",
+            );
         }
     };
     // The boot's retirement plan cell: an HTTP stop stores its plan here, and
@@ -115,30 +118,21 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         // The endpoint it calls exists only with the web UI; say so rather
         // than let the command fail with a bare 404.
         #[cfg(not(feature = "webui"))]
-        Some(Command::DashboardLink(_)) => {
-            eprintln!("dashboard-link: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
-        }
+        Some(Command::DashboardLink(_)) => without_webui("dashboard-link"),
         #[cfg(feature = "webui")]
         Some(Command::Events(args)) => {
             let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
             commands::run_events_command(args, load, port_override, host_override.as_deref()).await
         }
         #[cfg(not(feature = "webui"))]
-        Some(Command::Events(_)) => {
-            eprintln!("events: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
-        }
+        Some(Command::Events(_)) => without_webui("events"),
         #[cfg(feature = "webui")]
         Some(Command::Api(args)) => {
             let load = || Config::load(config_path.as_deref()).map_err(|e| e.to_string());
             commands::run_api_command(args, load, port_override, host_override.as_deref()).await
         }
         #[cfg(not(feature = "webui"))]
-        Some(Command::Api(_)) => {
-            eprintln!("api: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
-        }
+        Some(Command::Api(_)) => without_webui("api"),
         Some(Command::Validate {
             paths,
             format,
@@ -273,8 +267,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
                     config,
                     force,
                 );
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("add")
             }
         }
         Some(Command::Remove { name, force }) => {
@@ -290,8 +283,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             #[cfg(not(feature = "webui"))]
             {
                 let _ = (name, config, force);
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("remove")
             }
         }
         Some(Command::List { json, available }) => {
@@ -307,8 +299,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             #[cfg(not(feature = "webui"))]
             {
                 let _ = (json, available, config);
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("list")
             }
         }
         Some(Command::Get { name, json }) => {
@@ -324,8 +315,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             #[cfg(not(feature = "webui"))]
             {
                 let _ = (name, config, json);
-                eprintln!("Error: add/remove commands require the 'webui' feature");
-                ExitCode::FAILURE
+                without_webui("get")
             }
         }
         Some(Command::Doctor {
@@ -371,8 +361,7 @@ async fn dispatch(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
         // The route it calls exists only with the web UI.
         #[cfg(not(feature = "webui"))]
         Some(Command::Audit(mcp_gateway::cli::AuditCommand::LookupEmail(_))) => {
-            eprintln!("audit lookup-email: this build has no web UI (cargo feature `webui`)");
-            ExitCode::FAILURE
+            without_webui("audit lookup-email")
         }
         Some(Command::Audit(audit_cmd)) => {
             commands::run_audit_command(audit_cmd, cli.config.as_deref())
@@ -416,16 +405,21 @@ fn run_runtime_command(cmd: crate::cli::RuntimeCommand) -> ExitCode {
                             println!("{json}");
                             ExitCode::SUCCESS
                         }
-                        Err(e) => {
-                            eprintln!("error: failed to serialize bundle: {e}");
-                            ExitCode::FAILURE
-                        }
+                        Err(e) => fail(
+                            CliExit::LocalFailure,
+                            &format!("the compiled bundle could not be written as JSON: {e}"),
+                            "Report this as a bug, with the descriptor that produced it.",
+                        ),
                     }
                 }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    ExitCode::FAILURE
-                }
+                Err(e) => fail(
+                    CliExit::LocalFailure,
+                    &e.to_string(),
+                    &format!(
+                        "Check that {} exists, that you can read it, and that it is a valid descriptor.",
+                        descriptor.display()
+                    ),
+                ),
             }
         }
     }
@@ -463,6 +457,16 @@ fn resolve_stats_url(
         }
         commands::default_stats_url(&config.server.host, config.server.port)
     })
+}
+
+/// A command this build leaves out because it was compiled without the web UI: `command` is its path as typed.
+#[cfg(not(feature = "webui"))]
+fn without_webui(command: &str) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!("'mcp-gateway {command}' is not in this build (cargo feature `webui` is off)."),
+        "Install a build with the webui feature to use it.",
+    )
 }
 
 /// Apply CLI overrides (port, host, measurement window, meta-mcp) to `config`.
@@ -523,8 +527,9 @@ fn cli_config_or_default(global: Option<&Path>) -> std::path::PathBuf {
 fn serve_config_path(cli: &Cli) -> Option<std::path::PathBuf> {
     match cli.config.as_deref() {
         Some(p) if !p.exists() => {
-            eprintln!(
-                "Warning: config file {} not found; continuing over stdio without it \
+            warn!(
+                target: "mcp_gateway",
+                "config file {} not found; continuing over stdio without it \
                  (fallback locations, env vars, then defaults)",
                 p.display()
             );
@@ -534,9 +539,21 @@ fn serve_config_path(cli: &Cli) -> Option<std::path::PathBuf> {
     }
 }
 
+/// A fatal start or run error of `serve`. It is logged like every gateway error; when the log's filter drops that
+/// event (`--log-level off`, `RUST_LOG=off`, or a directive that leaves the gateway's errors out) it is also printed
+/// straight to stderr, escaped by the log's own rule, so a failed start is never silent and text quoted from
+/// gateway.yaml never starts a line of its own. The probe names the same target, level and field as the event, so a
+/// field-keyed directive answers it exactly as it answers the event.
+fn fatal(message: &str) {
+    error!(target: "mcp_gateway", "{message}");
+    if !tracing::event_enabled!(target: "mcp_gateway", tracing::Level::ERROR, message) {
+        eprintln!("{}", crate::log_escape::escaped(message));
+    }
+}
+
 async fn run_stdio_server(cli: Cli) -> ExitCode {
     if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
-        eprintln!("Warning: upgrade check failed: {e}");
+        warn!(target: "mcp_gateway", "upgrade check failed: {e}");
     }
 
     let config_path = serve_config_path(&cli);
@@ -550,13 +567,13 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
-                eprintln!("Failed to apply configuration overrides: {e}");
+                fatal(&format!("Failed to apply configuration overrides: {e}"));
                 return ExitCode::FAILURE;
             }
             (config, env)
         }
         Err(e) => {
-            eprintln!("Failed to load configuration: {e}");
+            fatal(&format!("Failed to load configuration: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -569,7 +586,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     let gateway = match Gateway::new_evaluated(config, env, config_path).await {
         Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
-            eprintln!("Failed to create gateway: {e}");
+            fatal(&format!("Failed to create gateway: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -578,7 +595,7 @@ async fn run_stdio_server(cli: Cli) -> ExitCode {
     // gained the identity-propagation field; boxing keeps it off the
     // stack and satisfies clippy::large_futures.
     if let Err(e) = Box::pin(gateway.run_stdio()).await {
-        eprintln!("stdio gateway error: {e}");
+        fatal(&format!("stdio gateway error: {e}"));
         return ExitCode::FAILURE;
     }
 
@@ -594,7 +611,7 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     // Run post-upgrade migrations before anything else.  Non-fatal: a stamp
     // write failure must not prevent the gateway from starting.
     if let Err(e) = commands::check_upgrade(&commands::upgrade_data_dir()) {
-        eprintln!("Warning: upgrade check failed: {e}");
+        warn!(target: "mcp_gateway", "upgrade check failed: {e}");
     }
 
     // HTTP serve stays fail-loud: an explicit --config that cannot be loaded
@@ -609,13 +626,13 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
             let mut config = evaluated.config;
             if let Err(e) = apply_cli_overrides_and_validate(&mut config, &cli, &evaluated.overlay)
             {
-                error!(target: "mcp_gateway", "Failed to apply configuration overrides: {e}");
+                fatal(&format!("Failed to apply configuration overrides: {e}"));
                 return ExitCode::FAILURE;
             }
             (config, env)
         }
         Err(e) => {
-            error!(target: "mcp_gateway", "Failed to load configuration: {e}");
+            fatal(&format!("Failed to load configuration: {e}"));
             return ExitCode::FAILURE;
         }
     };
@@ -635,14 +652,14 @@ async fn run_server(cli: Cli, plan: crate::retire::RetireCell) -> ExitCode {
     let mut gateway = match Gateway::new_evaluated(config, env, config_path).await {
         Ok(g) => discovered_config::watch(g, discovered),
         Err(e) => {
-            error!(target: "mcp_gateway", "Failed to create gateway: {e}");
+            fatal(&format!("Failed to create gateway: {e}"));
             return ExitCode::FAILURE;
         }
     };
     gateway.set_retire_cell(plan);
 
     if let Err(e) = gateway.run().await {
-        error!(target: "mcp_gateway", "Gateway error: {e}");
+        fatal(&format!("Gateway error: {e}"));
         return ExitCode::FAILURE;
     }
 

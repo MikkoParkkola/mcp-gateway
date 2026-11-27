@@ -22,21 +22,28 @@ pub mod admin_audit;
 pub mod backend_ops;
 pub mod backends;
 pub mod capabilities;
+mod cli_login;
 /// Every web UI change has a CLI form; CLI commands and config writes are
 /// classified for remote use.
 #[cfg(test)]
 pub(crate) mod cli_parity_tests;
 mod config_file;
+mod config_history;
 /// Every UI API answer type is classified for the api command.
 #[cfg(tp3)]
 #[cfg(test)]
 mod content_types_tests;
 pub mod control_plane;
+#[cfg(feature = "cost-governance")]
+mod costs_standing;
 mod dashboard;
 pub(in crate::gateway) mod decisions;
 mod discovery;
 mod errors;
+/// The `OpenAPI` import's refusal sentences, for `gateway::test_helpers`.
+pub(in crate::gateway) use errors::{CAPABILITIES_OFF, DIGEST_REQUIRED, DOCUMENT_CHANGED};
 mod events;
+mod gateway_health;
 mod gateway_status;
 mod gateway_upgrade;
 mod guard;
@@ -52,6 +59,9 @@ mod policies_part2;
 #[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_part2_tests;
+#[cfg(tp3)]
+#[cfg(all(test, feature = "firewall"))]
+mod policies_read_only_tests;
 #[cfg(tp3)]
 #[cfg(all(test, feature = "firewall"))]
 mod policies_relay_tests;
@@ -83,6 +93,7 @@ mod restart_tests;
 mod secret_slots;
 pub(crate) mod session;
 mod settings;
+mod settings_log_check;
 mod settings_unused;
 mod shell;
 mod status;
@@ -161,6 +172,10 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .route(routes::UI_REFUSALS, get(refusals::refusals))
         .route(routes::UI_GATEWAY, get(gateway_status::gateway_status))
         .route(
+            routes::UI_GATEWAY_HEALTH,
+            get(gateway_health::gateway_health),
+        )
+        .route(
             routes::UI_KEYS,
             get(keys::keys).post(keys_create::create_key),
         )
@@ -180,6 +195,7 @@ pub fn api_router() -> Router<Arc<AppState>> {
         .merge(decisions::decisions_router())
         .merge(policies::policies_router())
         .merge(history::history_router())
+        .merge(config_history::config_history_router())
         .merge(restart::restart_router())
         .merge(stream::stream_router());
 
@@ -621,20 +637,26 @@ async fn config(
         .collect();
 
     // Each backend secret slot that holds a reference, as written, read from
-    // the literal file: never a resolved value (ADR-028).
-    let secret_references = match state.config_path.clone() {
+    // the literal file: never a resolved value (ADR-028). The flat map and the
+    // records come from one load; either way out, both are empty, never absent.
+    let (secret_references, secret_reference_records) = match state.config_path.clone() {
         Some(path) => tokio::task::spawn_blocking(move || {
             crate::config::Config::load_literal(Some(&path)).map_or_else(
                 |e| {
                     tracing::warn!(error = %e, "secret references hidden: config did not load");
-                    std::collections::BTreeMap::new()
+                    Default::default()
                 },
-                |literal| crate::config::display::backend_secret_references(&literal),
+                |literal| {
+                    (
+                        crate::config::display::backend_secret_references(&literal),
+                        crate::config::display::backend_secret_reference_records(&literal),
+                    )
+                },
             )
         })
         .await
         .unwrap_or_default(),
-        None => std::collections::BTreeMap::new(),
+        None => Default::default(),
     };
 
     Json(json!({
@@ -646,6 +668,7 @@ async fn config(
         "environment": generation.environment(),
         "servers": servers,
         "secret_references": secret_references,
+        "secret_reference_records": secret_reference_records,
     }))
     .into_response()
 }
@@ -657,11 +680,7 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
     }
 
     let Some(reload_context) = state.meta_mcp.reload_context() else {
-        return flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Config reload is not enabled on this gateway",
-        )
-        .into_response();
+        return self::errors::no_reload_write().into_response();
     };
 
     let who = admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
@@ -714,21 +733,33 @@ async fn reload(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoRe
 /// `GET /ui/api/costs` — aggregate cost data for the web UI (admin only).
 ///
 /// Returns aggregate totals, per-API-key breakdown, and per-session breakdown.
+/// Each key row also says where the key stands against its own daily limit,
+/// read under this request's generation, and the body when limits reset.
 /// Requires admin access (returns 401 for unauthenticated public requests).
 #[cfg(feature = "cost-governance")]
-async fn costs(State(state): State<Arc<AppState>>, guard: Guard) -> impl IntoResponse {
+async fn costs(
+    State(state): State<Arc<AppState>>,
+    Extension(generation): Extension<Arc<crate::config_reload::Generation>>,
+    guard: Guard,
+) -> impl IntoResponse {
     if let Err(refused) = guard.admit() {
         return refused.into_response();
     }
     let tracker = state.meta_mcp.cost_tracker();
-    Json(serde_json::json!({
+    let mut body = serde_json::json!({
         "aggregate": serde_json::to_value(tracker.aggregate()).unwrap_or(serde_json::Value::Null),
         "by_key":     serde_json::to_value(tracker.all_keys()).unwrap_or(serde_json::json!([])),
         "by_session": serde_json::to_value(tracker.all_sessions_fingerprinted()).unwrap_or_default(),
         // The zone daily budgets count days in (ADR-026).
         "day_zone": state.meta_mcp.day_zone(),
-    }))
-    .into_response()
+    });
+    let read = state
+        .meta_mcp
+        .budget_enforcer
+        .as_deref()
+        .map(|enforcer| (enforcer, enforcer.governance(Some(&generation))));
+    costs_standing::add_members(&mut body, &tracker, read, crate::clock::unix_secs().ok());
+    Json(body).into_response()
 }
 
 // ── Private helpers ──────────────────────────────────────────────────
@@ -849,6 +880,11 @@ mod keys_create_refusal_tests;
 
 #[cfg(tp3)]
 #[cfg(test)]
+#[path = "key_name_tests.rs"]
+mod key_name_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
 #[path = "keys_create_cli_tests.rs"]
 mod keys_create_cli_tests;
 
@@ -856,6 +892,11 @@ mod keys_create_cli_tests;
 #[cfg(test)]
 #[path = "keys_create_writer_tests.rs"]
 mod keys_create_writer_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_first_key_tests.rs"]
+mod keys_first_key_tests;
 
 #[cfg(tp3)]
 #[cfg(test)]

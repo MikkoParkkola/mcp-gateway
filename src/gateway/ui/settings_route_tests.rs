@@ -1,10 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! Route rows assert the contract, never the temporary 501 answer.
-use super::{SettingsStoreForTest, restart_fields, test_support::*};
+use super::{
+    NOT_AUDITED, OUTSIDE_CHANGE_APPLIED, SettingsStoreForTest, restart_fields, test_support::*,
+};
 use crate::config_reload::FileRevision;
+use crate::gateway::ui::admin_audit::AuditDetail;
 use axum::http::StatusCode;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
 /// S1: red oracle is the exact zero-context budget diff and original revision.
@@ -72,7 +75,8 @@ async fn s4_budget_save() {
         body,
         json!({"revision": FileRevision::of(next.as_bytes()).as_str(),
         "changed":true, "reload":{"changes":"profiles/meta config changed","restart_required":false},
-        "restart_required":[], "comments":"kept"})
+        "restart_required":[], "comments":"kept",
+        "notices":[{"code":NOT_AUDITED.0,"message":NOT_AUDITED.1}]})
     );
     assert_eq!(route.text(), next);
     let running = serde_json::to_value(route.ctx.live_config.get().as_ref()).expect("config JSON");
@@ -138,7 +142,8 @@ async fn s7_restart_parent() {
         "reload":{"changes":"profiles/meta config changed — NOT YET APPLIED, restart required for: auth",
             "restart_required":true,"restart_reason":"config changed in fields that only a restart applies",
             "pending_restart_fields":["auth"]},
-        "restart_required":["auth.enabled"], "comments":"kept"})
+        "restart_required":["auth.enabled"], "comments":"kept",
+        "notices":[{"code":NOT_AUDITED.0,"message":NOT_AUDITED.1}]})
     );
     assert_eq!(
         crate::config_reload::ui_fields::FieldId::of("auth.enabled")
@@ -377,7 +382,7 @@ async fn s14_audit_required() {
         route
             .save(json!([set("environment", &json!("prod"))]))
             .await,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::CONFLICT,
         "audit_log_required",
     );
     assert_eq!(
@@ -496,4 +501,136 @@ async fn s17_invalid_bodies() {
         ),
         json!({"error":"invalid_body"})
     );
+}
+
+/// One save of `environment = value`: its status, its answer, and the
+/// detail its admin record carries.
+async fn save_env(route: &Route, value: &str) -> (StatusCode, Value, Map<String, Value>) {
+    let body = route.saved_body(&json!([set("environment", &json!(value))]));
+    let response = route.response(true, &body.to_string(), client(true)).await;
+    let detail = response.extensions().get::<AuditDetail>().cloned();
+    let AuditDetail(detail) = detail.expect("every save answer carries its detail");
+    let (status, answer) = decode(response).await;
+    (status, answer, detail)
+}
+
+/// The codes in the answer's `notices`, in order.
+fn codes(answer: &Value) -> Vec<String> {
+    let notices = answer["notices"].as_array().expect("a notices array");
+    notices
+        .iter()
+        .map(|notice| notice["code"].as_str().expect("a code").to_owned())
+        .collect()
+}
+
+/// The hash of the one save intent in the route's log.
+fn intent_hash(route: &Route) -> Value {
+    let log = std::fs::read_to_string(route.dir.path().join("audit.jsonl")).expect("the log");
+    let intents: Vec<Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["event"] == "config_save_intent")
+        .collect();
+    assert_eq!(intents.len(), 1, "one save intent:\n{log}");
+    intents[0]["entry_hash"].clone()
+}
+
+#[test]
+fn the_notice_codes_are_their_names() {
+    assert_eq!(OUTSIDE_CHANGE_APPLIED.0, "OUTSIDE_CHANGE_APPLIED");
+    assert_eq!(NOT_AUDITED.0, "NOT_AUDITED");
+}
+
+/// W3 (a): an outside edit, then a save of the value the file already holds.
+/// No byte changed, the reload took the edit up: applied, and said once.
+#[tokio::test]
+async fn w3_an_outside_edit_the_save_took_up_is_said() {
+    let mut route = Route::new(BASE).await;
+    route.audit();
+    route.write(&BASE.replace("\"dev\"", "\"staging\""));
+    let (status, answer, detail) = save_env(&route, "staging").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["changed"], false, "{answer}");
+    assert_eq!(codes(&answer), [OUTSIDE_CHANGE_APPLIED.0], "{answer}");
+    assert!(answer.get("reload").is_some(), "{answer}");
+    assert_eq!(detail["save_outcome"], "applied", "{detail:?}");
+}
+
+/// W3 (b): the same with no audit log: both notices, neither overwriting.
+#[tokio::test]
+async fn w3_both_notices_stand_on_one_save() {
+    let route = Route::new(BASE).await;
+    route.write(&BASE.replace("\"dev\"", "\"staging\""));
+    let (status, answer, _) = save_env(&route, "staging").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    // A set (test plan W3(b)): the spec fixes which notices, not their order.
+    let mut got = codes(&answer);
+    got.sort_unstable();
+    let mut want = [OUTSIDE_CHANGE_APPLIED.0, NOT_AUDITED.0];
+    want.sort_unstable();
+    assert_eq!(got, want, "{answer}");
+}
+
+/// W3 (c): a restart-only outside edit (the port) counts as applied; the
+/// reload outcome says it waits for a restart.
+#[tokio::test]
+async fn w3_a_restart_only_outside_edit_is_said_and_waits() {
+    let mut route = Route::new(BASE).await;
+    route.audit();
+    route.write(&format!("{BASE}server:\n  port: 39401\n"));
+    let (status, answer, detail) = save_env(&route, "dev").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(codes(&answer), [OUTSIDE_CHANGE_APPLIED.0], "{answer}");
+    assert_eq!(answer["reload"]["restart_required"], true, "{answer}");
+    let reason = &answer["reload"]["restart_reason"];
+    assert_eq!(reason, "server_address_changed", "{answer}");
+    assert_eq!(detail["save_outcome"], "applied", "{detail:?}");
+}
+
+/// W3 (d), the control: no outside edit, the same no-op save. Unchanged,
+/// no notice, and the unchanged save's intent id is on its record.
+#[tokio::test]
+async fn w3_a_no_op_save_with_no_outside_edit_is_unchanged() {
+    let mut route = Route::new(BASE).await;
+    route.audit();
+    let (status, answer, detail) = save_env(&route, "dev").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(codes(&answer), Vec::<String>::new(), "{answer}");
+    assert_eq!(detail["save_outcome"], "unchanged", "{detail:?}");
+    assert_eq!(detail["intent_id"], intent_hash(&route), "{detail:?}");
+}
+
+/// W2 (j): auth off and no audit log: the save goes ahead, its record's
+/// detail says applied with no intent id, and its answer says it is not
+/// audited.
+#[tokio::test]
+async fn w2_an_unaudited_save_says_not_audited() {
+    let route = Route::new(BASE).await;
+    let (status, answer, detail) = save_env(&route, "prod").await;
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(detail["save_outcome"], "applied", "{detail:?}");
+    assert!(detail.get("intent_id").is_none(), "{detail:?}");
+    assert_eq!(codes(&answer), [NOT_AUDITED.0], "{answer}");
+}
+
+/// Review r1 (gpt): through the routes, a gateway.yaml the guarded read
+/// refuses answers the diff (a read) 503 with no `Retry-After`, and the save
+/// (nothing attempted) 409 with the same body.
+#[cfg(unix)]
+#[tokio::test]
+async fn an_unreadable_file_is_503_on_the_diff_and_409_on_the_save() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let route = Route::new(BASE).await;
+    std::fs::set_permissions(route.path(), std::fs::Permissions::from_mode(0o664))
+        .expect("group-writable");
+    let fields = json!([set("environment", &json!("prod"))]);
+    let body = json!({"fields": fields}).to_string();
+    let read = route.response(false, &body, client(true)).await;
+    assert_eq!(read.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(!read.headers().contains_key(axum::http::header::RETRY_AFTER));
+    let (_, read) = decode(read).await;
+    let (status, saved) = route.save(fields).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{saved}");
+    assert_eq!(read, json!({"error": "gateway.yaml could not be loaded"}));
+    assert_eq!(saved, read);
 }

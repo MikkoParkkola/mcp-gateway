@@ -105,6 +105,8 @@ impl From<MutateError> for ConfigWriteError {
 ///
 /// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
 /// [`ConfigWriteError::Failed`] on serialization, write, rename, or reload failure.
+/// With a reload context, also `Failed`, with nothing written, while the
+/// restart gate is closed (see [`ReloadContext::write_and_reload_outcome`]).
 ///
 /// Deprecated: the file is replaced from the caller's snapshot with no
 /// concurrency check, so a change made after the snapshot is lost. Use
@@ -130,6 +132,8 @@ pub async fn write_config_and_reload(
 ///
 /// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
 /// [`ConfigWriteError::Failed`] on serialization, write, rename, or reload failure.
+/// With a reload context, also `Failed`, with nothing written, while the
+/// restart gate is closed (see [`ReloadContext::write_and_reload_outcome`]).
 ///
 /// Deprecated: the file is replaced from the caller's snapshot with no
 /// concurrency check, so a change made after the snapshot is lost. Use
@@ -185,8 +189,9 @@ pub enum ConfigMutation<T, E> {
 /// # Errors
 ///
 /// [`ConfigWriteError::Busy`] when a reload held the lock too long, and
-/// [`ConfigWriteError::Failed`] on load, validation, write, rename, or reload failure.
-/// A refusal from `mutate` is not an error; it comes back as
+/// [`ConfigWriteError::Failed`] on load, validation, write, rename, or reload failure,
+/// and, with a reload context, while the restart gate is closed (see
+/// [`ReloadContext::mutate_and_reload_outcome`]). A refusal from `mutate` is not an error; it comes back as
 /// [`ConfigMutation::Rejected`] with the file untouched.
 pub async fn mutate_config_and_reload<T, E, F>(
     path: &Path,

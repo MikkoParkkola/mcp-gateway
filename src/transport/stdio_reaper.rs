@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::watch;
 use tracing::error;
 
-use super::child_tree::{ChildTree, Ending, NESTED_TERM_NEED, REAP_DEADLINE, Reap};
+use super::child_tree::{ChildTree, Ending, REAP_DEADLINE, Reap};
 
 /// What a stop leaves a backend's tree after its stdin closes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,9 +36,6 @@ pub(crate) const KILL_RESERVE: Duration = Duration::from_secs(REAP_DEADLINE.as_s
 /// After a hurry, backends get SIGTERM about 100 ms before their kill, so a
 /// nested gateway still sees SIGTERM and can hurry its own backends.
 pub(crate) const HURRY_WINDOW: Duration = Duration::from_millis(300);
-
-/// A close with no stop deadline from its caller gets this budget.
-const DEFAULT_STOP_BUDGET: Duration = Duration::from_secs(10);
 
 /// A wait shorter than this is skipped rather than sent for nothing.
 pub(super) const MIN_PHASE: Duration = Duration::from_millis(100);
@@ -76,7 +73,18 @@ pub(crate) struct StopDeadline {
     /// Every graceful handover under this deadline, so the stop can wait for
     /// their kills before it returns; finished ones are pruned on each add.
     handed: parking_lot::Mutex<Vec<watch::Receiver<Reaped>>>,
+    participant: participant::Participant,
 }
+
+#[path = "stdio_reaper_participant.rs"]
+mod participant;
+
+#[path = "stdio_reaper_plan.rs"]
+mod plan;
+#[cfg(test)]
+use plan::DEFAULT_STOP_BUDGET;
+pub(super) use plan::graceful_ending;
+use plan::stop_budget;
 
 /// The fixed origin [`StopDeadline`] counts from.
 static STOP_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
@@ -87,6 +95,7 @@ impl Default for StopDeadline {
             hurried: std::sync::atomic::AtomicBool::new(false),
             cut: parking_lot::Mutex::new((u64::MAX, u64::MAX)),
             handed: parking_lot::Mutex::default(),
+            participant: participant::Participant::default(),
         }
     }
 }
@@ -143,6 +152,20 @@ impl StopDeadline {
         self.handed.lock().len()
     }
 
+    /// Whether every tracked handover's tree has been reaped with an exit
+    /// status: after [`Self::wait_handed`] up to a deadline, the kill landed
+    /// and the leader was collected before it. An unreaped give-up
+    /// (`Done(None)`) does not count, and neither does an empty list: no
+    /// handover is no evidence of a reap.
+    #[cfg(all(test, unix))]
+    pub(crate) fn handed_all_reaped(&self) -> bool {
+        let handed = self.handed.lock();
+        !handed.is_empty()
+            && handed
+                .iter()
+                .all(|receiver| matches!(*receiver.borrow(), Reaped::Done(Some(_))))
+    }
+
     /// Wait, up to `deadline`, for every tracked handover to be ended: a tree
     /// an earlier close handed over may still be in its waits, and its kill
     /// must land before the gateway returns.
@@ -190,56 +213,6 @@ impl LiveTree for super::StdioTransport {
 /// The caller's stop deadline, when this runs inside [`within_stop_deadline`].
 pub(crate) fn stop_deadline() -> Option<tokio::time::Instant> {
     STOP_DEADLINE.try_with(|deadline| *deadline).ok()
-}
-
-/// The graceful ending that fits `budget`: [`KILL_RESERVE`] is kept for the
-/// kill, a third of the rest goes to the wait after SIGTERM and the remainder
-/// to the wait after EOF. Stdin that could not be closed (a writer holds it)
-/// gets no EOF wait, since the child never saw EOF. Windows has no SIGTERM.
-/// A hurried deadline keeps at least `MIN_PHASE` for SIGTERM when it fits. An
-/// unhurried stop keeps at least `NESTED_TERM_NEED` for it (capped so EOF keeps
-/// `MIN_PHASE`): a nested gateway only learns to hurry at the SIGTERM.
-pub(super) fn graceful_ending(
-    budget: Duration,
-    stdin_closed: bool,
-    deadline: Option<&StopDeadline>,
-) -> Ending {
-    let waits = budget.saturating_sub(KILL_RESERVE);
-    let (eof, term) = match (cfg!(unix), stdin_closed) {
-        (true, true) => {
-            let term = deadline.map_or(waits / 3, |deadline| deadline.term_phase(waits));
-            // An unhurried stop keeps a SIGTERM phase a nested gateway can hurry
-            // inside, leaving the EOF wait at least the minimum phase.
-            let term = if deadline.is_some_and(StopDeadline::is_hurried) {
-                term
-            } else {
-                term.max(NESTED_TERM_NEED.min(waits.saturating_sub(MIN_PHASE)))
-            };
-            (waits.saturating_sub(term), term)
-        }
-        (true, false) => (Duration::ZERO, waits),
-        (false, true) => (waits, Duration::ZERO),
-        (false, false) => (Duration::ZERO, Duration::ZERO),
-    };
-    let kept = |wait: Duration| {
-        if wait < MIN_PHASE {
-            Duration::ZERO
-        } else {
-            wait
-        }
-    };
-    match (kept(eof), kept(term)) {
-        (Duration::ZERO, Duration::ZERO) => Ending::Now,
-        (eof, term) => Ending::Graceful { eof, term },
-    }
-}
-
-/// The budget left for a stop started now: the caller's deadline, else
-/// [`DEFAULT_STOP_BUDGET`].
-fn stop_budget() -> Duration {
-    stop_deadline().map_or(DEFAULT_STOP_BUDGET, |deadline| {
-        deadline.saturating_duration_since(tokio::time::Instant::now())
-    })
 }
 
 /// How often the reaper steps the trees it holds.
@@ -702,27 +675,17 @@ fn arm_after_spawn(transport: &std::sync::Arc<super::StdioTransport>, action: Af
 
 #[cfg(tp5)]
 #[cfg(test)]
-mod start_tests {
-    use super::*;
+#[path = "stdio_reaper_start_tests.rs"]
+mod start_tests;
 
-    /// MIK-7923 T1-nothread: when the OS refuses the reaper thread, the start
-    /// is refused (so `StdioTransport::start` spawns no child, since it calls
-    /// `ensure_started` before the spawn) and nothing is cached: the next start
-    /// tries again.
-    #[test]
-    fn a_refused_reaper_thread_fails_the_start_and_is_retried() {
-        let cell = OnceLock::new();
-        let refused = start_once(&cell, |_| Err(std::io::Error::other("no threads")));
-        assert!(refused.is_err(), "a refused thread fails the start");
-        assert!(cell.get().is_none(), "a failed start caches nothing");
-        let started = start_once(&cell, |receiver| {
-            drop(receiver);
-            Ok(())
-        });
-        assert!(started.is_ok(), "the next start tries again");
-        assert!(cell.get().is_some());
-    }
-}
+/// The test-only reap check the nested handover row reads for "reaped
+/// before Db". That row always has one handover, so it cannot see the empty
+/// case or an any-for-all slip; this row pins no handover, an unreaped
+/// give-up, a reap with an exit status, and every handover rather than any.
+#[cfg(tp5)]
+#[cfg(all(test, unix))]
+#[path = "stdio_reaper_handed_reap_tests.rs"]
+mod handed_reap_tests;
 
 /// Every caller's stop budget yields a plan that fits it, by construction.
 #[cfg(tp5)]

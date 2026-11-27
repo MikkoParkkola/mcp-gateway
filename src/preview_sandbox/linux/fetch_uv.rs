@@ -8,10 +8,11 @@
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use super::fetch_step::{FetchFailure, Run, frame, run_dropped};
+use super::fetch_step::{FetchError, FetchFailure, Run, frame, run_dropped};
+use super::helper::{SetupFailure, step_call};
 use super::mounts::PREVIEW_CONFIG;
 use super::plan::{self, Limits, UvFetch};
-use crate::preview_sandbox::control_msg::FetchStep;
+use crate::preview_sandbox::control_msg::{FetchStep, SetupStep};
 use crate::preview_sandbox::install::{check_direct_url, uv_entry_point, uv_name, uv_tool_env};
 
 /// The wrapper uv is given as its interpreter, in the preview home.
@@ -19,15 +20,23 @@ pub(super) const WRAPPER: &str = ".preview-python";
 
 /// Write `home/.preview-python`, the interpreter uv runs: `python` with
 /// `-S`, so no site processing (`.pth`, `sitecustomize`, `usercustomize`)
-/// runs while the credential is live. Mode 0555; a failure is setup's.
-pub(super) fn write_wrapper(home: &Path, python: &str) -> Result<(), FetchFailure> {
+/// runs while the credential is live. Mode 0555; a failure is the setup's
+/// (a file the root needs could not be made), before any `fetch_start`.
+pub(super) fn write_wrapper(home: &Path, python: &str) -> Result<(), SetupFailure> {
     use std::os::unix::fs::PermissionsExt as _;
     let path = home.join(WRAPPER);
     let quoted = python.replace('\'', "'\\''");
-    std::fs::write(&path, format!("#!/bin/sh\nexec '{quoted}' -S \"$@\"\n"))
-        // Set after the write, so the gateway's umask cannot narrow it.
-        .and_then(|()| std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555)))
-        .map_err(|e| FetchFailure::at(FetchStep::Setup)(format!("writing the wrapper ({e})")))
+    step_call(
+        SetupStep::Mounting,
+        || "writing the wrapper".to_owned(),
+        || {
+            std::fs::write(&path, format!("#!/bin/sh\nexec '{quoted}' -S \"$@\"\n"))
+                // Set after the write, so the gateway's umask cannot narrow it.
+                .and_then(|()| {
+                    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o555))
+                })
+        },
+    )
 }
 
 /// The uv install's whole environment (design 6): the proxy through the
@@ -71,9 +80,13 @@ pub(super) fn uv_env(credential: &str, port: u16, path: &str) -> Vec<(String, St
 /// The helper's uv fetch step: the wrapper written before the credential,
 /// then inside the shared frame uv's one install and the direct-URL check;
 /// the run follows only when the fetch and all of the teardown succeeded.
-pub(super) fn uv(control: &mut UnixStream, uv: &UvFetch, limits: Limits) -> Result<Run, String> {
+pub(super) fn uv(
+    control: &mut UnixStream,
+    uv: &UvFetch,
+    limits: Limits,
+) -> Result<Run, FetchError> {
     let home = Path::new(plan::HOME);
-    write_wrapper(home, &uv.python).map_err(|failure| failure.detail)?;
+    write_wrapper(home, &uv.python).map_err(FetchError::Setup)?;
     let uv_dir = Path::new(&uv.uv)
         .parent()
         .and_then(Path::to_str)
@@ -97,7 +110,8 @@ pub(super) fn uv(control: &mut UnixStream, uv: &UvFetch, limits: Limits) -> Resu
             .map(|_| ())
             .map_err(|r| FetchFailure::at(FetchStep::DirectUrlCheck)(r.to_string()))
     })?;
-    uv_run(home, &uv.spec, &uv.run_args, &uv.python_dir).map_err(|r| r.to_string())
+    uv_run(home, &uv.spec, &uv.run_args, &uv.python_dir)
+        .map_err(|r| FetchError::Setup(SetupFailure::new(SetupStep::TargetMissing, r.to_string())))
 }
 
 /// The run after a uv fetch of `spec` under `home` (D6): the console script

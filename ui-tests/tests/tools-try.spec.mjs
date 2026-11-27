@@ -1539,6 +1539,11 @@ test('L1 every answer links Connect a client', async ({ page }) => {
 });
 
 test('A1 axe passes on the form and on each answer; the panel has no live region and each answer\'s headline is said through the announcer', async ({ page }) => {
+  // An axe scan per answer, under CPU starvation. With the whole suite under a 2-core
+  // quota, three runs in twenty stalled past the default 30 s (worst 33.9 s); with the
+  // timeout raised, no run in eighty went past 18.5 s. 60 s is that worst stall x 1.5,
+  // rounded up to 10 s. Lower it once the stall is traced.
+  test.setTimeout(60_000);
   await recordAnnouncements(page);
   const queue = answerStates.map(([, reply]) => reply);
   const cfg = { onCall: (route) => route.fulfill(queue.shift()) };

@@ -270,6 +270,8 @@ impl Drop for TripOnDrop {
 pub(super) struct StartState {
     eof: parking_lot::Mutex<Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>>,
     exited: std::sync::atomic::AtomicBool,
+    /// This start's record of an answer over the limit (fresh each start).
+    oversize: parking_lot::Mutex<super::oversize::OversizeSlot>,
     /// The last early exit's stderr tail, already sanitized: the raw bytes
     /// never outlive `early_exit_error`.
     shown_stderr: parking_lot::Mutex<Vec<String>>,
@@ -287,6 +289,7 @@ impl StartState {
 
     pub(super) fn begin(&self, eof: std::sync::Arc<tokio::sync::watch::Sender<bool>>) {
         *self.eof.lock() = Some(eof);
+        *self.oversize.lock() = super::oversize::OversizeSlot::default();
         // A class describes the last start only.
         // Unix-only (W-L5): recorded only for the `sh`-script tests in `stdio_early_exit_tests.rs`.
         #[cfg(all(test, unix))]
@@ -295,6 +298,12 @@ impl StartState {
         }
         self.exited
             .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// This start's oversize record: the reader writes it, and a call reads
+    /// the one it registered on.
+    pub(super) fn oversize_slot(&self) -> super::oversize::OversizeSlot {
+        std::sync::Arc::clone(&self.oversize.lock())
     }
 
     /// This start's stdout-closed latch, or `None` before the first start.

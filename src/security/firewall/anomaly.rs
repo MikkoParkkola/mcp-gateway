@@ -333,6 +333,14 @@ impl AnomalyDetector {
     }
 }
 
+#[cfg(test)]
+impl super::Firewall {
+    /// The anomaly detector's tracker, when detection is armed.
+    pub(crate) fn anomaly_tracker_for_test(&self) -> Option<&TransitionTracker> {
+        self.anomaly.as_ref().map(AnomalyDetector::tracker_for_test)
+    }
+}
+
 /// The score for a transition seen `seen` times out of `total` transitions
 /// from its predecessor.
 ///

@@ -81,10 +81,10 @@ export const pauseClock = async (page) => page.clock.pauseAt(await page.evaluate
 // when the test has seen the request go out, and then the advance moves time past
 // nothing. trackTimers() lets a test wait for that one timer first (advanceArmed).
 //
-// trackTimers() must be called after page.clock.install(): its init script wraps the
-// clock's fake setTimeout and clearTimeout. Called before, it would wrap the real ones,
-// which the clock then replaces, and it would see no timer at all: advanceArmed() then
-// fails loudly instead of passing.
+// It wraps whichever setTimeout and clearTimeout the page has when its init script runs.
+// A test with a fake clock calls it after page.clock.install(), so the fake timers are
+// the ones wrapped; called first, the clock would replace the wrapper and nothing would be
+// seen, and advanceArmed() fails loudly. A test on real timers (pendingFrom) needs no clock.
 export async function trackTimers(page) {
   await page.addInitScript(() => {
     const pending = new Map();
@@ -144,6 +144,19 @@ export async function advanceArmed(page, ms, from, by = ms) {
     throw new Error(`no ${ms} ms timer armed from ${from}; pending: ${list}`);
   }
   await page.clock.runFor(by);
+}
+
+/**
+ * The delays of the page's pending timers that were armed from the function named
+ * `from` (needs trackTimers). Keying on the arming function, not on the delay alone,
+ * keeps another part of the shell that happens to use the same delay out of the count.
+ * A function run as an event handler shows on the stack with its receiver in front
+ * ("HTMLButtonElement.start"), so that form counts as `from` too.
+ */
+export async function pendingFrom(page, from) {
+  const timers = await page.evaluate(() => window.__pendingTimers());
+  const named = (c) => c === from || c.endsWith(`.${from}`);
+  return timers.filter((t) => callersOf(t.stack).some(named)).map((t) => t.ms);
 }
 
 /** Wait until the shell has rendered something into its content area. */
@@ -245,4 +258,47 @@ export async function heldStream(page, request, testInfo, setup = {}) {
 export function frame(event, data, id = null) {
   const head = event === 'hello' ? 'retry: 3000\n' : '';
   return `${head}event: ${event}\n${id ? `id: ${id}\n` : ''}data: ${JSON.stringify(data)}\n\n`;
+}
+
+/**
+ * From before the shell loads, keep a count of the live window listeners for
+ * each event type in `types`, read as window.__listeners(type), and the add and remove
+ * calls made, read as window.__listenerCalls(type).
+ */
+export const countListeners = (page, types) => page.addInitScript((watched) => {
+  const fns = new Map(watched.map((type) => [type, new Set()]));
+  const calls = new Map(watched.map((type) => [type, { add: 0, delete: 0 }]));
+  for (const [name, op] of [['addEventListener', 'add'], ['removeEventListener', 'delete']]) {
+    const real = window[name];
+    window[name] = function (type, fn, ...more) {
+      if (calls.has(type)) calls.get(type)[op] += 1;
+      fns.get(type)?.[op](fn);
+      return real.call(this, type, fn, ...more);
+    };
+  }
+  window.__listeners = (type) => fns.get(type).size;
+  // How many add and remove calls the window saw for `type`, whatever they changed.
+  window.__listenerCalls = (type) => ({ ...calls.get(type) });
+}, types);
+
+/** Record the text of every entry added to the announcer, from first paint. */
+export async function recordAnnouncements(page) {
+  await page.addInitScript(() => {
+    window.__writes = [];
+    addEventListener('DOMContentLoaded', () => {
+      const region = document.getElementById('announcer');
+      if (!region) return;
+      new MutationObserver((records) => {
+        for (const r of records) for (const n of r.addedNodes) window.__writes.push((n.textContent ?? '').trim());
+      }).observe(region, { childList: true });
+    });
+  });
+}
+
+export const writes = (page) => page.evaluate(() => window.__writes ?? []);
+export const announced = async (page) => (await writes(page)).filter(Boolean);
+
+/** A signed-in admin: the status read the shell makes first. */
+export async function signedInAdmin(page) {
+  await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
 }

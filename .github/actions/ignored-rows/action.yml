@@ -1,0 +1,50 @@
+name: Ignored rows, judged
+description: >-
+  Runs the ignored tests one libtest filter selects, on one thread, and fails
+  unless the filter selected at least one test and every one of them passed.
+  libtest itself exits 0 when a filter selects nothing, so a renamed module
+  would otherwise turn the job green with no row run.
+inputs:
+  binary:
+    description: >-
+      The words that start the test binary: an optional prefix (sudo -E, or the
+      ssh command into the VM) and the binary's path. Split on spaces.
+    required: true
+  filter:
+    description: >-
+      The libtest filter naming the rows, e.g. a module path ending in ::. An
+      empty filter selects every ignored test in the binary.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Rows under ${{ inputs.filter }}
+      shell: bash
+      env:
+        ROWS_BINARY: ${{ inputs.binary }}
+        ROWS_FILTER: ${{ inputs.filter }}
+      run: |
+        # The runner starts composite bash with -e; this step reads exit codes itself.
+        set +e -uo pipefail
+        read -r -a bin <<< "$ROWS_BINARY"
+        selected="$("${bin[@]}" --list --ignored "$ROWS_FILTER" | grep -c ': test$')"
+        echo "rows selected by ${ROWS_FILTER}: ${selected:-0}"
+        if [ "${selected:-0}" -lt 1 ]; then
+          echo "::error::no ignored test matches ${ROWS_FILTER}"
+          exit 1
+        fi
+        out="$(mktemp)"
+        "${bin[@]}" --ignored "$ROWS_FILTER" --test-threads=1 2>&1 | tee "$out"
+        status="${PIPESTATUS[0]}"
+        {
+          echo "### ${ROWS_FILTER}: ${selected} rows, exit ${status}"
+          echo '```'
+          grep -E '^test .* \.\.\. ' "$out"
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+        if [ "$status" -eq 0 ] && grep -q "^test result: ok. ${selected} passed; 0 failed" "$out"; then
+          echo "all ${selected} rows passed"
+          exit 0
+        fi
+        echo "::error::${ROWS_FILTER}: exit ${status}, ${selected} rows selected, not all passed"
+        exit 1

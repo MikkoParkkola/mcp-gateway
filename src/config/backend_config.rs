@@ -38,9 +38,10 @@ pub struct BackendConfig {
     /// behaviour.
     #[serde(default, with = "humantime_serde::option")]
     pub stop_when_idle_for: Option<Duration>,
-    /// Longest single JSON-RPC message, in bytes, this stdio backend may send
-    /// (one newline-terminated line). `None` means 16 MiB. Valid only for a
-    /// backend the gateway starts with a `command`; between 64 KiB and 1 GiB.
+    /// Longest single JSON-RPC message, in bytes, this backend may send: one
+    /// newline-terminated line from a stdio backend, one response body from
+    /// an HTTP one. `None` means 16 MiB. Valid for a backend declared with a
+    /// `command` or a `url`; between 64 KiB and 1 GiB.
     #[serde(default)]
     pub max_frame_bytes: Option<usize>,
     /// Request timeout for this backend.
@@ -281,7 +282,6 @@ pub enum TransportConfig {
     /// ```yaml
     /// backends:
     ///   travel-agent:
-    ///     transport: a2a
     ///     a2a_url: "https://travel.example.com"
     /// ```
     #[cfg(feature = "a2a")]

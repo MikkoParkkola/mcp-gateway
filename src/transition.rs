@@ -165,6 +165,22 @@ impl TransitionTracker {
         known || self.distinct_pairs.load(Ordering::Relaxed) < max_pairs
     }
 
+    /// Every learned pair and its count. A router test compares two snapshots
+    /// of this map; the seeded pairs stay, and one admitted step adds one.
+    #[cfg(all(test, feature = "firewall"))]
+    pub(crate) fn pair_counts_for_test(&self) -> std::collections::BTreeMap<(String, String), u64> {
+        let mut counts = std::collections::BTreeMap::new();
+        for outer in &self.transitions {
+            for inner in outer.value() {
+                counts.insert(
+                    (outer.key().clone(), inner.key().clone()),
+                    inner.value().load(Ordering::Relaxed),
+                );
+            }
+        }
+        counts
+    }
+
     /// Transitions out of `from_tool`: `(all successors, to_tool only)`.
     ///
     /// One pass that reads each counter once, so the pair is a consistent
@@ -266,9 +282,9 @@ impl TransitionTracker {
     // Atomic: the shared writer replaces the file by rename, so a crash or kill
     // mid-save leaves the old file or the new one. Never wider by mode on Linux;
     // on macOS a directory-inherited ACE can apply and the file's own deny ACEs
-    // are not carried over; a file another user owned becomes the writer's.
-    // Other hard links keep the old bytes. The writer's owner and macOS ACL
-    // handling is a known gap.
+    // are not carried over; a file another user owns keeps that owner, or the
+    // save is refused. Other hard links keep the old bytes. Keeping a macOS ACL
+    // is still a known gap.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
         let turn = self.write_turn.lock();
         self.write(path, &turn)

@@ -27,8 +27,7 @@ use crate::transport::notification_sink::DeliveryHandle;
 use super::{PendingRequestGuard, Transport, write_claim::WriteClaim};
 use crate::protocol::{
     JsonRpcMessage, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse, PROTOCOL_VERSION,
-    RequestId, Selectable, checked_selection, initialize_params, is_version_mismatch_error,
-    negotiate_best_version, parse_supported_versions_from_error,
+    RequestId,
 };
 use crate::{Error, Result};
 
@@ -427,6 +426,9 @@ impl Transport for StdioTransport {
             // guard's Drop is the only thing that removes it — without it a
             // stranded entry would leak here for the transport's lifetime.
             let _cleanup = PendingRequestGuard::new(&self.pending, &id.to_string());
+            // The start this call registered on: only its record can name
+            // this call's answer as too large.
+            let oversize = self.start.oversize_slot();
 
             // Declared after `_cleanup`, so it drops first and still finds the
             // entry of a request nobody answered.
@@ -435,6 +437,9 @@ impl Transport for StdioTransport {
             // The guards drop after this value: the pending entry and progress go.
             let outcome = self.exchange(message, rx, Some(&claim)).await;
             cancel.disarm();
+            let outcome = outcome.map_err(|error| {
+                oversize::too_large_for(&oversize, &id.to_string()).unwrap_or(error)
+            });
             // Scrubbed on the call's own task, as the body's last step: a
             // redacted answer stays the backend's, and a refusal is an error
             // `Error::origin` counts as the gateway's.
@@ -505,6 +510,11 @@ mod sweep;
 /// production constant, which itself stays visible to the transport module only.
 #[cfg(all(test, unix))]
 pub(crate) const NESTED_TERM_NEED_FOR_TEST: std::time::Duration = child_tree::NESTED_TERM_NEED;
+/// The margin inside that floor: a row's nested peer waits the floor less
+/// this, the inner gateway's slowest hurried path.
+#[cfg(all(test, unix))]
+pub(crate) const NESTED_TERM_MARGIN_FOR_TEST: std::time::Duration =
+    child_tree::NESTED_TERM_MARGIN_FOR_TEST;
 #[cfg(all(test, unix))]
 pub(crate) use child_tree::signal_log;
 #[cfg(all(test, unix))]
@@ -518,13 +528,17 @@ mod tree;
 #[cfg(all(test, unix))]
 use child_tree::ChildTree;
 pub use tree::{CEILING_MAX_FRAME_BYTES, DEFAULT_MAX_FRAME_BYTES, MIN_MAX_FRAME_BYTES};
-use tree::{read_frame, spawn_in_own_tree};
+// The preview pipe reads frames the same way.
+pub(in crate::transport) use tree::read_frame;
+use tree::spawn_in_own_tree;
 
 #[path = "stdio_early_exit.rs"]
 mod early_exit;
 
 #[path = "stdio_listen.rs"]
 mod listen;
+#[path = "stdio_oversize.rs"]
+mod oversize;
 #[path = "stdio_progress.rs"]
 mod progress;
 #[path = "stdio_start.rs"]
@@ -576,6 +590,12 @@ mod spawn_classification_tests;
 #[cfg(all(test, unix))]
 #[path = "stdio_eof_request_tests.rs"]
 mod eof_request_tests;
+
+// Unix-only: the fake backend is a `sh` script.
+#[cfg(tp5)]
+#[cfg(all(test, unix))]
+#[path = "stdio_oversize_request_tests.rs"]
+mod oversize_request_tests;
 
 #[cfg(tp5)]
 #[cfg(test)]

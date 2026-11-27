@@ -63,6 +63,27 @@ A static bearer that was handed out for a single-user deployment keeps working
 as an unrestricted credential after you enable the key server. Inventory them,
 and keep the master bearer operator-only.
 
+### Adding the first API key from the web UI
+
+On a gateway whose only credential is the bearer token, the first API key you
+create in the web UI (or with `POST /ui/api/keys`) makes two
+credentials, which is multi-user. A running gateway never changes that, so the
+key is written to `gateway.yaml` and its secret shown once, but it starts to
+work only after a restart:
+
+- Until the restart, the new secret is refused and the bearer token stays the
+  only credential.
+- `gateway.yaml` takes no other change that keeps the key: the UI routes answer
+  409 `restart_pending` naming the key (a change with a fault of its own is
+  refused for that fault instead), and a hand edit is refused at reload.
+  The gateway status (`GET /ui/api/gateway`) lists the waiting keys, with
+  the start command where the platform has one while a start from the file
+  would succeed, or the reason it would be refused. An admin sees the same as
+  a banner under the top bar of every web UI page, with Copy for the command.
+  It is read again on every page you open and after every change you make,
+  and shows when it was last checked.
+- To cancel, revoke the key before restarting; the freeze ends at once.
+
 ## 1. Who is calling
 
 The key server verifies an OIDC token from your identity provider and exchanges
@@ -410,13 +431,27 @@ callers.
 
 ```yaml
 accounts:
-  # ...existing schema_version, enabled, deployment, instance_id, store_dir,
-  # authority_dir, current_key_id, keys unchanged...
+  # Unchanged from your existing accounts block:
+  enabled: true
+  deployment: single_process
+  instance_id: gateway-a
+  store_dir: /var/lib/mcp-gateway/accounts/store
+  authority_dir: /var/lib/mcp-gateway/accounts/authority
+  current_key_id: current
+  keys:
+    current: env:ACCOUNTS_KEY   # base64 of a 32-byte key
+  # New:
   hosted:
     public_origin: "https://chat.example.com"   # https origin only: no path, query, userinfo or default port
     return_paths: ["/"]                          # absolute paths the outcome page may land on; compared byte-exact
   adapters:
-    - kind: openwebui_signed_header               # existing fields (installation_id, header, issuer, hmac_secret_ref, ...) unchanged
+    - kind: openwebui_signed_header
+      # Unchanged adapter fields:
+      installation_id: owui-prod-1
+      header: X-OpenWebUI-Assertion
+      issuer: open-webui
+      hmac_secret_ref: env:OPENWEBUI_ADAPTER_HMAC
+      allowed_api_key_names: [owui-gateway-key]
       session:                                     # new, required: enables the connect-link bridge; exactly one adapter may carry it
         user_endpoint: "http://127.0.0.1:8090/api/v1/auths/"   # Open WebUI's session-user endpoint; https, or http on a loopback literal
         cookie_name: token                          # Open WebUI's session cookie name (default "token")

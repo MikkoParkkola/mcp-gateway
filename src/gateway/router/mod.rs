@@ -86,14 +86,22 @@ pub fn is_loopback_bind(host: &str) -> bool {
 }
 
 /// `true` when `host` is a wildcard bind (empty, `0.0.0.0` or `::`), which
-/// serves every interface, loopback included.
-#[cfg(feature = "webui")]
+/// serves every interface, loopback included. One pair of brackets is allowed
+/// (`[::]`), and an IPv4-mapped IPv6 address is judged as the IPv4 address it
+/// carries, so `::ffff:0.0.0.0` is a wildcard too. Every caller (the sign-in
+/// origin, the dashboard link, `setup export`) classifies with this one test.
+#[cfg(any(feature = "webui", feature = "config-export"))]
 pub(crate) fn is_wildcard_bind(host: &str) -> bool {
+    let host = origin_guard::strip_brackets(host);
     host.is_empty()
         || host
             .parse::<std::net::IpAddr>()
-            .is_ok_and(|ip| ip.is_unspecified())
+            .is_ok_and(|ip| ip.to_canonical().is_unspecified())
 }
+/// Shared with the dashboard link and `setup export`, which read the same
+/// bind host.
+#[cfg(any(feature = "webui", feature = "config-export"))]
+pub(crate) use origin_guard::strip_brackets;
 mod well_known;
 // Direct-route guard chain (design doc 2026-09-27-direct-route-guards.md §2.2).
 mod direct_guards;
@@ -228,6 +236,10 @@ mod task_lifecycle_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod activity_secret_tests;
+
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod activity_counts_route_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;
@@ -253,6 +265,9 @@ mod f13_fetch_on_miss_tests;
 mod f13_text_a_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod firewall_publish_fixture;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod gateway_health_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
@@ -314,6 +329,12 @@ mod metrics_scrape_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod overview_decisions_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod overview_needs_you_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod overview_sources_tests;
@@ -493,6 +514,14 @@ mod recent_writes_route_more_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod recent_writes_route_tests;
+/// A withheld direct call and a missing one leave the same firewall state.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_parity_tests;
+/// A withheld surfaced task call and a missing name leave the request firewall uncharged.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "firewall"))]
+mod refused_call_task_parity_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "firewall"))]
 mod relay_key_settlement_tests; // MIK-8488 PR-A: site 18's key release
@@ -504,6 +533,9 @@ mod reload_status_tests;
 pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_x14_nonce_tests;
+#[cfg(tp1)]
+#[cfg(test)]
+mod server_name_route_tests;
 /// MIK-8504: the provisional-session cap refuses before anything runs.
 /// MIK-8533: past the POST cap a sessionless legacy call is served without a session.
 #[cfg(tp1)]
@@ -512,6 +544,10 @@ mod session_capacity_degrade_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod session_capacity_tests;
+/// A settings save's outcome and intent id on its one admin record.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod settings_save_audit_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod slot_quota_direct_tests;

@@ -1,8 +1,5 @@
 # file	fn	callee	count	class	note (classes: see delivery_framing.rs)
 src/config_reload/watcher.rs	report_reload	is_posture_refusal	1	no-record	config watcher: a refused reload of an outside edit is logged and retried; no call delivery exists
-src/gateway/ui/backends/write.rs	refused_write	gate_refusal	1	no-record	admin UI backend routes: the config gate refused the write while a restart is prepared, decided or stopping
 src/gateway/ui/discovery_adopt.rs	answer	gate_refusal	1	no-record	admin UI discovery adopt: the config gate refused the write while a restart is prepared, decided or stopping
-src/gateway/ui/keys_create.rs	refused_write	gate_refusal	1	no-record	admin UI key create: the config gate refused the write while a restart is prepared, decided or stopping
-src/gateway/ui/keys_revoke.rs	refused	gate_refusal	1	no-record	admin UI key revoke: the config gate refused the write while a restart is prepared, decided or stopping
 src/gateway/ui/mod.rs	reload	is_gate_refusal	1	no-record	admin UI reload: the config gate folded the reload into the owed replay, or refused it as restarting or stopping
 src/gateway/ui/settings.rs	answer	gate_refusal	1	no-record	admin UI settings: the config gate refused the save while a restart is prepared, decided or stopping

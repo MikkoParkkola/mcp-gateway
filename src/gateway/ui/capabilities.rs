@@ -141,8 +141,9 @@ fn bad_name(name: &str) -> (StatusCode, Json<Value>) {
 /// Find the YAML file for `name` across all configured capability directories.
 ///
 /// Returns `(path, dir_index)` of the first match found (`.yaml` preferred
-/// over `.yml`).
-fn find_capability_file(dirs: &[String], name: &str) -> Option<PathBuf> {
+/// over `.yml`). The `OpenAPI` import checks a name against it too, so both
+/// writers see a file in any directory the gateway loads.
+pub(super) fn find_capability_file(dirs: &[String], name: &str) -> Option<PathBuf> {
     for dir in dirs {
         for ext in &["yaml", "yml"] {
             let candidate = Path::new(dir).join(format!("{name}.{ext}"));
@@ -657,7 +658,16 @@ pub(super) async fn create_capability(
         .into_response();
     }
 
-    let dir = PathBuf::from(primary_write_dir(dirs).unwrap_or("capabilities"));
+    // No capability directory: a written file would never load, so refuse
+    // instead of writing into a fallback.
+    let Some(dir) = primary_write_dir(dirs).map(PathBuf::from) else {
+        return structured_error(
+            StatusCode::CONFLICT,
+            "capabilities_off",
+            super::errors::CAPABILITIES_OFF,
+        )
+        .into_response();
+    };
     if let Err(e) = tokio::fs::create_dir_all(&dir).await {
         return structured_error(
             StatusCode::INTERNAL_SERVER_ERROR,

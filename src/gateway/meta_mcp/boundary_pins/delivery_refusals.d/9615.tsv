@@ -1,0 +1,4 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/config_history.rs	restore	refusal	3	no-record	admin UI config restore: a version nobody recorded, one no longer kept, or one with no gateway.yaml, answered before any write; no call delivery
+src/gateway/ui/errors.rs	refused_write	config_refusal	1	no-record	admin UI write routes (backends, config restore): the writer's guarded read refused gateway.yaml, answered with fixed text; no call delivery
+src/gateway/ui/errors.rs	refused_write	gate_refusal	1	no-record	admin UI write routes (backends, config restore): the config gate refused the write while a restart is prepared, decided or stopping

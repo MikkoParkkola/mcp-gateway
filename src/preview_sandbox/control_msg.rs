@@ -124,3 +124,137 @@ impl std::fmt::Debug for Issued {
 pub(crate) struct Expired {
     pub(crate) expired: bool,
 }
+
+/// A step of the helper's setup that can fail after it connected the control
+/// socket and before it forks the target. Only its name crosses the socket:
+/// no path, errno or other text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum SetupStep {
+    Namespaces,
+    Descriptors,
+    Mounting,
+    Binding,
+    Masking,
+    Remounting,
+    Pivoting,
+    Loopback,
+    Limits,
+    TargetMissing,
+}
+
+impl SetupStep {
+    /// Every step, for the rows.
+    #[cfg(test)]
+    pub(crate) const ALL: [Self; 10] = [
+        Self::Namespaces,
+        Self::Descriptors,
+        Self::Mounting,
+        Self::Binding,
+        Self::Masking,
+        Self::Remounting,
+        Self::Pivoting,
+        Self::Loopback,
+        Self::Limits,
+        Self::TargetMissing,
+    ];
+
+    /// The gateway's fixed words for the step, read after "failed at" in the
+    /// caller's refusal. Linux only, as its one caller.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn describe(self) -> &'static str {
+        match self {
+            Self::Namespaces => "namespaces",
+            Self::Descriptors => "descriptors",
+            Self::Mounting => "mounting",
+            Self::Binding => "binding",
+            Self::Masking => "masking",
+            Self::Remounting => "remounting",
+            Self::Pivoting => "pivoting",
+            Self::Loopback => "loopback",
+            Self::Limits => "limits",
+            Self::TargetMissing => "target_missing",
+        }
+    }
+
+    /// Whether the step mounts, the class an `AppArmor` restriction denies.
+    /// Linux only, as its one caller.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn mounts(self) -> bool {
+        matches!(
+            self,
+            Self::Mounting | Self::Binding | Self::Masking | Self::Remounting | Self::Pivoting
+        )
+    }
+
+    /// The route's refusal when the helper reports this step refused. It names
+    /// `AppArmor` only for a mount step the kernel denied on a host whose
+    /// `AppArmor` blocks unprivileged mounts; any other case names the step.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn refusal(self, denied: bool, host_restricts: bool) -> super::Refusal {
+        match (self.mounts() && denied, host_restricts) {
+            (true, true) => super::Refusal::AppArmorRestricted,
+            _ => super::Refusal::Step(self.describe().to_owned()),
+        }
+    }
+}
+
+/// The helper's one status before it forks the target:
+/// `{"setup_done":true}`, or
+/// `{"setup_refused":true,"step":"<step>","denied":<bool>}`, `denied` true
+/// when that step failed with EPERM or EACCES.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SetupStatus {
+    Done,
+    Refused { step: SetupStep, denied: bool },
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupDoneLine {
+    setup_done: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SetupRefusedLine {
+    setup_refused: bool,
+    step: SetupStep,
+    denied: bool,
+}
+
+impl SetupStatus {
+    /// The status as one control line, without its newline.
+    pub(crate) fn encode(self) -> String {
+        let line = match self {
+            Self::Done => serde_json::to_string(&SetupDoneLine { setup_done: true }),
+            Self::Refused { step, denied } => serde_json::to_string(&SetupRefusedLine {
+                setup_refused: true,
+                step,
+                denied,
+            }),
+        };
+        line.unwrap_or_default()
+    }
+
+    /// The status a control line holds, if it holds exactly one. Every flag
+    /// must be `true`, and neither shape takes a key beyond its own.
+    pub(crate) fn parse(line: &str) -> Option<Self> {
+        if let Ok(SetupDoneLine { setup_done: true }) = serde_json::from_str(line) {
+            return Some(Self::Done);
+        }
+        match serde_json::from_str::<SetupRefusedLine>(line) {
+            Ok(SetupRefusedLine {
+                setup_refused: true,
+                step,
+                denied,
+            }) => Some(Self::Refused { step, denied }),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(tp1)]
+#[cfg(test)]
+#[path = "control_status_tests.rs"]
+mod status_tests;

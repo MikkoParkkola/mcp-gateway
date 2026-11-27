@@ -169,7 +169,7 @@ async fn a_resume_step_refused_by_the_grant_check_is_one_unrecorded_decision() {
 /// One slot holds a traced first step that succeeds and, after its grant is
 /// revoked between the steps, a resume step on the same target that the
 /// policy check refuses. The resume check runs under a trace id of its own
-/// (chain_exec.rs:254-257), so `select_records` (grant_audit.rs:196-208)
+/// (chain_exec.rs:254-257), so `select_records` (grant_audit/record.rs:141-153)
 /// keeps its note beside the first step's traced note: two decisions, and the
 /// second is the one Refusal.
 #[tokio::test]

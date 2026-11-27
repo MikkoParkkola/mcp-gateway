@@ -155,7 +155,8 @@ fn entry<'a>(answer: &'a Value, name: &str) -> &'a Value {
 }
 
 /// The fields every entry carries, in no order.
-const FIELDS: [&str; 10] = [
+const FIELDS: [&str; 11] = [
+    "addressable",
     "name",
     "backends",
     "allowed_tools",
@@ -201,13 +202,13 @@ async fn r1_the_answer_is_the_files_keys_under_its_revision() {
                 "name": "alpha", "backends": ["*"], "allowed_tools": null,
                 "denied_tools": ["write_file"], "admin": false, "expires_at": null,
                 "previous_expires_at": null, "rate_limit": 0, "last_used": null,
-                "live": true
+                "live": true, "addressable": true
             },
             {
                 "name": "beta", "backends": ["*"], "allowed_tools": null,
                 "denied_tools": null, "admin": true, "expires_at": FUTURE,
                 "previous_expires_at": FUTURE, "rate_limit": 30, "last_used": null,
-                "live": true
+                "live": true, "addressable": true
             }
         ])
     );

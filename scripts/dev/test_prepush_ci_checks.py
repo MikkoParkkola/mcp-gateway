@@ -46,7 +46,10 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/ignored-integration-rows.sh", ()):
         "cargo: runs the ignored integration rows against the gateway the int-a shard built",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "lib-b", "--build", "<TMP>/parts")):
-        "cargo: builds and runs macOS lib test parts 1-4, one at a time",
+        "cargo: builds and runs macOS lib test parts 1 and 3, one at a time",
+    ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "lib-c", "--build", "<TMP>/parts")):
+        "cargo: builds and runs macOS lib test parts 2 and 4, one at a time",
+    ("scripts/ci/check_needs.py", ("macos-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "int-lib", "--build", "<TMP>/parts")):
         "cargo: builds and runs macOS lib test part 5",
     ("scripts/ci/lib-parts.sh", ("export", "$PART", "<TMP>/lib-bin")): "cargo: builds one part of the Linux lib test binary",
@@ -62,6 +65,10 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
         "ci-env: reads the pull request number, labels and head sha from the event payload",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "linux", "${{matrix.shard}}", "<TMP>/lib-bin")):
         "artifact: runs the lib test part binaries linux-lib-build built",
+    # The shadow selection needs CI's own inputs: the event payload, the merge commit and the restored map.
+    ("scripts/ci/affected_select.py", ("$LEG", "$RECORD")): "ci-env: a test leg's event, merge commit and map",
+    ("scripts/ci/affected_select.py", ("$LEG", "$RECORD", "--lib-bin", "<TMP>/lib-bin")):
+        "artifact: also lists the part binaries linux-lib-build uploaded",
     ("scripts/ci/shard_tests.py", ("run-one", "--module", "commands::upgrade::upgrade_notice_tests::", "<TMP>/lib-bin"),
      ('python3 scripts/ci/shard_tests.py run-one --module commands::upgrade::upgrade_notice_tests:: "$RUNNER_TEMP/lib-bin" 2>&1',
       'tee "$RUNNER_TEMP/assembled-lib.log"')):
@@ -167,8 +174,8 @@ NON_POSIX_SHELLS = ("pwsh", "powershell", "cmd")
 # The doc/CLI-reading Rust targets (§7). Derived on every push and checked
 # against this set (R3): a new reader is pinned here, a lost one is a regression.
 RUST_TARGETS = frozenset({
-    "capability_pin_policy", "cli_debug_assert", "cli_surface_inventory", "client_matrix_claims",
-    "e2e_quickstart_minimal_config", "init_admin_token_docs", "kubernetes_manifest_tests", "mik_5226_acs", "mik_6550_roadmap",
+    "capability_pin_policy", "cli_debug_assert", "cli_local_errors", "cli_surface_inventory", "client_matrix_claims",
+    "docs_yaml_examples_load", "e2e_quickstart_minimal_config", "init_admin_token_docs", "kubernetes_manifest_tests", "mik_5226_acs", "mik_6550_roadmap",
     "mik_6556_trust_cbom", "mik_6977_acs", "mik_7272_conformance", "mik_8783_cli_help",
     "mik_8783_docs", "mik_8783_upgrade_retired_settings", "public_claims_validation",
     "registry_doc_counts", "shadow_scan_docs", "team_deployment_guide_claims",

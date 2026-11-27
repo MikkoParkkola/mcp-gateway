@@ -120,9 +120,8 @@ impl Default for Bounds {
     }
 }
 
-/// What `lookup` found for a revision. Test-only until the history page
-/// reads it.
-#[cfg(test)]
+/// What `lookup` found for a revision.
+#[cfg(any(test, feature = "webui"))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Lookup {
     Kept(Snapshot),
@@ -231,28 +230,35 @@ impl ConfigHistory {
         self.with_state(|state| state.snapshots.clone())
     }
 
-    /// `Kept` when `revision` is still stored. `NoLongerKept` when a held
-    /// event names it. Otherwise `Unknown`. Test-only until the history page
-    /// reads it.
+    /// What `revision` resolves to in one read of the store (see `resolve`).
+    /// A file that cannot be read or parsed is the caller's error, never an
+    /// empty store and never `Unknown`. The routes read through
+    /// `lookup_against` and `contents`; this is the rows' single lookup.
     #[cfg(test)]
-    pub(crate) fn lookup(&self, revision: &str) -> Lookup {
-        self.with_state(|state| {
-            if let Some(snapshot) = state
-                .snapshots
-                .iter()
-                .find(|snapshot| snapshot.revision == revision)
-            {
-                return Lookup::Kept(snapshot.clone());
-            }
-            if state
-                .events
-                .iter()
-                .any(|event| event.revision.as_deref() == Some(revision))
-            {
-                return Lookup::NoLongerKept;
-            }
-            Lookup::Unknown
-        })
+    pub(crate) fn lookup(&self, revision: &str) -> Result<Lookup, String> {
+        self.read_state().map(|state| resolve(&state, revision))
+    }
+
+    /// For a restore, from one read: what `revision` resolves to, and the
+    /// newest kept copy of the served revision, the version it is compared
+    /// against. `served` is asked after the read, so the baseline is judged
+    /// by the revision served when the read was taken, never an earlier one.
+    #[cfg(feature = "webui")]
+    pub(crate) fn lookup_against(
+        &self,
+        revision: &str,
+        served: impl FnOnce() -> Option<String>,
+    ) -> Result<(Lookup, Option<Snapshot>), String> {
+        let state = self.read_state()?;
+        let baseline = served().and_then(|served| newest(&state, &served).cloned());
+        Ok((resolve(&state, revision), baseline))
+    }
+
+    /// Every kept version and held event, oldest first, from one read.
+    #[cfg(feature = "webui")]
+    pub(crate) fn contents(&self) -> Result<(Vec<Snapshot>, Vec<Event>), String> {
+        self.read_state()
+            .map(|state| (state.snapshots, state.events))
     }
 
     /// Memory-only reads the held state; otherwise the file. Test-only. A
@@ -260,15 +266,49 @@ impl ConfigHistory {
     /// with the read error (design D-2).
     #[cfg(test)]
     fn with_state<T>(&self, read: impl FnOnce(&State) -> T) -> T {
+        let state = self
+            .read_state()
+            .unwrap_or_else(|error| panic!("the history file does not read: {error}"));
+        read(&state)
+    }
+
+    /// The production read: memory-only answers the held state, otherwise
+    /// the file is read and parsed now. Its error goes to the caller.
+    #[cfg(any(test, feature = "webui"))]
+    fn read_state(&self) -> Result<State, String> {
         let mode = self.mode.lock();
         match &*mode {
-            StoreMode::MemoryOnly { state } => read(state),
-            StoreMode::Disk | StoreMode::Unopened { .. } => {
-                let state = load_state(&self.file())
-                    .unwrap_or_else(|error| panic!("the history file does not read: {error}"));
-                read(&state)
-            }
+            StoreMode::MemoryOnly { state } => Ok(state.clone()),
+            StoreMode::Disk | StoreMode::Unopened { .. } => load_state(&self.file()),
         }
+    }
+}
+
+/// The newest kept copy of `revision`: the copy eviction pins.
+#[cfg(any(test, feature = "webui"))]
+fn newest<'a>(state: &'a State, revision: &str) -> Option<&'a Snapshot> {
+    state
+        .snapshots
+        .iter()
+        .rev()
+        .find(|kept| kept.revision == revision)
+}
+
+/// `Kept` with the newest copy when `revision` is still stored,
+/// `NoLongerKept` when only a held event names it, else `Unknown`.
+#[cfg(any(test, feature = "webui"))]
+fn resolve(state: &State, revision: &str) -> Lookup {
+    if let Some(kept) = newest(state, revision) {
+        return Lookup::Kept(kept.clone());
+    }
+    let named = state
+        .events
+        .iter()
+        .any(|event| event.revision.as_deref() == Some(revision));
+    if named {
+        Lookup::NoLongerKept
+    } else {
+        Lookup::Unknown
     }
 }
 
@@ -302,12 +342,13 @@ impl HistoryHook {
                 revision,
                 pending_restart,
                 previous,
+                pin,
                 source,
             } => self.publish_record(
                 &raw,
-                &revision,
+                (&revision, previous.as_deref()),
                 &pending_restart,
-                previous.as_deref(),
+                &pin,
                 source,
                 now,
             ),
@@ -350,16 +391,18 @@ impl HistoryHook {
             .collect()
     }
 
+    /// `(revision, previous)`: the published revision and the one it replaced.
+    /// `pin` is the served version after this publish, the one eviction keeps.
     fn publish_record(
         &self,
         raw: &RawInputs,
-        revision: &str,
+        (revision, previous): (&str, Option<&str>),
         pending_restart: &[&str],
-        previous: Option<&str>,
+        pin: &str,
         source: Source,
         now: u64,
     ) -> Record {
-        let unchanged = previous == Some(revision);
+        let unchanged = !records_a_version(previous, revision);
         let snapshot = (!unchanged).then(|| Snapshot {
             revision: revision.to_string(),
             at: now,
@@ -374,7 +417,9 @@ impl HistoryHook {
         Record {
             event: applied_event(now, source, revision, unchanged),
             snapshot,
-            running: revision.to_string(),
+            // Not `revision`: after a part-only publish an unchanged event's
+            // revision names no kept version, and the served one must stay.
+            running: pin.to_string(),
             served: None,
             now,
         }
@@ -448,6 +493,26 @@ fn load_state(path: &Path) -> Result<State, String> {
 /// A stored version written before `source` existed is a file reload.
 fn file_source() -> Source {
     Source::File
+}
+
+/// Whether a full publish from `previous` to `revision` stores a version: only
+/// when the revision moved. The live config moves its recorded (served)
+/// revision by this same rule ([`recorded_after`]), so the two cannot drift.
+fn records_a_version(previous: Option<&str>, revision: &str) -> bool {
+    previous != Some(revision)
+}
+
+/// What the live config should hold as its recorded revision once a full
+/// publish replaced `before` with `now`: `now` if that publish stores a
+/// version, otherwise `kept` unchanged. Nothing published, nothing held.
+pub(super) fn recorded_after(
+    before: Option<&str>,
+    now: Option<&str>,
+    kept: Option<&str>,
+) -> Option<String> {
+    let now = now?;
+    let stored = records_a_version(before, now);
+    Some(if stored { now } else { kept? }.to_owned())
 }
 
 fn applied_event(at: u64, source: Source, revision: &str, unchanged: bool) -> Event {
@@ -528,6 +593,10 @@ mod deadline_tests;
 #[cfg(test)]
 #[path = "history_order_tests.rs"]
 mod order_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "history_read_tests.rs"]
+mod read_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "history_record_tests.rs"]

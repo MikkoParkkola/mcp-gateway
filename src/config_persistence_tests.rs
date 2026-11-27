@@ -462,6 +462,62 @@ fn a_write_through_a_symlinked_config_keeps_the_link() {
     );
 }
 
+/// E-link-follow: the public text writer resolves a symlinked path before it
+/// saves, so the new text lands in the file the link names and the link
+/// itself stays in place.
+#[cfg(unix)]
+#[test]
+fn the_public_text_writer_saves_through_a_link() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let named = dir.path().join("named.json");
+    std::fs::write(&named, "old\n").expect("named file");
+    let link = dir.path().join("link.json");
+    std::os::unix::fs::symlink(&named, &link).expect("link");
+
+    write_text_atomic(&link, "new\n").expect("save through the link");
+
+    let kind = std::fs::symlink_metadata(&link).expect("lstat").file_type();
+    assert!(kind.is_symlink(), "E-link-follow: the link is still a link");
+    let saved = std::fs::read_to_string(&named).expect("read the named file");
+    assert_eq!(
+        saved, "new\n",
+        "E-link-follow: the named file holds the new text"
+    );
+}
+
+/// E-link-replace: below the configured path's resolution, the text writer
+/// swaps away a link standing at the path it was handed and never writes
+/// through it, so a link planted after the resolve cannot redirect the save.
+#[cfg(unix)]
+#[test]
+fn the_text_writer_replaces_a_link_at_its_own_path() {
+    use std::os::unix::fs::PermissionsExt as _;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let sentinel = dir.path().join("elsewhere.yaml");
+    std::fs::write(&sentinel, "untouched\n").expect("sentinel");
+    let at = dir.path().join("gateway.yaml");
+    std::os::unix::fs::symlink(&sentinel, &at).expect("link");
+
+    write_yaml_at(&at, "replaced\n").expect("write");
+
+    let meta = std::fs::symlink_metadata(&at).expect("stat");
+    assert!(
+        meta.file_type().is_file(),
+        "E-link-replace: a regular file now stands at the path"
+    );
+    assert_eq!(
+        meta.permissions().mode() & 0o777,
+        0o600,
+        "E-link-replace: owner-only"
+    );
+    assert_eq!(std::fs::read_to_string(&at).expect("read"), "replaced\n");
+    assert_eq!(
+        std::fs::read_to_string(&sentinel).expect("read sentinel"),
+        "untouched\n",
+        "E-link-replace: the link's old target was not written"
+    );
+}
+
 /// MIK-8029: `text` spliced with `edit`'s change to the config it loads as.
 fn spliced(text: &str, edit: impl FnOnce(&mut Config)) -> String {
     let dir = tempfile::tempdir().expect("tempdir");

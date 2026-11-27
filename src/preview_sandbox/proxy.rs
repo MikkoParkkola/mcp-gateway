@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncWrite, AsyncWriteExt as _};
+use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
 use tokio::net::{TcpStream, UnixListener};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -155,6 +155,9 @@ struct Shared {
     resolve: Arc<dyn Resolve>,
     connect: Arc<dyn Connect>,
     interfaces: Arc<dyn Interfaces>,
+    /// The only authorities a CONNECT may name; `bind` sets the registries,
+    /// and a row may swap them.
+    allowed: Mutex<&'static [&'static str]>,
     /// Runs as a revoke's teardown starts, before its sockets shut.
     #[cfg(test)]
     on_end: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -219,6 +222,7 @@ impl AllowlistProxy {
             resolve,
             connect,
             interfaces,
+            allowed: Mutex::new(&admission::ALLOWED),
             #[cfg(test)]
             on_end: Mutex::new(None),
         });
@@ -256,6 +260,18 @@ impl AllowlistProxy {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// The authorities this proxy admits, joined by ", " with their ports:
+    /// what the isolation record shows for a fetch.
+    pub(crate) fn allowlist(&self) -> String {
+        lock(&self.shared.allowed).join(", ")
+    }
+
+    /// Swap the admitted authorities, for the rows.
+    #[cfg(test)]
+    pub(crate) fn set_allowlist_for_test(&self, allowed: &'static [&'static str]) {
+        *lock(&self.shared.allowed) = allowed;
+    }
+
     /// Replace the time bounds, for the rows.
     #[cfg(test)]
     pub(crate) fn set_bounds(&self, bounds: Bounds) {
@@ -272,6 +288,15 @@ impl AllowlistProxy {
         lock(&self.shared.live)
             .as_ref()
             .map_or(0, |l| l.tunnels.len())
+    }
+
+    /// The live fetch's credential, for the row that tries it after the
+    /// helper died.
+    #[cfg(test)]
+    pub(crate) fn live_credential(&self) -> Option<Credential> {
+        lock(&self.shared.live)
+            .as_ref()
+            .map(|l| l.credential.clone())
     }
 
     /// Install `hook` to run as each revoke's teardown starts, for the rows.
@@ -347,8 +372,9 @@ impl Drop for AllowlistProxy {
     }
 }
 
-/// The lock holds no invariant a panic could break, so a poisoned one is used.
-fn lock(m: &Mutex<Option<Live>>) -> std::sync::MutexGuard<'_, Option<Live>> {
+/// The proxy's locks hold no invariant a panic could break, so a poisoned
+/// one is used.
+fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
@@ -431,7 +457,7 @@ async fn serve<A: Accept>(listener: A, shared: Arc<Shared>) {
 
 /// Where a preview's private directory goes: `$XDG_RUNTIME_DIR` when it is
 /// an absolute path, else the temp dir.
-fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
+pub(super) fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
     match xdg {
         Some(value) if Path::new(&value).is_absolute() => PathBuf::from(value),
         _ => std::env::temp_dir(),
@@ -441,7 +467,7 @@ fn runtime_base(xdg: Option<std::ffi::OsString>) -> PathBuf {
 /// A fresh owner-only directory under `base`, with a random name so another local user cannot pre-create
 /// it; made exclusively, so an existing path is an error and a new name is
 /// tried.
-fn private_dir(base: &Path) -> io::Result<PathBuf> {
+pub(super) fn private_dir(base: &Path) -> io::Result<PathBuf> {
     use std::os::unix::fs::DirBuilderExt as _;
     let mut last = io::Error::other("no private directory name was free");
     for _ in 0..8 {
@@ -456,40 +482,6 @@ fn private_dir(base: &Path) -> io::Result<PathBuf> {
         }
     }
     Err(last)
-}
-
-/// The only authorities a CONNECT may name, compared after ASCII lowercasing:
-/// no trailing dot, no percent-decoding, port 443 written plainly.
-const ALLOWED: [&str; 3] = [
-    "registry.npmjs.org:443",
-    "pypi.org:443",
-    "files.pythonhosted.org:443",
-];
-
-/// The longest request head read; npm and uv send a few hundred bytes.
-const MAX_HEAD: usize = 8 * 1024;
-
-/// A refusal's status line. The text is fixed, so nothing a client sent
-/// (the credential included) is ever echoed back.
-#[derive(Clone, Copy, Debug)]
-enum Status {
-    BadRequest,
-    AuthRequired,
-    Forbidden,
-    BadMethod,
-    BadGateway,
-}
-
-impl Status {
-    fn head(self) -> &'static [u8] {
-        match self {
-            Self::BadRequest => b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            Self::AuthRequired => b"HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"preview\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            Self::Forbidden => b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            Self::BadMethod => b"HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-            Self::BadGateway => b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
-        }
-    }
 }
 
 /// A stream a tunnel can run over: its duplicate descriptor is what a revoke
@@ -602,153 +594,6 @@ where
     }
 }
 
-/// Every check, in order; the tunnel's upstream and its fetch's close token
-/// when all pass.
-async fn admit<S>(
-    client: &mut S,
-    shared: &Shared,
-    bounds: Bounds,
-) -> Result<(TcpStream, Fetch), Status>
-where
-    S: AsyncRead + Unpin,
-{
-    let head = read_head(client, bounds.head)
-        .await
-        .ok_or(Status::BadRequest)?;
-    let mut lines = head.split("\r\n");
-    let parts: Vec<&str> = lines.next().unwrap_or_default().split(' ').collect();
-    let [method, authority, version] = parts[..] else {
-        return Err(Status::BadRequest);
-    };
-    let authority = authority.to_ascii_lowercase();
-    if method != "CONNECT" {
-        return Err(Status::BadMethod);
-    }
-    if version != "HTTP/1.1" && version != "HTTP/1.0" {
-        return Err(Status::BadRequest);
-    }
-    let mut auth = Vec::new();
-    let mut host = Vec::new();
-    for line in lines.filter(|l| !l.is_empty()) {
-        let (name, value) = line.split_once(':').ok_or(Status::BadRequest)?;
-        let value = value.trim_matches([' ', '\t']);
-        if name.eq_ignore_ascii_case("proxy-authorization") {
-            auth.push(value);
-        } else if name.eq_ignore_ascii_case("host") {
-            host.push(value);
-        }
-    }
-    let fetch = authorized(&auth, shared).ok_or(Status::AuthRequired)?;
-    if !ALLOWED.contains(&authority.as_str()) {
-        return Err(Status::Forbidden);
-    }
-    // A Host header, when sent, names the same place (with or without port).
-    let name = authority.trim_end_matches(":443");
-    match host[..] {
-        [] => {}
-        [h] if h.to_ascii_lowercase() == authority || h.to_ascii_lowercase() == name => {}
-        _ => return Err(Status::BadRequest),
-    }
-    let addrs = unless_revoked(&fetch.closed, shared.resolve.resolve(name))
-        .await?
-        .map_err(|_| Status::BadGateway)?;
-    if fetch.closed.is_cancelled() {
-        return Err(Status::AuthRequired);
-    }
-    // One denied address refuses the whole answer, so a mixed answer cannot
-    // fall through to its bad half on a retry.
-    let own = shared
-        .interfaces
-        .addresses()
-        .map_err(|_| Status::Forbidden)?;
-    if addrs.is_empty() || addrs.iter().any(|a| denied(*a, &own)) {
-        return Err(Status::Forbidden);
-    }
-    let mut upstream = None;
-    for addr in addrs {
-        let dialled = unless_revoked(
-            &fetch.closed,
-            tokio::time::timeout(
-                bounds.dial,
-                shared.connect.connect(SocketAddr::new(addr, 443)),
-            ),
-        )
-        .await?;
-        if let Ok(Ok(s)) = dialled {
-            upstream = Some(s);
-            break;
-        }
-    }
-    // No liveness check after the dial: registering the tunnel is the one
-    // check that counts there, made under the same lock a revoke takes.
-    let upstream = upstream.ok_or(Status::BadGateway)?;
-    Ok((upstream, fetch))
-}
-
-/// Runs `work` unless the fetch is revoked first, so a resolver or a dial that
-/// never answers cannot keep a revoked fetch's connection alive.
-async fn unless_revoked<T>(
-    closed: &CancellationToken,
-    work: impl std::future::Future<Output = T>,
-) -> Result<T, Status> {
-    tokio::select! {
-        // Finished work wins a tie: the tunnel's registration is then the one
-        // check that decides, and it refuses a revoked fetch.
-        biased;
-        out = work => Ok(out),
-        () = closed.cancelled() => Err(Status::AuthRequired),
-    }
-}
-
-/// The live fetch's close token when exactly one `Proxy-Authorization`
-/// header carries its credential as `Basic base64(x:<secret>)`.
-fn authorized(auth: &[&str], shared: &Shared) -> Option<Fetch> {
-    use base64::Engine as _;
-    use subtle::ConstantTimeEq as _;
-    let [value] = auth else { return None };
-    let token = value.strip_prefix("Basic ")?;
-    let decoded = base64::engine::general_purpose::STANDARD
-        .decode(token)
-        .ok()?;
-    let live = lock(&shared.live);
-    let live = live.as_ref()?;
-    let expected = format!("x:{}", live.credential.secret);
-    bool::from(decoded.ct_eq(expected.as_bytes())).then(|| Fetch {
-        id: live.id,
-        closed: live.closed.clone(),
-    })
-}
-
-/// The SSRF deny list, or inside one of the host's own networks. Mapped and
-/// compatible IPv6 forms are unwrapped first (`is_private_or_reserved`
-/// already unwraps them for its own ranges).
-fn denied(addr: IpAddr, own: &[Owned]) -> bool {
-    crate::security::ssrf::is_private_or_reserved(addr)
-        || own.iter().any(|&(net, len)| within(addr, net, len))
-}
-
-/// The request head up to its blank line, read a byte at a time so no
-/// tunnel bytes are consumed; `None` on EOF, oversize, non-UTF-8 or a
-/// client too slow to send it.
-// ponytail: byte-at-a-time reads; a few CONNECTs per preview, so the syscall
-// count does not matter.
-async fn read_head<S: AsyncRead + Unpin>(client: &mut S, bound: Duration) -> Option<String> {
-    let mut head = Vec::new();
-    let read = async {
-        let mut byte = [0u8; 1];
-        while !head.ends_with(b"\r\n\r\n") {
-            if head.len() >= MAX_HEAD || client.read(&mut byte).await.ok()? == 0 {
-                return None;
-            }
-            head.push(byte[0]);
-        }
-        Some(())
-    };
-    tokio::time::timeout(bound, read).await.ok()??;
-    head.truncate(head.len() - 4);
-    String::from_utf8(head).ok()
-}
-
 /// The production parts on Linux: the system resolver (the proxy applies the
 /// SSRF deny list to its answer itself and dials only what it checked), a
 /// plain dial, and the host's own addresses read from /proc at each call.
@@ -775,6 +620,8 @@ impl Connect for System {
     }
 }
 
+mod admission;
+use admission::{Status, admit};
 mod host_addresses;
 use host_addresses::within;
 

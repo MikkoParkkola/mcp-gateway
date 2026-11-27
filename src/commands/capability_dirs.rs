@@ -24,6 +24,33 @@ pub(crate) enum CapabilityDirs {
 /// The message when the configured directories hold no capability.
 pub(crate) const NONE_FOUND: &str = "No capability files found in the configured directories";
 
+/// Why the directories could not be resolved or loaded, as the two error lines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DirsError {
+    message: String,
+    remedy: String,
+}
+
+impl DirsError {
+    fn new(message: String, remedy: String) -> Self {
+        Self { message, remedy }
+    }
+
+    /// Prints the two error lines and returns exit 1.
+    pub(crate) fn exit(&self) -> std::process::ExitCode {
+        super::fail(super::CliExit::LocalFailure, &self.message, &self.remedy)
+    }
+}
+
+/// A command that needs a capability found none in the configured directories: exit 1.
+pub(crate) fn none_found_failure() -> std::process::ExitCode {
+    super::fail(
+        super::CliExit::LocalFailure,
+        NONE_FOUND,
+        "Add capability files to the directories under capabilities.directories, or pass -C naming a folder that has some.",
+    )
+}
+
 /// Resolve the directories for `flag` (clap fills it from `-C` or the env
 /// var) and the global `--config`. The config file is picked as the loader
 /// picks it (the named one, else `Config::fallback_config_path`), so the
@@ -34,13 +61,16 @@ pub(crate) const NONE_FOUND: &str = "No capability files found in the configured
 pub(crate) fn resolve(
     flag: Option<PathBuf>,
     config: Option<&Path>,
-) -> Result<CapabilityDirs, String> {
+) -> Result<CapabilityDirs, DirsError> {
     if let Some(dir) = flag {
         return Ok(CapabilityDirs::Override(dir));
     }
     let picked = match config {
         Some(named) if !named.exists() => {
-            return Err(format!("Config file not found: {}", named.display()));
+            return Err(DirsError::new(
+                format!("Config file not found: {}", named.display()),
+                format!("Run '{}' to see why.", super::check_config_command(named)),
+            ));
         }
         Some(named) => Some(named.to_path_buf()),
         None => Config::fallback_config_path(),
@@ -50,15 +80,15 @@ pub(crate) fn resolve(
     }
     // The load error itself is never printed: its text can quote a value.
     Err(match picked {
-        Some(path) => format!(
-            "could not load {}; run `{}` to see why",
-            path.display(),
-            super::check_config_command(&path)
+        Some(path) => DirsError::new(
+            format!("could not load {}", path.display()),
+            format!("Run '{}' to see why.", super::check_config_command(&path)),
         ),
         // No file: the environment overlay is what failed.
-        None => "could not load the configuration from the environment; run \
-                 `mcp-gateway doctor` to see why"
-            .to_owned(),
+        None => DirsError::new(
+            "could not load the configuration from the environment".to_owned(),
+            "Run 'mcp-gateway doctor' to see why.".to_owned(),
+        ),
     })
 }
 
@@ -66,13 +96,14 @@ pub(crate) fn resolve(
 /// exist is an error, as before; configured directories load as the gateway
 /// loads them (`ToolCatalogue::load`: missing ones skipped with a warning,
 /// a later definition of a name replacing an earlier one).
-pub(crate) async fn load(dirs: &CapabilityDirs) -> Result<ToolCatalogue, String> {
+pub(crate) async fn load(dirs: &CapabilityDirs) -> Result<ToolCatalogue, DirsError> {
     let list: Vec<String> = match dirs {
         CapabilityDirs::Override(dir) => {
             let shown = dir.to_string_lossy().into_owned();
             if !dir.is_dir() {
-                return Err(format!(
-                    "Failed to load capabilities from '{shown}': no such directory"
+                return Err(DirsError::new(
+                    format!("Failed to load capabilities from '{shown}': no such directory"),
+                    format!("Check that {shown} exists and holds capability files."),
                 ));
             }
             vec![shown]
@@ -80,7 +111,12 @@ pub(crate) async fn load(dirs: &CapabilityDirs) -> Result<ToolCatalogue, String>
         CapabilityDirs::Configured(list) => list.clone(),
     };
     let refs: Vec<&str> = list.iter().map(String::as_str).collect();
-    ToolCatalogue::load(&refs).await.map_err(|e| e.to_string())
+    ToolCatalogue::load(&refs).await.map_err(|e| {
+        DirsError::new(
+            e.to_string(),
+            "Check the directories under capabilities.directories in the config.".to_owned(),
+        )
+    })
 }
 
 #[cfg(tp2)]

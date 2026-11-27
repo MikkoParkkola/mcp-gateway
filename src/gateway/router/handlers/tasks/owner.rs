@@ -56,13 +56,7 @@ pub(super) const AUTH_DISABLED_TASK_OWNER: &str = "local:auth-disabled:tasks:v1"
 fn session_owner_key(client: Option<&crate::gateway::auth::AuthenticatedClient>) -> String {
     client
         .and_then(|c| c.credential_principal())
-        .map_or_else(String::new, |principal| {
-            format!(
-                "{}{}",
-                crate::gateway::auth::CREDENTIAL_OWNER_PREFIX,
-                principal.storage_form()
-            )
-        })
+        .map_or_else(String::new, crate::gateway::auth::credential_owner_key)
 }
 
 /// The owner key a task records when the caller has no OIDC identity: the

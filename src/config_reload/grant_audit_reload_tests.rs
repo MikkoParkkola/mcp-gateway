@@ -17,7 +17,7 @@ use crate::identity_grants::LocalIdentityGrantStore;
 use crate::identity_grants::journal::{GrantChange, Hooks, apply_change, apply_change_with};
 
 struct Reload {
-    _dir: tempfile::TempDir,
+    _dir: Arc<tempfile::TempDir>,
     grants: std::path::PathBuf,
     state_dir: std::path::PathBuf,
     store: Arc<FlakyStore>,
@@ -29,7 +29,9 @@ struct Reload {
 
 impl Reload {
     fn new() -> Self {
-        let dir = tempfile::tempdir().unwrap();
+        // Kept, so a config lock thread a watcher reload leaves running holds
+        // the dir until it ends (T2c).
+        let dir = crate::test_dir_keep::kept_tempdir();
         let grants = dir.path().join("grants.yaml");
         let state_dir = dir.path().join("store");
         std::fs::create_dir_all(&state_dir).unwrap();
@@ -223,6 +225,13 @@ async fn t10a_reload_waits_for_the_cli_append() {
 async fn t2c_watcher_reload_records_the_change() {
     let r = Reload::new();
     let config_path = r.grants.with_file_name("gateway.yaml");
+    // The watcher's reload takes the config lock on this path, on a thread
+    // that can outlive this test; only a kept dir waits for it
+    // (`crate::spawn_keep`).
+    assert!(
+        !crate::test_dir_keep::kept_dirs_for(&config_path).is_empty(),
+        "T2c: the config's dir is kept"
+    );
     crate::gateway::test_helpers::write_config_fixture(&config_path, &Config::default()).unwrap();
     r.cli(add(row("g1", "r"))).await;
 

@@ -161,7 +161,7 @@ backend" and "fails a capability file" first.**
 | 134 | `metacognition_verify` is removed from the public catalogue: it needs a private tool nobody else can install | None for other users; keep a private copy of the file if you run that tool |
 | 135 | `cisco_scanner` scans skills locally through `skill-scanner`; its `scan_mcp_server` operation and `trawl_extract` are held and refuse to run, because the gateway cannot confine where those tools connect | Use the skill-scanning operation; no action for the held ones, `trawl_extract` refuses with a message naming MIK-7788, and a `scan_mcp_server` call fails input validation with a message naming `scan_skill_file` and MIK-7788. `trawl_extract` lost its `js`, `plan_only` and `no_cache` flags, which the old template never passed |
 | 136 | `gmail_save_attachment` writes only into `capabilities.files.downloads` and no longer takes `output_dir`; `calendar_get_attachment` returns Google's field names (`fileUrl`, `fileId`, `mimeType`, `iconLink`) | Set `capabilities.files.downloads` (and optionally `downloads_quota_bytes`); read `fileUrl`/`fileId` instead of `file_url`/`file_id` |
-| 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
+| 137 | A stdio backend may send one JSON-RPC message of at most 16 MiB (one newline-terminated line); a longer one fails the call and stops that backend's process. An HTTP backend's response body has the same limit; a longer one fails that call only, with `RESPONSE_TOO_LARGE` and `retry: false`. Before 4.0 there was no limit | Set `backends.<name>.max_frame_bytes` (64 KiB to 1 GiB) on a backend whose responses are legitimately larger |
 | 138 | `mcp_gateway::key_server::oidc::OidcError` gained three variants (`InsecureIssuer`, `InsecureFetch`, `ClientUnavailable`) and is not `#[non_exhaustive]`, so an exhaustive `match` on it no longer compiles | Add the three arms, or end the `match` with a wildcard arm |
 | 139 | A relay refusal of a catalogue read (`prompts/get`, `resources/read`) on the meta route now answers HTTP 403, as a `tools/call` relay refusal does; before it was HTTP 200 with the error in the body | A client that branches on the HTTP status of a refused catalogue read should treat 403 as a refusal; the JSON-RPC error (`-32002`) is unchanged |
 | 140 | `RuntimeProvenanceReceipt::backend_ok` is now `Option<bool>`, and an event receipt carries none (the JSON has no `backend_ok` field). Before, an event receipt claimed `true`, which nothing had observed | An embedder that reads or builds the field uses `Some(..)`; a verifier reads `subject_kind` first and treats a missing `backend_ok` as not observed. Receipts already stored still read |
@@ -186,7 +186,7 @@ backend" and "fails a capability file" first.**
 | 159 | Cost accounting keeps running sums: a key's 24h, 7d and 30d windows are accurate to the hour, a per-tool breakdown past 256 distinct tools shows the rest as `(other)`, and a key idle for 30 days with no set budget is dropped. `CostTracker::evict_old_records` is removed | None. Library users: drop any call to `evict_old_records`; nothing is left to evict |
 | 160 | With cost governance on, the budget enforcer keeps its own day row for every budgeted tool and key and for up to 256 other names per map; spend of later names counts in `tool_overflow_usd` or `key_overflow_usd`, and rows from earlier days without a budget are removed. `EnforcerSnapshot` and `PersistedCosts` gain the two fields | None. Library users building either type with a struct literal add the two fields |
 | 161 | `add`, `remove`, `setup wizard` and `cap discover --write-config` keep the comments in `gateway.yaml`, except those on lines the change deletes (a removed backend's entry, or a field an edit drops), which the command names by line number. On a file with comments, a change they cannot write as a text edit (a flow-style `backends:` mapping, or a comment inside a changed value) is refused: nothing is written, the command exits non-zero and names the comment lines. A file without comments is rewritten as before. 3.x rewrote the file and dropped every comment | Rerun with `--force` to rewrite the file without its comments, or edit the file by hand. Scripts that run these commands on a hand-commented flow-style file need `--force` |
-| 162 | An A2A backend (`transport: a2a`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public | None for gateway operators. Library users: configure the agent as a `transport: a2a` backend, or use your own A2A client to poll or cancel tasks |
+| 162 | An A2A backend (`a2a_url`) now starts and delegates to an A2A 1.0 agent; `mcp_gateway::a2a` is no longer public. A backend's `transport` key, which earlier docs showed, was never read and is now refused | Delete any `transport:` line under a backend (`mcp-gateway upgrade` does it); `a2a_url` alone makes an A2A backend. Library users: configure the agent as an `a2a_url` backend, or use your own A2A client to poll or cancel tasks |
 | 163 | With gateway authentication off and agent authentication on, each agent owns its tasks apart, keyed on the `client_id` its token validates as (a renewed token for the same agent keeps them); every agent had shared one task owner | None. Tasks an agent created before the upgrade stay under the old shared owner, so the agent no longer finds them under its own |
 | 164 | `/health` answers 503 `degraded` while a stored task row's idempotency key cannot be read; until that file is repaired or removed, new keyed calls answer 409 | Expect it on `/health` monitors; repair or remove the file the admin view names (a repaired key is kept and its task reads again at the next expiry sweep, a removed one released); probes (`/livez`, `/readyz`) are unaffected |
 | 165 | A failed config reload answers with the status of its cause. `POST /ui/api/reload` returns 409 when the network-posture policy refuses the file (tools reachable without a credential, or credentials sent over plain HTTP), 503 when shutdown stopped the reload, and 500 otherwise (a change that needs a restart included); it returned 500 for all three. `gateway_reload_config` returns JSON-RPC -32600 for that refusal and -32603 otherwise. The message text is unchanged | A monitor that alerts on any reload failure as a crash alerts on 500 and 503 only; to see a refused file, match 409 (or -32600) |
@@ -873,7 +873,8 @@ config and reports the error.
 - **Removed keys are refused at load, and `mcp-gateway upgrade` deletes them (MIK-8044).**
   `backends.<name>.idle_timeout` was retired in 3.x and never had an effect.
   `backends.<name>.circuit_breaker` was never read: every backend's breaker uses
-  `failsafe.circuit_breaker`. `server.ws_port` (item 34), `server.request_timeout` (item 39),
+  `failsafe.circuit_breaker`. `backends.<name>.transport` (item 162) was never read: the
+  transport follows from `a2a_url`, `url`, `http_url`, `ws_url` or `command`. `server.ws_port` (item 34), `server.request_timeout` (item 39),
   `marketplace` (item 145) and `cost_governance.currency` never had an effect either. One refusal
   names every such key and says why, for example `` `backends.x.idle_timeout` was removed in 4.0:
   backend idle hibernation was never implemented, ... ``, and ends with "Run `mcp-gateway upgrade`,
@@ -1273,7 +1274,8 @@ ever needs the key's hash, so 4.0 stores the digest instead.
   auth:
     api_keys:
       - name: laptop
-        key_sha256: "sha256:<64 lowercase hex>"
+        # What hash-key printed: sha256: and 64 lowercase hex characters.
+        key_sha256: "sha256:581cc5aa280d8cd5950c2a9089b25380499625535d3d0e54ea71cc8fa93cc199"
   ```
 
   The key is read from stdin, never an argument, so it stays out of shell history. One trailing
@@ -2436,8 +2438,10 @@ To serve a withheld tool you trust, pin its current description:
 ```yaml
 backends:
   my-backend:
+    url: "https://mcp.example.com/mcp"
     allow_flagged_tools:
-      tool_name: "<64-hex digest from the warning>"
+      # The digest the warning names.
+      tool_name: "9c56cc51b374c3ba189210d5b6d4bf57790d351c96c47c02190ecf1e430635ab"
 ```
 
 A changed description has a new digest and is withheld again. A pin that is not 64 lower-case hex
@@ -3225,7 +3229,7 @@ dashboard: under hardened, the dashboard needs an IdP or Access subject. stdio i
 auth:
   api_keys:
     - name: alice
-      key_sha256: "sha256:..."
+      key_sha256: "sha256:581cc5aa280d8cd5950c2a9089b25380499625535d3d0e54ea71cc8fa93cc199"  # from hash-key
       kind: personal
 ```
 
@@ -3889,13 +3893,15 @@ The embedded script that wrote a caller-chosen path is gone. A declarative `save
 
 **Action:** configure the downloads directory; update readers of `calendar_get_attachment` to Google's field names.
 
-## 137. Stdio backends have a message size limit, set per backend
+## 137. Backend answers have a size limit, set per backend
 
-**Startup:** no notice, the limit applies to every stdio backend from the first message
+**Startup:** no notice, the limit applies to every stdio and HTTP backend from the first message
 
 Through 3.x the gateway read a stdio backend's output line by line with no ceiling, so a peer that never sent a newline could grow its memory without bound. A message (one line) over 16 MiB now fails the call and stops that backend's process; the error names the backend setting.
 
-**Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid only on a backend declared with a `command`.
+An HTTP backend's response body is held to the same limit (for a streamed answer, each event), counted while it is read, so an oversized answer is never held whole. A body over the limit fails that call only: the caller gets a tool error with `RESPONSE_TOO_LARGE` and `retry: false`, the backend keeps serving, and the call does not count toward its circuit breaker.
+
+**Action:** a backend whose single responses can exceed 16 MiB (a large base64 payload or export) sets `max_frame_bytes` under `backends.<name>`, for example `max_frame_bytes: 67108864`. The range is 64 KiB to 1 GiB, and it is valid on a backend declared with a `command` or a `url`.
 
 ## 138. `OidcError` gained three variants
 
@@ -4353,16 +4359,19 @@ example `mcp-gateway remove old-server --force`.
 
 **Startup:** no notice
 
-A backend with `transport: a2a` and `a2a_url` failed at its first use in 3.x. It now starts and
+A backend with `a2a_url` failed at its first use in 3.x. It now starts and
 exposes the agent as one tool, `send_message`, which delegates to an A2A 1.0 agent over the
 JSON-RPC binding (the `a2a` Cargo feature, on by default):
 
 ```yaml
 backends:
   travel-agent:
-    transport: a2a
     a2a_url: "https://travel-agent.internal"
 ```
+
+`a2a_url` alone selects the A2A transport. Earlier versions of this guide also showed a
+`transport: a2a` line; the gateway never read that key, and 4.0 refuses it at load. Delete the line,
+or run `mcp-gateway upgrade`, which deletes it.
 
 An agent that offers only A2A 0.3 is refused at start, and the error names the versions its card
 offers.
@@ -4775,6 +4784,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `auth.client_circuit_breaker.enabled` | removed | retired: loads and warns once with the reason; `upgrade` deletes it, but keeps it when it is the section's only key and says to write `client_circuit_breaker: {}`; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | the section's presence is the switch (MIK-8783) |
 | `backends.<name>.circuit_breaker` | removed | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | retired in 4.0; never had an effect |
 | `backends.<name>.idle_timeout` | removed | a load error naming the key and `mcp-gateway upgrade`, which deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | retired in 4.0; never had an effect |
+| `backends.<name>.transport` | removed | refused at load with its reason; `mcp-gateway upgrade` deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see UPGRADING 162 | never read: `a2a_url`, `url`, `http_url`, `ws_url` or `command` picks the transport; earlier docs showed `transport: a2a` |
 | `cache.enabled` | removed | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | the response cache is always on and stores only read-only annotated tools (MIK-8783) |
 | `capabilities.stale_check_secs` | removed | retired: loads and warns once with the reason; `upgrade` deletes it; see upgrading.d/8783.md (tests: src/config/retired_settings_tests.rs, tests/mik_8783_*.rs) | the gateway re-checks the watched capability directories every 60 s by itself (MIK-8782) |
 | `cost_governance.currency` | removed | refused at load (`cost_governance.currency` was removed in 4.0); `upgrade` deletes it (tests/c1_unrecognised_config_keys.rs, tests/surf2_upgrade_removed_keys.rs); see upgrading.d/8044-2.md | informational only; every value is stored as USD |
@@ -4832,7 +4842,7 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `MCP_GATEWAY_CAPABILITIES` | derived | shipped: unset reads the loaded config's `capabilities.directories`, as the gateway does; the flag and env stay hidden overrides, still honoured (tests/surf2_capability_dirs.rs (`flag_and_env_override_the_config`)); see upgrading.d/8044-4.md | env form of `-C/--capabilities`; derive from the config's `capabilities.directories` |
 | `MCP_GATEWAY_AUTH__ENABLED`, `MCP_GATEWAY_DOCTOR_NO_REGISTRY_CHECK`, `MCP_GATEWAY_HOST`, `MCP_GATEWAY_SECRETS__STORE`, `MCP_GATEWAY_SERVER__PUBLIC_URL` | hidden | hidden variable: still read and applied; left out of the docs; UPGRADING names it |  |
 | `MCP_GATEWAY_KIND_CLUSTER`, `MCP_GATEWAY_KIND_KEEP`, `MCP_GATEWAY_KIND_NAMESPACE`, `MCP_GATEWAY_ROLLOUT_TIMEOUT`, `MCP_GATEWAY_RUNTIME_DOCKER_IMAGE`, `MCP_GATEWAY_RUNTIME_DOCKER_RESTART_IMAGE`, `MCP_GATEWAY_RUNTIME_DOCKER_SMOKE` | hidden | test-only; docs say so |  |
-| `MCP_GATEWAY_MUTANT`, `MCP_GATEWAY_MUTANT_CHILD`, `MCP_GATEWAY_TEST_CLOCK`, `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, `MCP_GATEWAY_TEST_HOME_DIR`, `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`, `MCP_GATEWAY_TEST_TRUST_CA` | hidden | test-only |  |
+| `MCP_GATEWAY_MUTANT`, `MCP_GATEWAY_MUTANT_CHILD`, `MCP_GATEWAY_TEST_CLOCK`, `MCP_GATEWAY_TEST_ERA_PROBE_CAP_MS`, `MCP_GATEWAY_TEST_HOLD_CAPABILITY_SCAN`, `MCP_GATEWAY_TEST_HOME_DIR`, `MCP_GATEWAY_TEST_PAUSE_AT_PUBLISHED`, `MCP_GATEWAY_TEST_SANDBOX_FAULT`, `MCP_GATEWAY_TEST_TRUST_CA` | hidden | test-only |  |
 | `MCP_GATEWAY_PROTOCOL_REVISION_WINDOW` | hidden | replaces `server.protocol_revision_window`; see upgrading.d/8783.md |  |
 ### HTTP routes
 
@@ -4841,12 +4851,15 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/accounts/v1/{*rest}`, `/dashboard/logout`, `/ui/classic`, `/ui/signin`, `/ui/{*path}` | hidden | still served unchanged; left out of the route reference; UPGRADING names it |  |
 | `/sse` | hidden | unchanged; listed as a deprecation helper |  |
 | `/ui/api/activity` | hidden | the Activity list: admin, a mapped auditor, or a mapped developer's own calls; any other credential 403 (UPGRADING 176); each answer names the access it applied (`access`: all, own or scoped); documented as the bundled UI's private API, not an integration surface |  |
+| `/ui/api/activity/counts` | hidden | the Activity Outcome group's counts (all, ok, failed, blocked, cleaned) over the list's own filters and a required `from`/`to` window, numbers only, same access as the list; a query that does not parse is refused with 400 before access is decided; for an admitted caller, `outcome`, `cursor`, `limit` and any other parameter are refused with 400 before a permit or a read |  |
 | `/ui/api/activity/export` | hidden | the Activity export: signed NDJSON (409 without a provenance key) or CSV, same access as the list; checked offline by `audit verify --export` |  |
 | `/ui/api/activity/{id}` | hidden | one Activity row's receipt, same access as the list; 404 for a row the caller may not read |  |
 | `/ui/api/backends`, `/ui/api/backends/{name}`, `/ui/api/backends/{name}/revive`, `/ui/api/capabilities`, `/ui/api/capabilities/{name}`, `/ui/api/capabilities/{name}/validate`, `/ui/api/control-plane`, `/ui/api/control-plane/decisions`, `/ui/api/control-plane/export-status`, `/ui/api/control-plane/grants`, `/ui/api/control-plane/policies`, `/ui/api/costs`, `/ui/api/dashboard-link`, `/ui/api/events/dead-letters/replay`, `/ui/api/events/dead-letters/{id}/replay`, `/ui/api/import/openapi`, `/ui/api/import/openapi/preview`, `/ui/api/overview`, `/ui/api/registry`, `/ui/api/registry/search`, `/ui/api/reload`, `/ui/api/tools` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/backends/{name}/signin` | hidden | an admin with a valid dashboard session starts an OAuth backend's sign-in (POST, JSON only; the state is read on GET `/ui/api/status`, in each `servers[]` row, as `sign_in.status`: `not_oauth`, `not_yet_checked`, `signed_in`, `expired`, `never_signed_in`, `re_sign_in_after_upgrade`, `waiting_elsewhere` or `provider_changed`); 403 `dashboard_session_required`, 409 `not_oauth`, 409 `gateway_host_required` off the gateway host, 409 `sign_in_in_progress` while another login holds the backend; the link and the flow are the starter's only; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/backends/{name}/signin/confirm` | hidden | the starter confirms (saves the held token) or cancels the sign-in by its attempt id; cancel works in any phase; 404 `no_sign_in` for another session or attempt, 409 `sign_in_not_ready` before the callback; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/config` | hidden | stays mounted with today's admin/redacted split; documented as the bundled UI's private API, not an integration surface; each `servers[]` entry carries `owner` (`backends.<name>.owner`, trimmed, or `null`), read from the published config; `owner` is never on `/ui/api/status` |  |
+| `/ui/api/config/history` | hidden | admin only; the kept config versions and reload events, newest first, with the version the gateway serves marked; never a stored byte or diff; a history that cannot be read answers 503 `history_unreadable` |  |
+| `/ui/api/config/restore` | hidden | admin only, never a CLI key or a session it minted; writes one kept version's gateway.yaml back byte for byte through the audited writer, keeps the replaced file beside it as `gateway.yaml.<time>.rejected`, and lists the env files and grants it did not write; a 4xx answer wrote nothing, a 5xx answer leaves the result unconfirmed |  |
 | `/ui/api/decisions` | hidden | admin only; the decisions an admin has open (access requests refused for a missing grant, capabilities whose file no longer matches its pin, unmanaged servers another MCP client's config file names, and client config files that could not be read), each with an opaque id, what it waits on and display-safe fields only; read-only, answered from memory, 503 naming each source still being read |  |
 | `/ui/api/decisions/count` | hidden | admin only; how many decisions an admin has open, and their revision; read-only, answered from memory with no item copied, the list's 503 while a source is still being read |  |
 | `/ui/api/decisions/{id}/resolve` | hidden | `POST`; the grant-mutation permission, then a strict body; one resolve at a time; 404, 409 `scope_changed`, and for now 422 `not_available_yet` |  |
@@ -4856,13 +4869,14 @@ mounted. Derived items work out their value when unset. Removed items are refuse
 | `/ui/api/events/held` | hidden | admin only, like the dead-letter listing; held webhook subscriptions per type (MIK-8057) |  |
 | `/ui/api/events/leases` | hidden | admin only, like the dead-letter listing; each passthrough event subscription's held credential, never the token |  |
 | `/ui/api/gateway` | hidden | admin only; the Gateway page's facts: version, uptime, environment, reload counts, TLS state, upgrade, clients by the name they reported, and what was refused at start |  |
+| `/ui/api/gateway/health` | hidden | admin only; the Gateway Status page's health history: added-latency p95 and gateway-error tiles for the last hour against the hour before, the highest memory and session samples in the half-hour in progress, 16 half-hour points, and the uptime strip of every six-hour block overlapping the last 7 days (up to 7 days and 6 hours; the percent is over those same blocks) with each restart's downtime marked measured or estimated; 503 when the process keeps no history |  |
 | `/ui/api/gateway/restart` | hidden | admin only; GET reports available=false with platform-specific recovery guidance and no token; POST requires strict JSON {confirm: string}, answers 422 for an invalid body and an attributed, audited 409 for a well-formed body; the call is refused and the process does not restart. 4.0.0 has no in-process restart: a reload or settings save that leaves restart-only settings pending says how to restart instead (`restart_advice`, plus `start_command` on Unix, or `start_refusal` alone; beside `start_refusal` the answer's `changes` still says a restart is required, so a UI shows the refusal in its place) |  |
 | `/ui/api/key-server/audit/lookup-email` | hidden | POST, gateway-wide admin only: takes an email in the body (first page) or the sealed cursor of the previous page (next pages, never both) and answers the key server's retained issuance rows whose keyed email hash matches (subject, issuer, token id, scopes, time), newest first with a sealed single-use cursor bound to the caller's credential; the email is hashed for the request and never stored, logged or echoed, and never sent again; every authorized attempt is charged to one process-wide budget (two at once, then one every six seconds; 429 with Retry-After) |  |
 | `/ui/api/keys` | hidden | admin only, like the config view; GET answers the file's revision and its API keys in file order (name, backends, tool lists, admin, expiry, rate limit, last use, whether live), never a secret, digest or principal; POST write: creates one key, its secret generated by the gateway and returned once, only its digest written to gateway.yaml; the body names a revision and never a secret or digest |  |
 | `/ui/api/keys/{name}` | hidden | DELETE requires gateway admin credentials and a body revision, with optional expected_key_tag; removes the exact key through the audited config writer and reports success only after a lock-held receipt confirms its identities are absent from live authorization; no secret is returned |  |
 | `/ui/api/markers` | hidden | admin only; restarts, upgrades, reloads, pauses and switch-offs for the charts |  |
 | `/ui/api/metrics/series` | hidden | admin only; windowed call counters for the charts (ADR-017) |  |
-| `/ui/api/policies` | hidden | admin only; the Policies screen's read model: the tool policy (switches, the built-in denies and each entry, with each deny's coverage by the allow entries) and the finding rules (each as written, its editability, whether the firewall-on load refuses it, the earlier rules that shadow it per scan type, and where a scoped rule applies differently), the six scan types the screen offers (each with its side and preconditions, and whether it is produced), the guards (each with its running state, its rule-proof cases and its rule-decidable findings, and the cross-tenant read verdict), the credentials pair (the redaction switch and the pinned `warn` rule with the earlier rules that shadow it fully or partly), the relay settings (with what the action does and the gate's inferred classes) and the four tool limits with where each is edited; every setting carries the file's value and the enforced value, which differ until a restart for a restart-only field; `finding_rules`, `scan_types`, `guards`, `credentials` and `relay` are `null` in a build without the firewall and `finding_rules` is `[]` when it has no rule; read-only; admin only means gateway admin credentials (an admin API key, an admin bearer or a dashboard session), not an OIDC control-plane Admin role |  |
+| `/ui/api/policies` | hidden | admin only; the Policies screen's read model: the tool policy (switches, the built-in denies and each entry, with each deny's coverage by the allow entries) and the finding rules (each as written, its editability, whether the firewall-on load refuses it, the earlier rules that shadow it per scan type, and where a scoped rule applies differently), the six scan types the screen offers (each with its side and preconditions, and whether it is produced), the guards (each with its running state, its rule-proof cases and its rule-decidable findings, and the cross-tenant read verdict), the credentials pair (the redaction switch and the pinned `warn` rule with the earlier rules that shadow it fully or partly), the relay settings (with what the action does and the gate's inferred classes) and the four tool limits with where each is edited; every setting carries the file's value and the enforced value, which differ until a restart for a restart-only field; `finding_rules`, `scan_types`, `guards`, `credentials` and `relay` are `null` in a build without the firewall and `finding_rules` is `[]` when it has no rule; `request_checks` serves the two request checks (input sanitizing and SSRF protection) as in force, in every build; each setting also carries `read_only`, true unless the settings save lists its path, and under the hardened posture SSRF protection carries `forced_by: security.posture` and reads as read-only, since the posture holds it on; the tool policy's `enabled`, `default_action` and `use_default_deny` are setting objects with their paths, and the relay section has no section-wide `read_only`; read-only; admin only means gateway admin credentials (an admin API key, an admin bearer or a dashboard session), not an OIDC control-plane Admin role |  |
 | `/ui/api/previews` | hidden | admin only; describe-then-confirm start-once preview of a server before it is added, nothing persisted |  |
 | `/ui/api/refusals` | hidden | admin-only read of what the gateway refused to apply and how to fix it; documented as the bundled UI's private API, not an integration surface |  |
 | `/ui/api/settings` | hidden | admin only; writes gateway.yaml through the audited writer and reloads; a secret goes to the secret store; on write routes, 4xx means nothing was attempted and 5xx means the outcome is not confirmed |  |

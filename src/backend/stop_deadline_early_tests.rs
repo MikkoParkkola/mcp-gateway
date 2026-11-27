@@ -402,3 +402,152 @@ async fn a_stdio_backend_leads_its_own_process_group() {
         "the backend shares the gateway's process group"
     );
 }
+
+/// [`PEER`] as a nested gateway: it starts a leaf in its own session (beyond
+/// the outer group's kill, as a nested gateway's leaf is), and its SIGTERM
+/// handler waits `wait` (the inner's slowest hurried path) before it kills
+/// and reaps the leaf through its own handle. The leaf ends by itself after
+/// 120 s, so a red row leaks nothing and the row never signals a pid. Every
+/// step writes a `CLOCK_MONOTONIC` mark file: `eof` in place of PEER's
+/// post-EOF SIGTERM ignore, then `term` and `leaf_dead`.
+#[cfg(target_os = "linux")]
+fn nesting_peer(wait: Duration) -> String {
+    const POST_EOF_IGNORE: &str = "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n";
+    let preamble = format!(
+        "import subprocess\n\
+         def mark(name):\n\
+         \x20   with open(name, \"w\") as out:\n\
+         \x20       out.write(repr(time.clock_gettime(time.CLOCK_MONOTONIC)))\n\
+         leaf = subprocess.Popen([sys.executable, \"-c\", \"import time\\ntime.sleep(120)\"], start_new_session=True)\n\
+         open(\"leaf.pid\", \"w\").write(str(leaf.pid))\n\
+         def hurried(*_):\n\
+         \x20   mark(\"term\")\n\
+         \x20   time.sleep({})\n\
+         \x20   leaf.kill()\n\
+         \x20   leaf.wait()\n\
+         \x20   mark(\"leaf_dead\")\n\
+         signal.signal(signal.SIGTERM, hurried)\n",
+        wait.as_secs_f64()
+    );
+    let (first, rest) = PEER.split_once('\n').expect("PEER has lines");
+    assert_eq!(
+        rest.matches(POST_EOF_IGNORE).count(),
+        1,
+        "premise: PEER ignores SIGTERM once, after its EOF"
+    );
+    format!(
+        "{first}\n{preamble}{}",
+        rest.replace(POST_EOF_IGNORE, "mark(\"eof\")\n")
+    )
+}
+
+/// Now on the clock the nesting peer marks with.
+#[cfg(target_os = "linux")]
+fn monotonic_now() -> Duration {
+    let now = rustix::time::clock_gettime(rustix::time::ClockId::Monotonic);
+    Duration::new(
+        u64::try_from(now.tv_sec).expect("a monotonic clock is not negative"),
+        u32::try_from(now.tv_nsec).expect("nanoseconds fit"),
+    )
+}
+
+/// The nesting peer's `name` mark, if it wrote one.
+#[cfg(target_os = "linux")]
+fn peer_mark(dir: &std::path::Path, name: &str) -> Option<Duration> {
+    let text = std::fs::read_to_string(dir.join(name)).ok()?;
+    text.trim().parse::<f64>().ok().map(Duration::from_secs_f64)
+}
+
+/// B.3 (BUDGET.4): with the backend's `stop_once` and `lifecycle` held, a
+/// nested gateway's tree handed over at the stage's entry ends in its plan's
+/// order before the stage deadline Db = entry + the backend reserve. CI
+/// asserts: the peer saw EOF before the plan's SIGTERM instant (entry +
+/// reserve - kill reserve - nested term need, on the peer's own clock); the
+/// reaper's record holds its SIGTERM before its kill; the tree was reaped
+/// before Db. The peer's `term` and `leaf_dead` marks are harness data: a
+/// loaded host may not run its handler in the gap, so they are printed, not
+/// asserted. A leaf the handler never ended is not signalled by the row: it
+/// ends by itself after 120 s (see `nesting_peer`).
+/// Linux only: the marks and the entry share `CLOCK_MONOTONIC`.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_held_lock_and_a_nested_tree_end_in_order_before_the_stage_deadline() {
+    use crate::gateway::BACKEND_RESERVE_FOR_TEST as BACKEND_RESERVE;
+    use crate::transport::{
+        NESTED_TERM_MARGIN_FOR_TEST as TERM_MARGIN, NESTED_TERM_NEED_FOR_TEST as TERM_NEED,
+    };
+    let dir = tempfile::tempdir().expect("temp dir");
+    let registry = BackendRegistry::new();
+    let backend = stays(dir.path(), "nested", registry.stop_deadline());
+    let peer = nesting_peer(
+        TERM_NEED
+            .checked_sub(TERM_MARGIN)
+            .expect("the margin is under the need"),
+    );
+    std::fs::write(dir.path().join("peer.py"), peer).expect("write the nesting peer");
+    let _end = EndOnDrop(Arc::clone(&backend));
+    assert!(registry.register(Arc::clone(&backend)), "registered");
+    backend.ensure_started().await.expect("the backend starts");
+    let pid = leader_pid(dir.path());
+    assert_eq!(kernel_view(pid), Some(false), "premise: the tree is live");
+    crate::transport::signal_log::arm(pid);
+    let once = backend.stop_once.lock().await;
+    let lifecycle = backend.lifecycle.write().await;
+    let entry = monotonic_now();
+    // On Linux std's Instant reads CLOCK_MONOTONIC too, so the reaper's
+    // recorded kill instant maps onto the peer's marks through this pair.
+    let entry_instant = std::time::Instant::now();
+    let db = tokio::time::Instant::now() + BACKEND_RESERVE;
+    let mut stop = std::pin::pin!(registry.stop_all_by(db, crate::backend::Handover::AtEntry));
+    assert!(
+        futures::poll!(stop.as_mut()).is_pending(),
+        "premise: the held locks keep the stop waiting"
+    );
+    assert_eq!(
+        registry.stop_deadline().handed_len(),
+        1,
+        "the stop's first step did not hand the nested tree to the reaper"
+    );
+    registry.stop_deadline().wait_handed(db).await;
+    assert!(
+        registry.stop_deadline().handed_all_reaped(),
+        "the handed nested tree was not reaped before the stage deadline"
+    );
+    crate::transport::signal_log::assert_term_then_kill(pid, "the nested tree's plan").await;
+    let planned_term = entry
+        + BACKEND_RESERVE
+            .checked_sub(KILL_RESERVE_FOR_TEST + TERM_NEED)
+            .expect("the backend reserve holds the kill reserve and the term need");
+    let eof = peer_mark(dir.path(), "eof").expect("the nested peer never saw EOF");
+    assert!(
+        eof < planned_term,
+        "the peer saw EOF {:?} after entry, not before the planned SIGTERM {:?} after it",
+        eof.saturating_sub(entry),
+        planned_term.saturating_sub(entry)
+    );
+    let since = |name: &str| peer_mark(dir.path(), name).map(|at| at.saturating_sub(entry));
+    let leaf_dead = since("leaf_dead");
+    // Harness data, one line per run: H = EOF after entry, J = the peer's
+    // SIGTERM mark past the planned instant, slack = the kill actually sent
+    // after the leaf's death (negative: the leaf outlived the kill).
+    let kill = crate::transport::signal_log::kill_sent_at(pid)
+        .map(|at| at.saturating_duration_since(entry_instant));
+    let signed = |a: Option<Duration>, b: Option<Duration>| match (a, b) {
+        (Some(a), Some(b)) => format!("{:.6}", a.as_secs_f64() - b.as_secs_f64()),
+        _ => "none".to_owned(),
+    };
+    let planned = Some(planned_term.saturating_sub(entry));
+    eprintln!(
+        "B.3 RUN H={:.6} J={} slack={} term={:?} leaf_dead={:?} kill={:?}",
+        eof.saturating_sub(entry).as_secs_f64(),
+        signed(since("term"), planned),
+        signed(kill, leaf_dead),
+        since("term"),
+        leaf_dead,
+        kill
+    );
+    drop((once, lifecycle));
+    tokio::time::timeout(Duration::from_secs(30), stop)
+        .await
+        .expect("the stop completes once the locks are let go");
+}

@@ -17,7 +17,17 @@ docs/release/c6-gap/v4.0.0-c6-replacements.tsv) it:
   2. re-targets the obligation's patch to that file;
   3. requires every hunk's old-side lines to occur exactly once in the file, inside that
      function's body (a patch that applies is not proof of WHICH function it mutates);
-  4. requires `git apply --check` of the re-targeted patch against REV.
+  4. requires `git apply --check` of the re-targeted patch against REV;
+  5. requires the killer-gap row's test filter to name one test: its last `::` segment is a
+     fn defined exactly once in the crate the arguments select (`--lib` or `--test X`), and
+     a full path is that fn's path in the crate's module tree. Cargo matches a filter as a
+     substring of the test path, so a test moved to another module would match nothing and
+     the row would come back VOID instead of judging its killer;
+  6. requires the row's declared_assertion (`<file>:<line> <text> [stmt:<8 hex>]`) to name a
+     line inside the killer (or inside a helper F the killer calls, for a `[via F]` row) that
+     still carries the recorded text and starts the statement with that digest, exactly once,
+     all in the file as the mutant run compiles it (the row's patch applied when it edits that
+     file). G7 scores a RED only when the panic is at that file:line.
 Prints one line per obligation and `N framed items unresolved`; exits 1 when N > 0.
 --manifest DIR writes the re-targeted patches and a mutants manifest for the runner.
 Standard library only.
@@ -28,6 +38,7 @@ from __future__ import annotations
 import argparse
 import csv
 import enum
+import hashlib
 import os
 import re
 import subprocess
@@ -122,8 +133,16 @@ def blank(source: str, mode: Wipe = Wipe.COMMENTS_AND_LITERALS) -> str:
             else:
                 i += 1  # a lifetime or label: 'a
         else:
-            i += 1
+            # Plain code: jump to the next place a branch above can start (a scan of every
+            # character in Python made a whole-crate module walk take seconds per thousand files).
+            m = _LEXEME.search(source, i + 1)
+            i = m.start() if m else n
     return "".join(out)
+
+
+# Every position where a branch of `blank` can fire: a comment, a quote, or a raw string's
+# prefix at the start of an identifier (what `_ident_start` checks).
+_LEXEME = re.compile(r"""//|/\*|"|'|(?<!\w)[bc]?r#*\"""")
 
 
 def _ident_start(source: str, i: int) -> bool:
@@ -317,6 +336,7 @@ class Tree:
         self.rev = self._git("rev-parse", "--verify", f"{rev}^{{commit}}").strip()
         self._cache: dict[str, str] = {}
         self._index: dict | None = None
+        self._files: set[str] | None = None
         self._scratch: tempfile.TemporaryDirectory | None = None
 
     def _git(self, *args: str, env: dict | None = None) -> str:
@@ -343,6 +363,26 @@ class Tree:
         done = subprocess.run(["git", "apply", "--cached", "--check", "-"], cwd=self.root,
                               input=patch, capture_output=True, text=True, env=self._index)
         return done.returncode == 0, done.stderr.strip()
+
+    def prefetch(self, prefix: str) -> None:
+        """Reads every `.rs` file under `prefix` into the cache with one `git cat-file --batch`
+        (a module walk reads thousands; one `git show` each takes minutes)."""
+        paths = [p for p in self.ls(prefix) if p.endswith(".rs") and p not in self._cache]
+        done = subprocess.run(["git", "cat-file", "--batch"], cwd=self.root, capture_output=True,
+                              input="".join(f"{self.rev}:{p}\n" for p in paths).encode())
+        if done.returncode:
+            raise RuntimeError(f"git cat-file --batch: {done.stderr.decode().strip()}")
+        out, at = done.stdout, 0
+        for p in paths:
+            end = out.index(b"\n", at)
+            size = int(out[at:end].split()[2])  # "<sha> blob <size>"
+            self._cache[p] = out[end + 1:end + 1 + size].decode()
+            at = end + 1 + size + 1
+
+    def exists(self, path: str) -> bool:
+        if self._files is None:
+            self._files = set(self._git("ls-tree", "-r", "--name-only", self.rev).split())
+        return path in self._files
 
     def files_declaring(self, name: str) -> list[str]:
         """The `src/**.rs` files whose text has `fn <name>`, found by one `git grep`."""
@@ -467,6 +507,19 @@ def _hunks(patch: str) -> list[list[tuple[str, str]]]:
     return hunks
 
 
+def _splice(lines: list[str], edits: list[tuple[int, int, list[str]]]) -> str | None:
+    """`lines` (kept ends) with each edit (first old line index, old line count, new lines)
+    put in, as one text; None when two edits overlap."""
+    out, cursor = [], 0
+    for first, count, new in sorted(edits):
+        if first < cursor:
+            return None
+        out.extend(lines[cursor:first])
+        out.extend(new)
+        cursor = first + count
+    return "".join(out + lines[cursor:])
+
+
 def _contained(source: str, decl: Decl, patch: str) -> str | None:
     """None when every hunk anchors to exactly one place in the file and the patched file differs
     from `source` only inside `decl`: the text before its `fn` and after its closing brace stay
@@ -485,13 +538,9 @@ def _contained(source: str, decl: Decl, patch: str) -> str | None:
         if all(mark == " " for mark, _ in hunk):
             return f"hunk {k} changes nothing"
         edits.append((hits[0], len(old), [text + "\n" for mark, text in hunk if mark != "-"]))
-    patched, cursor = [], 0
-    for first, count, replacement in sorted(edits):
-        if first < cursor:
-            return "two hunks overlap"
-        patched += lines[cursor:first] + replacement
-        cursor = first + count
-    patched_text = "".join(patched + lines[cursor:])
+    patched_text = _splice(lines, edits)
+    if patched_text is None:
+        return "two hunks overlap"
     before, after = source[:decl.at], source[decl.stop + 1:]
     if not patched_text.startswith(before):
         return f"it changes text before {decl.name} (line {decl.start})"
@@ -606,6 +655,440 @@ def resolve(tree: Tree, ob: Obligation, rust_files: set[str]) -> Outcome:
 
 
 # --------------------------------------------------------------------------------------------
+# Killer filters: the module tree of a crate, and the one test a filter names in it.
+# --------------------------------------------------------------------------------------------
+
+GAP_TABLE = "docs/release/c6-gap/v4.0.0-c6-gap-table.tsv"
+_MOD = re.compile(r"\bmod\s+([A-Za-z_]\w*)\s*([;{])")
+_MOD_WORD = re.compile(r"\bmod\b")
+_PATH_ATTR = re.compile(r'#\[\s*path\s*=\s*"([^"]+)"\s*\]')
+_PATH_WORD = re.compile(r"#\[\s*path\b")
+# `fn <name>` in raw text with only whitespace or line comments between: for a file with no
+# block comment, a superset of what declarations() finds in the blanked text.
+_FN_LINE = re.compile(r"\bfn(?:\s|//[^\n]*)+([A-Za-z_]\w*)")
+# A test attribute directly on a fn: #[test], #[tokio::test], #[tokio :: test(...)]; not #[cfg(test)].
+_TEST_ATTR = re.compile(r"#\[\s*(?:[A-Za-z_]\w*\s*::\s*)*test\b")
+
+
+@dataclass(frozen=True)
+class ModFile:
+    """One file of a crate's module tree: its module path, and its inline `mod x { }` blocks
+    as (open offset, close offset, name), so a fn's path adds the blocks around it."""
+
+    path: str
+    inline: tuple[tuple[int, int, str], ...]
+
+
+# Per crate root: its module tree and fn-name index, or the reason it cannot be read.
+Crates = dict[str, "tuple[dict[str, ModFile], dict[str, list[str]]] | Unsupported"]
+
+def module_tree(tree: Tree, root: str) -> dict[str, ModFile]:
+    """Every file of the crate rooted at `root`, found the way rustc finds it: `mod x;` loads
+    x.rs or x/mod.rs beside a mod-rs file (the root, a mod.rs, a #[path] file), under a
+    directory named for any other file, inside the directories of enclosing inline modules,
+    or the #[path] file named. A declared module whose file is missing is unreadable."""
+    tree.prefetch(os.path.dirname(root))
+    files: dict[str, ModFile] = {}
+    todo = [(root, "", True)]  # (file, module path, children resolve from the file's own directory)
+    while todo:
+        path, module, owns_dir = todo.pop()
+        if path in files:
+            raise Unsupported(f"{path} is mounted twice")
+        source = tree.read(path)
+        if not _MOD_WORD.search(source):
+            files[path] = ModFile(module, ())  # no `mod` anywhere: no child, no inline block
+            continue
+        code = blank(source)
+        # Literals are kept only to read a #[path]; a file that names none needs no second pass.
+        kept = blank(source, Wipe.COMMENTS) if _PATH_WORD.search(source) else code
+        line_at = [0] * (len(code) + 1)  # _matching names a line only in its error
+        # A macro_rules! body is token trees, not items: a `mod` in it declares nothing.
+        macros = [(m.end() - 1, _matching(code, m.end() - 1, line_at)) for m in _MACRO_RULES.finditer(code)
+                  if m.group(0).startswith("macro_rules")]
+        found = [(m, m.start()) for m in _MOD.finditer(code)
+                 if _ident_start(code, m.start()) and not any(o < m.start() < c for o, c in macros)]
+        inline = tuple((m.end() - 1, _matching(code, m.end() - 1, line_at), m.group(1))
+                       for m, _ in found if m.group(2) == "{")
+        files[path] = ModFile(module, inline)
+        here = os.path.dirname(path)
+        base = here if owns_dir else os.path.join(here, Path(path).stem)
+        for m, at in found:
+            if m.group(2) != ";":
+                continue
+            name, around = m.group(1), [n for o, c, n in inline if o < at < c]
+            # The attributes of this item: everything since the previous item or block boundary.
+            attrs = kept[max(code.rfind(ch, 0, at) for ch in ";{}") + 1:at]
+            attr = _PATH_ATTR.findall(attrs)
+            if attr:
+                child = os.path.normpath(os.path.join(os.path.join(base, *around) if around else here, attr[-1]))
+                owns = True
+            else:
+                d = os.path.join(base, *around)
+                tried = [f"{d}/{name}.rs", f"{d}/{name}/mod.rs"]
+                hit = [t for t in tried if tree.exists(t)]
+                if not hit:
+                    raise Unsupported(f"mod {name} in {path}: none of {', '.join(tried)}")
+                child, owns = hit[0], hit[0].endswith("/mod.rs")
+            if not tree.exists(child):
+                raise Unsupported(f"mod {name} in {path}: no file {child}")
+            todo.append((child, "::".join(p for p in (module, *around, name) if p), owns))
+    return files
+
+
+def _declared_test_path(tree: Tree, target: str) -> str | None:
+    """The `path` a Cargo.toml `[[test]]` entry gives test target `target`, else None (cargo's
+    tests/X.rs or tests/X/main.rs). Read as text, one table at a time: no TOML parser in the
+    standard library this script may assume."""
+    if not tree.exists("Cargo.toml"):
+        return None
+    for table in tree.read("Cargo.toml").split("[[test]]")[1:]:
+        table = re.split(r"^\[", table, maxsplit=1, flags=re.M)[0]
+        if re.search(rf'^name\s*=\s*"{re.escape(target)}"\s*$', table, re.M):
+            m = re.search(r'^path\s*=\s*"([^"]+)"', table, re.M)
+            return m.group(1) if m else None
+    return None
+
+
+def filter_refusal(tree: Tree, args: str, crates: Crates) -> tuple[str | None, str | None]:
+    """(why the killer arguments' test filter does not name exactly one test, None), or
+    (None, the file defining that one test). `crates` caches each crate's module tree and
+    fn-name index across rows."""
+    words = args.split()
+    if words[:1] == ["--lib"] and len(words) == 2:
+        root = "src/lib.rs"
+    elif words[:1] == ["--test"] and len(words) == 3:
+        declared = _declared_test_path(tree, words[1])
+        roots = [r for r in ((declared,) if declared else (f"tests/{words[1]}.rs", f"tests/{words[1]}/main.rs"))
+                 if tree.exists(r)]
+        if not roots:
+            return f"killer arguments {args!r}: no test target {words[1]}", None
+        root = roots[0]
+    else:
+        return f"killer arguments {args!r} are not `--lib FILTER` or `--test TARGET FILTER`", None
+    wanted = words[-1]
+    name = wanted.rsplit("::", 1)[-1]
+    try:
+        if isinstance(crates.get(root), Unsupported):
+            raise crates[root]  # one unreadable crate is read once, not once per row
+        if root not in crates:
+            try:
+                mods = module_tree(tree, root)
+            except Unsupported as unreadable:
+                crates[root] = unreadable
+                raise
+            # Which crate files spell `fn <name>`, for every name at once: one pass over the
+            # cached text instead of one `git grep` per row. A file with a block comment is read
+            # blanked, so a comment (nested or not) between `fn` and the name is space, as
+            # declarations() sees it; any other file raw, which can only over-match (a `fn x` in a
+            # string or line comment), and declarations() then keeps only code.
+            index: dict[str, list[str]] = {}
+            for path in mods:
+                source = tree.read(path)
+                names = _FN.findall(blank(source)) if "/*" in source else _FN_LINE.findall(source)
+                for found in sorted(set(names)):
+                    index.setdefault(found, []).append(path)
+            crates[root] = (mods, index)
+        mods, index = crates[root]
+        defs = [(p, w) for p, w, _ in _fn_paths(tree, mods, index.get(name, ()), lambda n: n == name)]
+        if len(defs) == 1 and ("::" not in wanted or defs[0][0] == wanted):
+            # Cargo runs every test whose path CONTAINS the filter. The filter's last segment
+            # lies inside one segment of any path it matches (a module, an inline module or the
+            # fn): the files where that segment could be are the only ones to read.
+            near = {p for k, ps in index.items() if name in k for p in ps}
+            near |= {p for p, m in mods.items() if name in m.path or any(name in n for _, _, n in m.inline)}
+            runs = [p for p, _, is_test in _fn_paths(tree, mods, sorted(near), lambda n: True)
+                    if is_test and wanted in p]
+    except Unsupported as unreadable:
+        return f"test filter {wanted}: cannot read the crate's module tree with certainty: {unreadable}", None
+    if not defs:
+        return f"test filter {wanted}: no fn {name} in the crate rooted at {root}", None
+    if len(defs) > 1:
+        return (f"test filter {wanted}: fn {name} is defined {len(defs)} times: "
+                + ", ".join(f"{p} at {w}" for p, w in defs), None)
+    if "::" in wanted and defs[0][0] != wanted:
+        return f"test filter {wanted} does not match the module tree: fn {name} is {defs[0][0]} at {defs[0][1]}", None
+    if runs != [defs[0][0]]:
+        return f"test filter {wanted} matches {len(runs)} tests: {', '.join(sorted(runs))}", None
+    return None, defs[0][1].rsplit(":", 1)[0]
+
+
+def _fn_paths(tree: Tree, mods: dict[str, ModFile], paths, wanted) -> list[tuple[str, str, bool]]:
+    """(module path, file:line, has a test attribute) of each fn in `paths` whose name `wanted`
+    accepts. The attribute is read from the item's own text since the previous `;`, `{` or `}`."""
+    out = []
+    for path in paths:
+        source, mod = tree.read(path), mods[path]
+        code = None
+        for d in declarations(source):
+            if wanted(d.name):
+                code = code if code is not None else blank(source)
+                around = [n for o, c, n in mod.inline if o < d.at < c]
+                attrs = code[max(code.rfind(ch, 0, d.at) for ch in ";{}") + 1:d.at]
+                out.append(("::".join(p for p in (mod.path, *around, d.name) if p), f"{path}:{d.start}",
+                            bool(_TEST_ATTR.search(attrs))))
+    return out
+
+
+def _gap_rows(tree: Tree, outcomes: list[Outcome]) -> list[tuple[dict[str, str], Outcome]]:
+    """Each killer-gap row with the active obligation it belongs to, in the table's order. A row
+    no active obligation uses (a slot an understudy replaced) is left out."""
+    by_patch = {(o.obligation.path, Path(o.obligation.patch).name): o for o in outcomes}
+    rows = []
+    for row in _rows(tree.read(GAP_TABLE)):
+        o = by_patch.get((row["path"], Path(row["mutant"].split(":", 1)[0]).name))
+        if o is not None:
+            rows.append((row, o))
+    return rows
+
+
+# --------------------------------------------------------------------------------------------
+# Declared assertions: G7 scores a RED only at the row's declared file:line.
+# --------------------------------------------------------------------------------------------
+# A static tripwire for drift: it proves the declared site still holds the recorded statement
+# inside the killer (or the helper the row names), in the file as the mutant run compiles it.
+# It cannot prove the killer panics there; only the gate-day log does, through G7.
+
+# `<file>:<line> <text> [stmt:<8 hex>]`, then free annotations; `[via F]` names a helper. The
+# text may itself hold a `[stmt:...]`, so the marker is chosen against the judged line.
+_SITE = re.compile(r"^(\S+):(\d+) (.+)$")
+_STMT = re.compile(r" \[stmt:([0-9a-f]{8})\]")
+_VIA = re.compile(r"\[via ([A-Za-z_]\w*)\]")
+
+
+def _collapse(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _apply_reanchored(source: str, patch: str) -> str:
+    """`source` with `patch` applied by its hunk headers. Only for a patch `_reanchor` wrote,
+    whose headers name exactly where each old side sits in `source`."""
+    lines = source.splitlines(keepends=True)
+    edits = [(int(head[0]) - 1, int(head[1]), [text + "\n" for mark, text in hunk if mark != "-"])
+             for head, hunk in zip(re.findall(r"^@@ -(\d+),(\d+) ", patch, flags=re.M), _hunks(patch))]
+    text = _splice(lines, edits)
+    if text is None:
+        raise Unsupported("the row's patch has overlapping hunks")
+    return text
+
+
+def _statement(src: list[str], blanked: list[str], line: int,
+               at: int | None = None) -> tuple[tuple[int, int], str, int]:
+    """The statement holding 1-based `line`, as (its start (line index, column), its
+    whitespace-collapsed source text, the index of its last line), from the source lines `src`
+    and the same lines blanked.
+    Rust reports a chained call's panic at its continuation line (`.unwrap_err(),`), which
+    starts no statement and can repeat inside one test: a line whose code opens with `.`, `?` or an operator belongs to
+    the statement found by scanning back, in the blanked text, to the previous `;`, `,`, `{` or
+    `}` at depth 0 (an opening `(` or `[` passed at depth 0 means the chain sits inside a call
+    or list, and the scan goes on; after a finished statement that is the line itself, `*slot = a;`). Any other line starts its own statement at its first
+    non-blank source character, or at column `at` when given (a second statement on one line). From the start the text runs forward up to a `;` or `,` at
+    depth 0 (kept), a closer that would take the depth below 0 (left out), or a line end at
+    depth 0 that does not visibly go on (see `_continues`). A declared line the statement does
+    not reach is refused by the caller: any continuation form not followed fails closed."""
+    col = len(src[line - 1]) - len(src[line - 1].lstrip())
+    lead = blanked[line - 1].lstrip()[:1]
+    if at is not None:
+        j, c = line - 1, at
+    elif lead and lead in _CONTINUATION_LEAD:
+        j, c = _statement_start(src, blanked, line - 1, col)
+    else:
+        j, c = line - 1, col
+    text, last, stop = _forward(src, blanked, j, c)
+    # A plain line that a `,`, an earlier line's `)`/`]` or its own line end ends may sit inside
+    # a call or list: its statement is the enclosing one, when the scan back crosses that opener.
+    if at is None and (j, c) == (line - 1, col) and stop in (",", ")", "]", ""):
+        enclosing = _statement_start(src, blanked, line - 1, col, inside=True)
+        if enclosing is not None:
+            j, c = enclosing
+            text, last, _ = _forward(src, blanked, j, c)
+    return (j, c), text, last
+
+
+def _forward(src: list[str], blanked: list[str], j: int, c: int) -> tuple[str, int, str]:
+    """The statement text from (line index `j`, column `c`), the index of its last line, and
+    the character that ended it at depth 0 (`;`, `,` or a closer), or "" at a line end."""
+    depth, parts, stop = 0, [], ""
+    for k in range(j, len(blanked)):
+        text = blanked[k]
+        start = c if k == j else 0
+        end, done = len(text), False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                if depth == 0:
+                    end, done, stop = i, True, ch
+                    break
+                depth -= 1
+            elif ch in ";," and depth == 0:
+                end, done, stop = i + 1, True, ch
+                break
+        parts.append(src[k][start:end])
+        # A line end at depth 0 ends the statement unless the statement visibly goes on. A later
+        # line with no code (blank, or comment-only and so blanked) never ends it: the scan only
+        # reaches such a line because the code before it continued. The first line always can,
+        # so a scan started on a blank line stays empty and cannot double-count the next statement.
+        if done or (depth == 0 and (k == j or text.strip()) and not _continues(src, blanked, k)):
+            break
+    return _collapse(" ".join(parts)), k, stop
+
+
+# A line ending in one of these, or a next code line opening with one (or with `.` or `?`),
+# continues the statement: an assignment, a binary operator, a chain or `?` split over lines.
+_OPERATOR_CHARS = "=+-*/%&|^<>"
+# A line whose code opens with one of these continues the statement before it, if any.
+_CONTINUATION_LEAD = ".?" + _OPERATOR_CHARS
+
+
+def _later_starts(text: str) -> list[int]:
+    """Columns in one blanked line where a statement begins after a `;` closed another at the
+    line's own nesting level (`setup(); assert!(ok());`); a `;` inside a block or call is not one."""
+    depth, starts = 0, []
+    for i, ch in enumerate(text):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth = max(depth - 1, 0)  # a closer of an earlier line returns to this line's level
+        elif ch == ";" and depth == 0 and text[i + 1:].strip():
+            starts.append(len(text) - len(text[i + 1:].lstrip()))
+    return starts
+
+
+def _continues(src: list[str], blanked: list[str], k: int) -> bool:
+    """True when the statement running through line index `k` (at depth 0 at its end) goes on:
+    the line's code ends with `=` or a binary operator, or the next code line (blank and
+    comment-only lines skipped) opens with `.`, `?` or a binary operator."""
+    tail = blanked[k].rstrip()
+    if tail and tail[-1] in _OPERATOR_CHARS:
+        return True
+    for m in range(k + 1, len(src)):
+        if blanked[m].strip():
+            return blanked[m].lstrip()[0] in "." + "?" + _OPERATOR_CHARS
+        # A blank line, or a comment-only line (blanked to spaces), carries no code.
+    return False
+
+
+def _statement_start(src: list[str], blanked: list[str], k: int, col: int,
+                     inside: bool = False) -> tuple[int, int] | None:
+    """Where the statement holding position (line index `k`, column `col`) starts: the first
+    non-blank source character after the nearest boundary before it (see `_statement`). While
+    the scan has crossed only `.`-lines, a `}` at depth 0 closes the chain's block receiver
+    (`async { .. }` then `.await`), not a statement, so the scan steps into that block."""
+    depth, j, c, receiver = 0, k, col - 1, True
+    while j >= 0:
+        text = blanked[j]
+        while c >= 0:
+            ch = text[c]
+            if ch in ")]" or (ch == "}" and (depth or receiver)):
+                depth += 1
+            elif ch in "([":
+                if not depth:
+                    inside = False  # the enclosing call or list's opener: its `,`s now end
+                depth -= 1 if depth else 0
+            elif ch == "{" and depth:
+                depth -= 1
+            elif ch == "," and not depth and inside:
+                pass
+            elif ch in ";,{}" and not depth:
+                # `inside` still set: the line is in a block or match arm, not a call or list.
+                return None if inside else _first_code(src, j, c + 1)
+            c -= 1
+        lead = blanked[j].lstrip()[:1]
+        receiver = receiver and bool(lead) and lead in _CONTINUATION_LEAD
+        j -= 1
+        c = len(blanked[j]) - 1 if j >= 0 else -1
+    return None if inside else _first_code(src, 0, 0)
+
+
+def _first_code(src: list[str], j: int, c: int) -> tuple[int, int]:
+    """The first non-blank source position at or after (line index `j`, column `c`)."""
+    while j < len(src):
+        rest = src[j][c:]
+        if rest.strip():
+            return j, c + len(rest) - len(rest.lstrip())
+        j, c = j + 1, 0
+    return j, 0
+
+
+def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: str) -> str | None:
+    """Why the row's declared_assertion would not be the site G7 matches, or None."""
+    m = _SITE.match(row.get("declared_assertion", "").strip())
+    marks = list(_STMT.finditer(m.group(3))) if m else []
+    if not marks or not marks[0].start():
+        return "declared assertion does not open with file:line, text and [stmt:<8 hex>]"
+    path, line, rest = m.group(1), int(m.group(2)), m.group(3)
+    site = f"declared assertion {path}:{line}"
+    killer = row["declared_killer_args"].split()[-1].rsplit("::", 1)[-1]
+
+    def judged(file: str) -> str:
+        # The file the mutant run compiled: the row's own patch applied when it edits that file.
+        source = tree.read(file)
+        return _apply_reanchored(source, o.patch) if file == o.file and o.patch else source
+
+    if not tree.exists(path):
+        return f"{site}: no such file"
+    try:
+        source = judged(path)
+        decls = declarations(source)
+        killer_src = source if killer_file == path else judged(killer_file)
+        killer_decls = [d for d in (decls if killer_file == path else declarations(killer_src)) if d.name == killer]
+    except Unsupported as unreadable:
+        return f"{site}: cannot read the source with certainty: {unreadable}"
+    src, blanked = source.splitlines(), blank(source).splitlines()
+    count = len(src)
+    if not 1 <= line <= count:
+        return f"{site} is outside the file's {count} lines"
+    if len(killer_decls) != 1:
+        return f"{site}: {killer} is declared {len(killer_decls)} times in {killer_file}"
+    kdecl = killer_decls[0]
+    # The digest marker is the one whose text before it is the judged line; else the first.
+    wanted = _collapse(src[line - 1])
+    pick = next((mk for mk in marks if _collapse(rest[:mk.start()]) == wanted), marks[0])
+    text, digest, via = rest[:pick.start()], pick.group(1), _VIA.search(rest[pick.end():])
+    holders = [d for d in decls if d.start <= line <= d.end]
+    inner = min(holders, key=lambda d: (d.end - d.start, -d.start)) if holders else None
+    if via:
+        helper = via.group(1)
+        if inner is None or inner.name != helper:
+            return f"{site} is in {inner.name if inner else 'no fn'}, not {helper}"
+        body = "\n".join(blank(killer_src).splitlines()[kdecl.start - 1:kdecl.end])
+        # The fn header names the killer, never the helper; any later `F(` or `F::` is a use.
+        if not re.search(rf"\b{re.escape(helper)}\s*(\(|::)", body):
+            return f"{killer} does not call {helper}"
+        span = inner
+    else:
+        if path != killer_file or not kdecl.start <= line <= kdecl.end:
+            return f"{site} is not inside {killer}"
+        # A fn nested in the killer is not the killer: without [via F] the line must be its own.
+        if inner is not None and inner.name != killer:
+            return f"{site} is in {inner.name}, not {killer}"
+        span = kdecl
+    _, statement, last = _statement(src, blanked, line)
+    actual = hashlib.sha256(statement.encode()).hexdigest()[:8]
+    if _collapse(src[line - 1]) != _collapse(text):
+        return f"{site} does not carry the recorded text (statement digest there is {actual})"
+    # The statement must run through the declared line: a continuation form the statement rule
+    # does not follow ends early, and its head alone vouches for nothing.
+    if last < line - 1:
+        return f"statement at {path}:{line} does not reach its declared line (it ends at line {last + 1})"
+    if actual != digest:
+        return f"{site} statement digest is {actual}, recorded {digest}"
+    # Distinct statements in the span, counted by start: each line's own (or the one it
+    # continues) and any that begin after a `;` on the same line, so a multi-line statement counts
+    # once and two identical statements count twice wherever they sit.
+    found = {}
+    for k in range(span.start, span.end + 1):
+        for at in (None, *_later_starts(blanked[k - 1])):
+            where, other, _ = _statement(src, blanked, k, at)
+            found[where] = other
+    same = sum(other == statement for other in found.values())
+    if same != 1:
+        return f"statement at {path}:{line} occurs {same} times in {span.name}"
+    return None
+
+
+# --------------------------------------------------------------------------------------------
 # Command line.
 # --------------------------------------------------------------------------------------------
 
@@ -614,14 +1097,10 @@ def write_manifest(tree: Tree, outcomes: list[Outcome], out: Path) -> None:
     them: one row per obligation, in the killer-gap table's row order, with that table's killer
     arguments. The freeze-day batches are cut from this file (round robin), so the order is the
     batch plan and every obligation in it is exactly the set resolved here."""
-    by_patch = {(o.obligation.path, Path(o.obligation.patch).name): o for o in outcomes}
     out.mkdir(parents=True, exist_ok=True)
     lines, placed = [f"head_sha\t{tree.rev}"], set()
-    for row in _rows(tree.read("docs/release/c6-gap/v4.0.0-c6-gap-table.tsv")):
+    for row, o in _gap_rows(tree, outcomes):
         name = Path(row["mutant"].split(":", 1)[0]).name
-        o = by_patch.get((row["path"], name))
-        if o is None:
-            continue  # a row no active obligation uses (a slot an understudy replaced)
         d = PATCH_DIR[row["path"]]
         (out / f"{d}_{name}").write_text(o.patch or "")
         lines.append(f"{d.upper()}_{int(row['rank']):02d}\tlinux\t{d}_{name}\t{row['declared_killer_args']}")
@@ -661,6 +1140,15 @@ def _run(tree: Tree, args: argparse.Namespace) -> int:
                 twin.status = "unresolved"
                 twin.detail = (f"{first.obligation.path} rank {first.obligation.rank} and "
                                f"{o.obligation.path} rank {o.obligation.rank} resolve to one function at {o.file}")
+    # A row whose test filter names no test, or several, would not judge its killer; a row
+    # whose declared site no longer holds its statement would have its RED scored VOID by G7.
+    crates: Crates = {}
+    for row, o in _gap_rows(tree, outcomes):
+        if o.status == "unresolved":
+            continue
+        why, killer_file = filter_refusal(tree, row["declared_killer_args"], crates)
+        if why or (why := assertion_refusal(tree, row, o, killer_file)):
+            o.status, o.detail = "unresolved", why
     for o in outcomes:
         ob = o.obligation
         where = f"{ob.path} rank {ob.rank} {ob.qualified}"

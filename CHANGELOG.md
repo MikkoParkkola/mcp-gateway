@@ -2591,7 +2591,7 @@ Fixed a test fixture import that failed strict Clippy for the firewall-only feat
 - **A scoped key's call to a granted backend that is not registered now records a refusal.** Its invocation record said `outcome: tool_error` (or `invalid` on a chain resume whose pending step's backend was removed), where an unscoped caller's missing backend records `not_found` and `denied` with -32001. It now records the same, on the synchronous answer, a task worker's step and a chain resume, so the Activity "blocked" filter shows every missing backend alike. The answer the caller gets is unchanged, and an out-of-scope name still records its scope refusal (-32003).
 - **Relay detection tracks a plan task's stored result from the moment it is readable.** The relay replay snapshot of a completed plan or multi-target task is now written with the result itself, in the same task-store write, so a `tasks/get` or a task notification can no longer read the result before its snapshot exists. The snapshot is kept in memory only once a read delivers it: a read under `off` leaves nothing behind, any other action keeps it. A snapshot made by another gateway process cannot be matched by this one; a read of such a result is refused under `block` (`-32002`), and delivered, counted and audited under `observe`.
 - **Contributors: schemata mutation batches find the gateway library.** In a workspace build the runner took the first library test executable it saw, which can be the nested `gateway-core` crate, and then refused every batch for a missing `--cfg mutants` probe. It now picks the `mcp_gateway` library by target name and refuses if that one is missing. No change for users of the gateway.
-- **`x-mcp-header` mirroring covers nested and non-ASCII arguments.** An annotated property inside a nested object argument is now mirrored onto its `Mcp-Param-*` header, and a string value that is not plain visible ASCII (a space, a control character, non-ASCII text) is sent Base64-wrapped in the gateway's `=?base64?…?=` header form instead of raw or dropped; an empty value is sent as an empty header. A tool whose nested `x-mcp-header` annotations are invalid or repeat a header name is left out of `tools/list`, as a top-level one already was. A `tools/call` through the router to a backend whose tool list was never fetched still carries its mirror. The change is [@terafin](https://github.com/terafin)'s, carried over from [#4771](https://github.com/MikkoParkkola/mcp-gateway/pull/4771); a later PR of theirs, [#5052](https://github.com/MikkoParkkola/mcp-gateway/pull/5052), brought the nested-property and encoding fixes to main.
+- **`x-mcp-header` mirroring covers nested and non-ASCII arguments.** An annotated property inside a nested object argument is now mirrored onto its `Mcp-Param-*` header, and a string value that is not plain visible ASCII (a space, a control character, non-ASCII text) is sent Base64-wrapped in the gateway's `=?base64?…?=` header form instead of raw or dropped; an empty value is sent as an empty header. A tool whose nested `x-mcp-header` annotations are invalid or repeat a header name is left out of `tools/list`, as a top-level one already was. A `tools/call` through the router to a backend whose tool list was never fetched still carries its mirror. The change is [@terafin](https://github.com/terafin)'s, carried over from [#4771](https://github.com/MikkoParkkola/mcp-gateway/pull/4771); a later PR of theirs, [#5052](https://github.com/MikkoParkkola/mcp-gateway/pull/5052), brought the nested-property and encoding fixes to main; its nine test rows also run on 4.0 through [#5099](https://github.com/MikkoParkkola/mcp-gateway/pull/5099).
 - **Personal-account custody releases its store off the stop path.** Releasing the account store (it holds two file locks) used to run inline on the thread that stopped the gateway, so a slow unlock could hold the stop past `server.shutdown_timeout`. The HTTP and stdio stops now release it on a separate thread and wait for it only until the stop's own deadline; a release still running then finishes after the stop, and is logged once without naming an account. A gateway serve that ends early (a refused start, an error, a cancelled stdio session) hands the store to that thread too, instead of releasing it while the gateway drops. If that thread cannot be started, the store stays locked until the process exits and this is logged, rather than unlocking on the stopping thread.
 - Windows: deleting a credential now confirms it is gone before reporting success. Credential Manager can briefly keep returning a credential after its delete succeeded; the gateway asks again for up to about 0.7 s, and a credential that is still readable fails the delete with `could not confirm removal` instead of being reported as removed.
 - **A stopping stdio backend takes its descendants down with it.** Before the group kill, the gateway now freezes, verifies and kills every process still attached to the backend by parent pid, so a backend that is itself a gateway no longer leaves its own backends running (each sits in its own process group, which the group kill never reached). It applies to ordinary and hurried stops alike, on Linux and macOS. A helper that detaches before the stop begins (a double fork) is outside its reach; processes it could not confirm gone are logged by count and pid.
@@ -6669,6 +6669,56 @@ Router guards: the direct-route response firewall reads the tool name from the v
   point at `3.3.2` (were stale at `2.19.0`); both chart `version`s bumped to
   `0.1.1`.
 
+## [3.3.1] - 2026-07-13
+
+### Security
+
+- **SSE transport: endpoints and redirects are checked after the URL is
+  resolved (#356).** The same-origin guard for the SSE `endpoint` event checked
+  only endpoints that began with a scheme, so a network-path or backslash form
+  (`//169.254.169.254/...`, `\\host/x`, `/\host/x`) replaced the authority and
+  went unchecked. Every endpoint is now resolved against the base URL and the
+  resolved origin is checked. The SSE redirect policy enforces the same origin,
+  and the SSE handshake buffer is capped at 64 KiB. An unused Tailscale
+  identity-header parser, which trusted inbound headers and had no callers, is
+  removed.
+- **Identity propagation fails closed when its audit record cannot be written
+  (#355).** A per-user credential minted for a caller is no longer returned
+  when the transparency-log write fails; the call fails instead. A refusal whose
+  audit write fails still refuses, and logs the failure.
+
+### Changed
+
+- **A lint for secrets in Debug output and logs (#354).**
+  `scripts/dev/cwe532-leak-lint.py` fails a pull request that derives `Debug`
+  over a secret-shaped field or logs a secret-shaped variable, and the release
+  workflow runs it before publishing. Findings that predate it are listed in
+  `scripts/dev/cwe532-baseline.txt`.
+- **The README is restructured for first-time readers and explains the
+  licensing model (#357).**
+- **npm publishing runs on Node 22 (#352).** npm 12 needs Node 22 or later, so
+  the 3.3.0 npm publish failed on Node 20 while the other channels published.
+
+## [3.3.0] - 2026-07-12
+
+### Changed
+
+- **BREAKING: per-file licensing (#349, #350).** The repository default is now
+  PolyForm Noncommercial 1.0.0; files marked `SPDX-License-Identifier: MIT` stay
+  MIT. Commercial use of the noncommercial-licensed code needs a commercial
+  license (`COMMERCIAL.md`). Versions 3.0.0 to 3.2.1 were published under MIT,
+  and that grant stays for those exact artifacts; they are now deprecated on npm
+  and yanked on crates.io, so new installs resolve to 3.3.0. `LICENSES.md` and
+  `NOTICE.md` describe the model.
+
+### Fixed
+
+- **OAuth discovery for an authorization server whose issuer has a path (#346,
+  #347).** The `.well-known` metadata URL is now built as RFC 8414 §3.1 and
+  RFC 9728 §3 require, with `.well-known/<suffix>` between the host and the
+  path, instead of after the path, which returned 404. Reported by @crepererum.
+- **Cargo.lock carries the 3.3.0 version bump (#351).**
+
 ## [3.2.1] - 2026-07-07
 
 ### Changed
@@ -7333,7 +7383,7 @@ credential path.
 
 - Resolved all 243 clippy pedantic warnings; `#![warn(missing_docs)]` enabled.
 
-## [2.0.0] - 2025-01-25
+## [2.0.0] - 2026-01-25
 
 ### Changed
 
@@ -7376,7 +7426,7 @@ credential path.
 - Python implementation (see v1.0.0 for Python version)
 - Pydantic configuration (replaced with figment + serde)
 
-## [1.0.0] - 2025-01-24
+## [1.0.0] - 2026-01-25
 
 ### Added
 

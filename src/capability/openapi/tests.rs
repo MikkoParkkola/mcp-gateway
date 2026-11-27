@@ -216,6 +216,82 @@ fn test_format_name() {
     assert_eq!(converter.format_name("GET /users/{id}"), "get_users_id");
 }
 
+/// The shared writer itself refuses a taken name: an `AlreadyExists` I/O
+/// error carrying the sentence, the file left byte-identical; a free name is
+/// written. The web UI checks names first, so only this row and the CLI's
+/// reach the writer's own refusal.
+#[test]
+fn the_writer_refuses_a_taken_name_and_keeps_the_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let cap = |yaml: &str| GeneratedCapability {
+        name: "listusers".into(),
+        yaml: yaml.into(),
+    };
+    let at = dir.path().to_str().unwrap();
+    cap("first")
+        .write_to_file(at)
+        .expect("a free name is written");
+
+    let refused = cap("second").write_to_file(at).expect_err("a taken name");
+
+    let crate::Error::Io(e) = &refused else {
+        panic!("not an I/O refusal: {refused}");
+    };
+    assert_eq!(e.kind(), std::io::ErrorKind::AlreadyExists, "{refused}");
+    assert_eq!(e.to_string(), name_taken("listusers"));
+    let kept = std::fs::read_to_string(dir.path().join("listusers.yaml")).unwrap();
+    assert_eq!(kept, "first");
+}
+
+/// The loader reads `<name>.yml` as well, so the writer refuses the name when
+/// only that file exists and adds no `.yaml` beside it.
+#[test]
+fn the_writer_refuses_a_name_held_by_a_yml_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("listusers.yml"), "first").unwrap();
+    let cap = GeneratedCapability {
+        name: "listusers".into(),
+        yaml: "second".into(),
+    };
+
+    let refused = cap
+        .write_to_file(dir.path().to_str().unwrap())
+        .expect_err("a name held by a .yml file");
+
+    assert_eq!(
+        refused.to_string(),
+        format!("IO error: {}", name_taken("listusers"))
+    );
+    assert!(
+        !dir.path().join("listusers.yaml").exists(),
+        "a .yaml was added"
+    );
+    let kept = std::fs::read_to_string(dir.path().join("listusers.yml")).unwrap();
+    assert_eq!(kept, "first");
+}
+
+/// A dangling link as `<name>.yml` holds the name too: the look does not
+/// follow links, so a check that did (as `exists` does) would miss it.
+#[cfg(unix)]
+#[test]
+fn the_writer_refuses_a_name_held_by_a_dangling_yml_link() {
+    let dir = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(dir.path().join("nowhere"), dir.path().join("listusers.yml"))
+        .unwrap();
+    let cap = GeneratedCapability {
+        name: "listusers".into(),
+        yaml: "second".into(),
+    };
+
+    let outcome = cap.write_to_file(dir.path().to_str().unwrap());
+
+    assert!(outcome.is_err(), "a name held by a dangling .yml link");
+    assert!(
+        !dir.path().join("listusers.yaml").exists(),
+        "a .yaml was added"
+    );
+}
+
 // ── petstore fixture ─────────────────────────────────────────────────────
 
 fn petstore_caps() -> Vec<GeneratedCapability> {
@@ -508,4 +584,154 @@ fn redirect_decision_follows_five_hops_and_stops_the_sixth() {
         redirect_decision(6, "https://1.1.1.1/openapi.json"),
         RedirectDecision::Stop
     );
+}
+
+// ── One document converts the same way every time ───────────────────────────
+
+/// Runs per leg: each parses the text afresh, so each walks a new map with
+/// its own hash seed; a pick left on map order fails a run about half the
+/// time with two candidates, so all 32 pass by chance about once in 2^32.
+const RUNS: usize = 32;
+
+/// `text` converted [`RUNS`] times, each from a fresh parse.
+fn converted_afresh(text: &str) -> Vec<Vec<GeneratedCapability>> {
+    (0..RUNS)
+        .map(|_| {
+            OpenApiConverter::new()
+                .convert_string(text)
+                .expect("the document converts")
+        })
+        .collect()
+}
+
+/// A one-operation document whose components hold `schemes` (a YAML block
+/// indented for `securitySchemes`).
+fn with_schemes(schemes: &str) -> String {
+    format!(
+        "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /x:\n    get:\n      operationId: getX\n      responses:\n        \"200\":\n          description: ok\ncomponents:\n  securitySchemes:\n{schemes}"
+    )
+}
+
+/// Every run writes `key: <key>` in its one capability's auth block.
+fn assert_every_run_picks(schemes: &str, key: &str) {
+    for (run, caps) in converted_afresh(&with_schemes(schemes)).iter().enumerate() {
+        let line = format!("  key: {key}");
+        assert!(
+            caps[0].yaml.lines().any(|l| l == line),
+            "run {run}: not {key}:\n{}",
+            caps[0].yaml
+        );
+    }
+}
+
+/// IMPBIND.6 leg 1: two bearer schemes; the name that sorts first is named.
+#[test]
+fn impbind6_two_bearer_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: http\n      scheme: bearer\n    alpha:\n      type: http\n      scheme: bearer\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 2: no bearer, two apiKey schemes.
+#[test]
+fn impbind6_two_api_key_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: apiKey\n      in: header\n      name: X-Zeta\n    alpha:\n      type: apiKey\n      in: header\n      name: X-Alpha\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 3: two schemes no pass prefers reach the final fallback.
+#[test]
+fn impbind6_the_fallback_names_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: openIdConnect\n      openIdConnectUrl: https://id.example/zeta\n    alpha:\n      type: openIdConnect\n      openIdConnectUrl: https://id.example/alpha\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 7: two oauth2 schemes and nothing preferred above them.
+#[test]
+fn impbind6_two_oauth2_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: oauth2\n      flows: {}\n    alpha:\n      type: oauth2\n      flows: {}\n",
+        "oauth:alpha",
+    );
+}
+
+/// IMPBIND.6 leg 8: two basic schemes and nothing else.
+#[test]
+fn impbind6_two_basic_schemes_name_the_first_by_name() {
+    assert_every_run_picks(
+        "    zeta:\n      type: http\n      scheme: basic\n    alpha:\n      type: http\n      scheme: basic\n",
+        "env:ALPHA_TOKEN",
+    );
+}
+
+/// IMPBIND.6 leg 4: a request body with two media types, neither JSON nor
+/// form: the input takes the one whose name sorts first.
+#[test]
+fn impbind6_the_media_type_fallback_takes_the_first_by_name() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /x:\n    post:\n      operationId: putX\n      requestBody:\n        content:\n          text/plain:\n            schema:\n              type: object\n              properties:\n                zeta_field:\n                  type: string\n          application/xml:\n            schema:\n              type: object\n              properties:\n                alpha_field:\n                  type: string\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        let yaml = &caps[0].yaml;
+        assert!(yaml.contains("alpha_field"), "run {run}:\n{yaml}");
+        assert!(!yaml.contains("zeta_field"), "run {run}:\n{yaml}");
+    }
+}
+
+/// The `path:` and `method:` lines of each capability, in list order.
+fn endpoints(caps: &[GeneratedCapability]) -> Vec<(String, String)> {
+    let field = |yaml: &str, key: &str| {
+        yaml.lines()
+            .find_map(|l| l.trim().strip_prefix(key).map(str::to_string))
+            .unwrap_or_default()
+    };
+    caps.iter()
+        .map(|c| (field(&c.yaml, "path: "), field(&c.yaml, "method: ")))
+        .collect()
+}
+
+/// IMPBIND.6 leg 5: two operations whose tool names are equal, on two paths:
+/// the one on the path that sorts first comes first, every run.
+#[test]
+fn impbind6_equal_names_on_two_paths_order_by_path() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /b:\n    get:\n      operationId: listUsers\n      responses:\n        \"200\":\n          description: ok\n  /a:\n    get:\n      operationId: ListUsers\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        let got = endpoints(caps);
+        let want = [("/a", "GET"), ("/b", "GET")].map(|(p, m)| (p.to_string(), m.to_string()));
+        assert_eq!(got, want, "run {run}");
+    }
+}
+
+/// IMPBIND.6 leg 6: two equal-named operations on one path: GET before POST.
+#[test]
+fn impbind6_equal_names_on_one_path_order_by_method() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /a:\n    post:\n      operationId: listUsers\n      responses:\n        \"200\":\n          description: ok\n    get:\n      operationId: ListUsers\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        let got = endpoints(caps);
+        let want = [("/a", "GET"), ("/a", "POST")].map(|(p, m)| (p.to_string(), m.to_string()));
+        assert_eq!(got, want, "run {run}");
+    }
+}
+
+/// IMPBIND.6 leg 6b: one path keyed both `GET` and `get`, the two equal-named
+/// operations told apart by summary: the key as written decides, every run.
+#[test]
+fn impbind6_method_keys_that_differ_only_in_case_keep_one_order() {
+    const SPEC: &str = "openapi: 3.0.0\ninfo:\n  title: t\n  version: \"1\"\npaths:\n  /a:\n    get:\n      operationId: listUsers\n      summary: lower key\n      responses:\n        \"200\":\n          description: ok\n    GET:\n      operationId: ListUsers\n      summary: upper key\n      responses:\n        \"200\":\n          description: ok\n";
+    for (run, caps) in converted_afresh(SPEC).iter().enumerate() {
+        assert_eq!(caps.len(), 2, "run {run}");
+        assert!(
+            caps[0].yaml.contains("upper key"),
+            "run {run}:\n{}",
+            caps[0].yaml
+        );
+        assert!(
+            caps[1].yaml.contains("lower key"),
+            "run {run}:\n{}",
+            caps[1].yaml
+        );
+    }
 }

@@ -87,10 +87,14 @@ mod capability_editor;
 mod classic_routes;
 #[path = "webui_management_tests/internal_routes.rs"]
 mod internal_routes;
+// The import routes are web UI routes, and the rows name its sentences.
+#[cfg(feature = "webui")]
 #[path = "webui_management_tests/openapi_import.rs"]
 mod openapi_import;
 #[path = "webui_management_tests/registry.rs"]
 mod registry;
+#[path = "webui_management_tests/secret_reference_records.rs"]
+mod secret_reference_records;
 #[path = "webui_management_tests/secret_slot_surfaces.rs"]
 mod secret_slot_surfaces;
 #[path = "webui_management_tests/server_state.rs"]

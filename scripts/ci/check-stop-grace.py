@@ -44,7 +44,7 @@ import tempfile
 TABLE = "tests/fixtures/stop_grace_cases.txt"
 DEFAULT_SRC = "src/config/server_config.rs"
 CAP_SRC = "src/duration_bound.rs"
-CLI_SRC = "src/cli/mod.rs"
+CLI_SRC = "src/cli/command.rs"
 # Every CLI subcommand is classified here, and the self-test fails until a new one
 # is: a run whose first argument after the image is one of ONE_SHOT_COMMANDS exits
 # without serving, so no stop grace applies. LONG_RUNNING_COMMANDS serve or loop

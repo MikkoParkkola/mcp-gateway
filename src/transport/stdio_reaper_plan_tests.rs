@@ -234,3 +234,90 @@ fn a_backend_stage_budget_keeps_its_eof_and_term_phases() {
         "the plan's EOF and SIGTERM waits are not the budget less one kill reserve"
     );
 }
+
+/// The whole plan at each edge of the allocator, from the constants alone:
+/// below the minimum phase nothing is worth waiting for, so the kill comes at
+/// once; up to the nested need plus one minimum phase, SIGTERM takes all but
+/// the minimum phase and EOF keeps exactly that; from there SIGTERM holds the
+/// nested need until a third of the waits overtakes it. Where both phases are
+/// kept, they spend the waits exactly.
+/// Red if an edge moves: the nested need cut short by a step, or dropped so a
+/// third of the waits decides alone.
+#[cfg(unix)]
+#[test]
+fn the_allocator_plan_across_its_edges() {
+    let ms = Duration::from_millis;
+    let less = |a: Duration, b: Duration| a.checked_sub(b).expect("an edge below zero");
+    let (n, m) = (NESTED_TERM_NEED, MIN_PHASE);
+    let graceful = |eof, term| Ending::Graceful { eof, term };
+    let edges = [
+        ("no waits", Duration::ZERO, Ending::Now),
+        ("just under one minimum phase", less(m, ms(1)), Ending::Now),
+        ("one minimum phase", m, Ending::Now),
+        (
+            "SIGTERM's share under a minimum phase",
+            m + m / 2,
+            graceful(m, Duration::ZERO),
+        ),
+        ("the nested need alone", n, graceful(m, less(n, m))),
+        (
+            "one step short of need plus phase",
+            less(n + m, ms(1)),
+            graceful(m, less(n, ms(1))),
+        ),
+        ("need plus one minimum phase", n + m, graceful(m, n)),
+        (
+            "one step past need plus phase",
+            n + m + ms(1),
+            graceful(m + ms(1), n),
+        ),
+        ("a third equal to the need", n * 3, graceful(n * 2, n)),
+        (
+            "a third past the need",
+            n * 3 + ms(3),
+            graceful(n * 2 + ms(2), n + ms(1)),
+        ),
+    ];
+    for (edge, waits, expected) in edges {
+        let plan = graceful_ending(KILL_RESERVE + waits, true, None);
+        assert_eq!(plan, expected, "{edge}: waits {waits:?}");
+        if let Ending::Graceful { eof, term } = plan
+            && eof >= m
+            && term >= m
+        {
+            assert_eq!(
+                eof + term,
+                waits,
+                "{edge}: the kept phases do not spend the waits"
+            );
+        }
+    }
+}
+
+/// Test-only: [`super::StopDeadline::move_earlier`] with the set-time given
+/// instead of read from the clock, so a row can place the cut's set-time on a
+/// chosen side of a planned SIGTERM whatever the host's scheduling. The body is
+/// `move_earlier`'s, with `set_at` in place of `Instant::now()`. Unix only, as
+/// its callers are (the child-tree rows).
+#[cfg(unix)]
+impl super::StopDeadline {
+    /// Test-only: start the clock set-times are stored against, so an instant
+    /// read after this call encodes exactly (an earlier one saturates).
+    pub(crate) fn start_epoch() {
+        std::sync::LazyLock::force(&super::STOP_EPOCH);
+    }
+
+    pub(crate) fn move_earlier_at(&self, deadline: std::time::Instant, set_at: std::time::Instant) {
+        let nanos = deadline
+            .saturating_duration_since(*super::STOP_EPOCH)
+            .as_nanos();
+        let nanos = u64::try_from(nanos).unwrap_or(u64::MAX - 1);
+        let mut cut = self.cut.lock();
+        if nanos < cut.0 {
+            let set = set_at
+                .saturating_duration_since(*super::STOP_EPOCH)
+                .as_nanos();
+            *cut = (nanos, u64::try_from(set).unwrap_or(u64::MAX - 1));
+        }
+    }
+}

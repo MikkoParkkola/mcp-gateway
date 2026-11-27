@@ -177,9 +177,16 @@ pub(crate) enum UiRefused {
         class: RefusalClass,
     },
     Unsupported(String),
-    /// Save: auth is on and no audit log is configured, or the audit log
-    /// refused this save's intent; nothing was written either way.
+    /// Save: auth is on and no audit log is configured; nothing was
+    /// attempted.
     NoAuditLog,
+    /// Save: the audit log refused this save's intent: an append was
+    /// started, so the outcome is not confirmed (nothing was written).
+    AuditRefused,
+    /// Save: the writer refused the file before the target changed, and left
+    /// no scratch behind. It keeps the body a failed write has; only its
+    /// status is the refusal's 409.
+    WriterRefused,
     /// Save: the edit cannot be proven in place; the change as steps.
     Unprovable(Patch),
     /// Save: the file changed since the preview; the preview of it now.
@@ -417,7 +424,8 @@ async fn validate(
     target: &std::path::Path,
     template: &keyedit::Template,
 ) -> Result<(), UiRefused> {
-    ctx.validate_template(target, template, None)
+    // A preview judges as the save does: settings never hold for a restart.
+    ctx.validate_template(target, template, None, super::StatusChange::Refuse)
         .await
         .map_err(|error| validate_refusal(&error))
 }
@@ -428,7 +436,9 @@ pub(super) const LOADER_REFUSED: &str = "the change would be refused by the conf
 
 pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
     match e {
-        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused { class: *class },
+        ReplaceError::ReloadRefused { class, .. } => UiRefused::ReloadRefused {
+            class: class.clone(),
+        },
         ReplaceError::Refused(_) => UiRefused::Invalid(LOADER_REFUSED.to_owned()),
         ReplaceError::Unsupported(_) => {
             UiRefused::Unsupported("this change is not supported here".to_owned())
@@ -441,6 +451,7 @@ pub(super) fn validate_refusal(e: &ReplaceError) -> UiRefused {
         | ReplaceError::AuditRefused(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Write(_)
+        | ReplaceError::WriterRefused { .. }
         | ReplaceError::RollbackFailed { .. }
         | ReplaceError::Unconfirmed { .. }
         | ReplaceError::Secrets(_)

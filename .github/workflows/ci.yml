@@ -200,6 +200,20 @@ jobs:
         run: |
           python3 scripts/ci/test_coverage_probe_concurrency.py --self-test
           python3 scripts/ci/test_coverage_probe_concurrency.py
+      # The affected-tests map: its builder's rules (weight split, trace, unit record, age guard) and its workflow.
+      # strace: the real-trace row runs the builder's exact trace command, and fails here if strace is missing.
+      - name: The affected-tests map builder and workflow
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          command -v strace >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends strace; }
+          python3 scripts/ci/test_affected_map.py
+          python3 scripts/ci/test_affected_map_plan.py
+      # The shadow selection the four Linux test legs run (scripts/ci/affected_select.py) and their wiring.
+      - name: The affected-tests selection and its leg steps
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || python3 -m pip install --user --quiet 'pyyaml==6.0.2'
+          python3 scripts/ci/test_affected_select.py
+          python3 scripts/ci/test_affected_select_depth.py
       # Under pipefail `x | grep -q` fails the pipeline on a match (MIK-8333).
       - name: No piped quiet grep
         run: |
@@ -315,7 +329,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: The installed compiler is the pinned one
         run: python3 scripts/ci/check_toolchain_pin.py --runtime
       # Here because this job already has the pinned compiler and is cheap:
@@ -339,7 +354,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: Validate first-use smoke scripts
         # One file per `bash -n`: it checks only its first argument.
         run: for f in scripts/dev/usability-smoke.sh scripts/dev/first-run-smoke.sh scripts/dev/smoke-fixture-capability.sh; do bash -n "$f"; done
@@ -381,7 +397,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       # rg, PyYAML, lsof and shasum are all called by the script; a missing rg
       # would read as a missing downgrade warning, not as a missing tool.
       - name: Install and check the script's tools
@@ -699,7 +716,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       # Symlink creation for the no-follow row (W-T6): Developer Mode lets a
       # non-elevated token create symlinks, so the row runs rather than skips.
       # Every shard: the W-T6 rows can land in any of them.
@@ -764,7 +782,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - run: cargo clippy --all-targets --all-features -- -D warnings
       # MIK-8449: the registry-ban pass (MIK-8387) over the Windows build, so
       # `cfg(windows)` production code is linted like the Linux job's; only
@@ -868,19 +887,20 @@ jobs:
     runs-on: macos-latest
     # Each leg builds lib test parts, never the whole lib test binary (it
     # swapped this 3-core, 7 GB runner: 19 to 86 min of build): lib-b builds
-    # and runs parts 1-4 one at a time, int runs its suite and then builds and
+    # and runs parts 1 and 3, lib-c parts 2 and 4, int runs its suite and then builds and
     # runs part 5. The step limits below plus a 10-min reserve stay under this
     # job limit (scripts/ci/test_macos_parts.py).
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        # Two jobs: about two macOS runners serve trains. Which parts each
+        # Three jobs: GitHub runs up to 5 macOS jobs at once for this account,
+        # and trains plus pull requests peaked at 3 (measured 2026-11-27). Which parts each
         # leg builds comes from scripts/ci/shard_tests.py's PARTS alone.
         # A lane PR labelled os-sensitive runs lib-b alone, and that job builds
         # and runs every part: these runners serve every train
         # (test_os_label_routing.py).
-        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","int"]') }}
+        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","lib-c","int"]') }}
     permissions:
       contents: read
     env:
@@ -899,7 +919,11 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves; the
+          # train's macOS legs build cold. A warm cache would save only the
+          # dependency build, about 2.5 of 78-95 min (measured 2026-11-25): not worth a macOS
+          # runner on every landing.
+          save-if: false
       # macOS is a shipped target (Homebrew, release binaries), so its tests
       # run here, not only compile (MIK-8174): signals, process groups, file
       # locks and paths behave differently on a Mac. The two skips are the
@@ -920,17 +944,77 @@ jobs:
               sleep 30
             done
           ) &
-      # lib-b: parts 1-4, each built, run and deleted before the next (the solo
+      # lib-b: parts 1 and 3, lib-c: parts 2 and 4, each built, run and deleted before the next (the solo
       # lane: every part). The runner holds each part to its list less the OS
       # skips.
+      # The part holding the writer's root rows runs them again under sudo
+      # (shard_tests.py run_built_parts): they need the local users, and each
+      # starts its child as mcpg-c from the part binary itself, which sits in
+      # $RUNNER_TEMP/parts, outside the workspace path the composite opens.
+      - name: Local users for the writer's root rows
+        timeout-minutes: 2
+        if: matrix.shard == 'lib-b' || matrix.shard == 'lib-c'
+        uses: ./.github/actions/access-rows-setup
+      - name: mcpg-c can reach the part binaries
+        timeout-minutes: 1
+        if: matrix.shard == 'lib-b' || matrix.shard == 'lib-c'
+        run: |
+          set -euo pipefail
+          p="$RUNNER_TEMP/parts"
+          mkdir -p "$p"
+          while [ "$p" != / ]; do sudo chmod o+x "$p"; p="$(dirname "$p")"; done
+          # Fail here, in seconds, rather than as a root row 90 minutes in: the part binaries do not exist yet
+          # (each is built, run and deleted in the next step), so a stand-in sits where one will, in a pK folder
+          # made the same way, mode 0755 as run_built_parts leaves them.
+          probe="$RUNNER_TEMP/parts/p0/lib-tests-p0"
+          mkdir -p "${probe%/*}"
+          printf '#!/bin/sh\n' > "$probe"
+          chmod 0755 "$probe"
+          if ! sudo -u mcpg-c test -x "$probe"; then
+            d="$probe"
+            until [ "$d" = / ]; do
+              sudo -u mcpg-c test -x "$d" || bad="$d"
+              d="$(dirname "$d")"
+            done
+            echo "::error::mcpg-c cannot reach a part binary under $RUNNER_TEMP/parts; first closed path from the top: ${bad:-unknown} ($(ls -ld "${bad:-/}"))"
+            exit 1
+          fi
+          rm -r "${probe%/*}"
       - name: Lib test parts, built and run one at a time
         if: matrix.shard == 'lib-b'
         timeout-minutes: 150
         run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos lib-b --build "$RUNNER_TEMP/parts"
+      - name: Lib test parts 2 and 4, built and run one at a time
+        if: matrix.shard == 'lib-c'
+        timeout-minutes: 150
+        run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos lib-c --build "$RUNNER_TEMP/parts"
       - name: Shard suite
         if: matrix.shard == 'int'
         timeout-minutes: 110
         run: python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}
+      # The writer's refusal rows that need root, from the targets the suite just built. Before part 5: its build
+      # sets the part variable, and the next plain cargo call would rebuild the crate.
+      - name: Local users for the writer's refusal rows
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'int' }}
+        uses: ./.github/actions/access-rows-setup
+      - name: The writer's refusal rows binary
+        timeout-minutes: 2
+        id: refusal-rows
+        if: ${{ !cancelled() && matrix.shard == 'int' }}
+        run: |
+          set -euo pipefail
+          exe="$(cargo test --all-features --test writer_refusals --no-run --message-format=json-render-diagnostics \
+            | jq -r 'select(.target.name == "writer_refusals" and .executable != null) | .executable')"
+          [ -x "$exe" ]
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+      - name: Writer root rows (refusal surfaces)
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.shard == 'int' && steps.refusal-rows.outcome == 'success' }}
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E ${{ steps.refusal-rows.outputs.exe }}
+          filter: ""
       # int: part 5, after its own suite, in the same job; it runs when the
       # suite failed too, so part 5's tests still report.
       - name: Lib test part 5, built and run
@@ -997,6 +1081,12 @@ jobs:
         run: scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect aarch64-apple-darwin "$RUNNER_TEMP/expected"
       - name: Each part lists exactly the tests the source puts in it
         run: python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lists" "$RUNNER_TEMP/expected"
+      # Complete lists from a leg whose tests went red (or a skipped or
+      # cancelled leg) must not pass: only an exact success of every leg does.
+      - name: Every macOS leg succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/check_needs.py macos-shards
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
@@ -1105,7 +1195,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Runs on pull requests only, never the release-line push, so it never saves.
+          save-if: false
       - name: Shard suite
         timeout-minutes: 145
         run: python3 scripts/ci/shard_tests.py run macos int
@@ -1136,7 +1227,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: Build the shared lib test binary
         # Healthy builds take about 11 min; a stall ends here with its log (check_swap_jobs.py). The phase line
         # (numbers only: the runner user's process count and `free -m` rows) tells a build that waits on a lock from
@@ -1217,11 +1309,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
         with:
           toolchain: 1.99.1
-      # Saved on the release line only, restored everywhere.
+      # Restored everywhere, never saved: this job skips the release-line push (POST_MERGE_SKIPPED).
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         # Keyed by job, compiler and lock file (the action's default).
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          save-if: false
       # pwsh, as the legs: the same shell builds and runs the exe.
       - name: Build the shared lib test exe
         shell: pwsh
@@ -1305,7 +1397,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       - name: Build the gateway binary for the lib shards' sandbox rows
         timeout-minutes: 15
         run: |
@@ -1341,7 +1434,8 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # Skips the release-line push (POST_MERGE_SKIPPED), so it never saves.
+          save-if: false
       # Each skip names the job that runs the test in full, and its ticket:
       #   a_real_sdk_job_outlives_...: job `task-sdk-recovery`, MIK-7534.
       #   mik_7479_full_burst: workflow mrtr7b-full-burst.yml, MIK-7479;
@@ -1356,6 +1450,59 @@ jobs:
       # refused sandbox into a failure instead of a skip.
       - name: Allow unprivileged user namespaces (preview sandbox tests)
         run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      # Affected tests, shadow only (scripts/ci/affected_select.py): on a lane PR this leg records which of its
+      # tests the change can reach, then runs all of them anyway. The four steps may fail without failing the
+      # leg, and no other step reads what they produce.
+      - name: Affected tests map
+        id: affected-map
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && hashFiles('map/**') == '' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: map/affected-map.json
+          key: affected-map-none-${{ github.run_id }}
+          restore-keys: affected-map-
+      - name: Affected tests (shadow)
+        id: select
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          LEG: ${{ matrix.shard }}
+          RECORD: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
+        run: python3 scripts/ci/affected_select.py "$LEG" "$RECORD"
+      - name: Affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          LEG: ${{ matrix.shard }}
+          OUTCOME: ${{ steps.select.outcome }}
+          ATTEMPT: ${{ github.run_attempt }}
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
+        # No repository file is used here: when an earlier step failed, checkout may never have run.
+        run: |
+          f="$RUNNER_TEMP/affected-select/$LEG.json"
+          mkdir -p "$RUNNER_TEMP/affected-select"
+          if ! python3 -c 'import json, sys; sys.exit(sorted(json.load(open(sys.argv[1]))) != ["leg", "map_sha", "mode", "names", "reason", "run_attempt"])' "$f" 2>/dev/null; then
+            printf '{"leg": "%s", "map_sha": null, "mode": "full", "names": [], "reason": "select %s", "run_attempt": %s}\n' "$LEG" "$OUTCOME" "$ATTEMPT" > "$f"
+          fi
+          # Only a map the restore wrote is removed (with its folder); without a restore, map/ is the PR's own.
+          if [ -n "$RESTORED" ]; then
+            rm -f map/affected-map.json
+            rmdir map 2> /dev/null || true
+          fi
+      - name: Upload the affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: affected-select-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          retention-days: 30
+          if-no-files-found: warn
       - name: Shard suite
         env:
           PREVIEW_SANDBOX_REQUIRED: "1"
@@ -1402,6 +1549,30 @@ jobs:
               exit 1
             fi
           done
+      # The writer's refusal rows that need root (#[ignore], so the suite above left them out). This leg has already
+      # built their target and the gateway binary they start as user C.
+      - name: Local users for the writer's refusal rows
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'int-b' }}
+        uses: ./.github/actions/access-rows-setup
+      - name: The writer's refusal rows binary
+        timeout-minutes: 2
+        id: refusal-rows
+        if: ${{ !cancelled() && matrix.shard == 'int-b' }}
+        run: |
+          set -euo pipefail
+          # Built by the suite already: cargo only names the executable here.
+          exe="$(cargo test --all-features --test writer_refusals --no-run --message-format=json-render-diagnostics \
+            | jq -r 'select(.target.name == "writer_refusals" and .executable != null) | .executable')"
+          [ -x "$exe" ]
+          echo "exe=$exe" >> "$GITHUB_OUTPUT"
+      - name: Writer root rows (refusal surfaces)
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.shard == 'int-b' && steps.refusal-rows.outcome == 'success' }}
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E ${{ steps.refusal-rows.outputs.exe }}
+          filter: ""
 
   # The lib halves of the Linux shards, from the shared binary: no compile here. `!cancelled()` runs them even when
   # the build failed, so they end red instead of skipped (a skipped shard would read as passing).
@@ -1442,6 +1613,58 @@ jobs:
       # The artifact round trip drops the exec bit.
       - name: The gateway binary is executable
         run: chmod +x "$RUNNER_TEMP/gateway-bin/mcp-gateway"
+      # Affected tests, shadow only, as in test-shards. Here the select step comes after the part binaries are
+      # fetched, because a lib leg must list them to see tests the map has never met.
+      - name: Affected tests map
+        id: affected-map
+        if: ${{ github.event_name == 'pull_request' && github.base_ref == 'docs/ranking-1-release-line' && github.event.pull_request.head.repo.full_name == github.repository && !startsWith(github.head_ref, 'train/') && hashFiles('map/**') == '' }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: map/affected-map.json
+          key: affected-map-none-${{ github.run_id }}
+          restore-keys: affected-map-
+      - name: Affected tests (shadow)
+        id: select
+        continue-on-error: true
+        timeout-minutes: 3
+        env:
+          LEG: ${{ matrix.shard }}
+          RECORD: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
+        run: python3 scripts/ci/affected_select.py "$LEG" "$RECORD" --lib-bin "$RUNNER_TEMP/lib-bin"
+      - name: Affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 1
+        env:
+          LEG: ${{ matrix.shard }}
+          OUTCOME: ${{ steps.select.outcome }}
+          ATTEMPT: ${{ github.run_attempt }}
+          RESTORED: ${{ steps.affected-map.outputs.cache-matched-key }}
+        # No repository file is used here: when an earlier step failed, checkout may never have run.
+        run: |
+          f="$RUNNER_TEMP/affected-select/$LEG.json"
+          mkdir -p "$RUNNER_TEMP/affected-select"
+          if ! python3 -c 'import json, sys; sys.exit(sorted(json.load(open(sys.argv[1]))) != ["leg", "map_sha", "mode", "names", "reason", "run_attempt"])' "$f" 2>/dev/null; then
+            printf '{"leg": "%s", "map_sha": null, "mode": "full", "names": [], "reason": "select %s", "run_attempt": %s}\n' "$LEG" "$OUTCOME" "$ATTEMPT" > "$f"
+          fi
+          # Only a map the restore wrote is removed (with its folder); without a restore, map/ is the PR's own.
+          if [ -n "$RESTORED" ]; then
+            rm -f map/affected-map.json
+            rmdir map 2> /dev/null || true
+          fi
+      - name: Upload the affected tests record
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        timeout-minutes: 3
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: affected-select-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/affected-select/${{ matrix.shard }}.json
+          retention-days: 30
+          if-no-files-found: warn
       # Each part binary runs this half under today's guards; the five are checked first (exactly 1..N, each one
       # listing what its list.txt recorded, no test in two parts) and the floor applies to the sum.
       - name: Shard suite from the part binaries
@@ -1466,6 +1689,35 @@ jobs:
             echo "::error::upgrade_notice_tests selected no test"
             exit 1
           fi
+      # The shared writer's rows that need root and two more local users. The shard run above leaves them out
+      # (#[ignore]); here they run from the same part binaries, as root, after the users exist.
+      - name: Local users for the writer's root rows
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        uses: ./.github/actions/access-rows-setup
+      - name: The part holding the writer's root rows, where user C can run it
+        timeout-minutes: 2
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        run: |
+          set -euo pipefail
+          # The parts' own lists say which part holds them, so no part number is pinned here.
+          holder="$(grep -l -F 'config_persistence_access_tests::root::' "$RUNNER_TEMP"/lib-bin/*/p*/list.txt)" \
+            || { echo "::error::no lib test part's list names a root row"; exit 1; }
+          part_dir="$(dirname "$holder")"
+          sudo mkdir -p -m 0755 /opt/writer-rows
+          sudo cp "$part_dir/lib-tests-$(basename "$part_dir")" /opt/writer-rows/lib-tests
+          sudo chmod 0755 /opt/writer-rows/lib-tests
+          # C starts it once here, so a red row means a refusal and never a binary C could not start.
+          sudo setpriv --reuid "$ACCESS_ROWS_UID_C" --regid "$ACCESS_ROWS_GID_G" --init-groups \
+            /opt/writer-rows/lib-tests --list --ignored config_persistence_access_tests::child::save | grep -F ': test'
+      - name: Writer root rows (library)
+        timeout-minutes: 5
+        if: ${{ !cancelled() && matrix.shard == 'lib-b' }}
+        uses: ./.github/actions/ignored-rows
+        with:
+          binary: sudo -E /opt/writer-rows/lib-tests
+          # Quoted: a plain YAML value may not end in a colon.
+          filter: "config_persistence_access_tests::root::"
 
   test:
     name: Tests
@@ -1792,7 +2044,9 @@ jobs:
           toolchain: 1.99.1
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          save-if: ${{ github.ref == 'refs/heads/docs/ranking-1-release-line' }}
+          # A dispatch-only rehearsal: it never runs on a push to the release line
+          # or main, the runs allowed to save (test_docs_only_gating.py), so it does not save.
+          save-if: false
       - name: Install cargo-auditable
         run: cargo install cargo-auditable --locked --version 0.7.6
       - name: Install cosign
@@ -2060,6 +2314,8 @@ jobs:
       # checkout the test fetches that one commit itself (and fails, rather than skipping, if it cannot).
       - name: Test the release coverage grade script
         run: python3 scripts/release/test_coverage_grade.py
+      - name: Test the gate-day C6 build-host script
+        run: python3 scripts/release/test_c6_build_host_batch.py
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           version: "0.13.1"

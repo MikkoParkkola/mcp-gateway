@@ -33,17 +33,12 @@ fn path() -> std::path::PathBuf {
     std::path::PathBuf::from("journal")
 }
 
-/// P9: a busy lock is a retryable 503.
+/// P9: a busy lock is a retryable 409 (nothing was attempted).
 #[test]
-fn p9_busy_is_a_503() {
+fn p9_busy_is_a_409() {
     let fx = Fixture::new(Setup::default());
     let sent = injected(&fx, || Err(ReplaceError::Busy));
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
     assert_ne!(error_of(&sent), "audit_unavailable");
 }
 
@@ -93,12 +88,7 @@ fn p9_a_config_the_writer_cannot_read_is_a_definite_refusal() {
     assert_eq!(gone.status, StatusCode::CONFLICT, "{}", gone.body);
     assert_eq!(gone.json()["error"], "no_config_file", "{}", gone.body);
     let refused = injected(&fx, || Err(ReplaceError::ConfigRefused("zq-guard".into())));
-    assert_eq!(
-        refused.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        refused.body
-    );
+    assert_eq!(refused.status, StatusCode::CONFLICT, "{}", refused.body);
     assert!(!refused.body.contains("zq-guard"), "{}", refused.body);
     assert!(
         !refused.body.contains("state_uncertain"),
@@ -290,7 +280,7 @@ fn a4_the_intent_is_durable_before_the_writer_commits() {
         StatusCode::CREATED
     );
     let steps = write_order::take(&target);
-    assert_eq!(steps, ["intent", "commit"]);
+    assert_eq!(steps, ["traced", "intent", "commit"]);
     let on_disk = *held.lock().expect("cell");
     assert_eq!(
         on_disk,

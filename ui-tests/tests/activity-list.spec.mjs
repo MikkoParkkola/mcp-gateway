@@ -8,22 +8,12 @@
 //       Node from the very bytes the gateway serves;
 //   LE  the real shell and screen in Chromium, list answers held in routes and
 //       activity frames sent on the fixture server's held stream.
-import { readFileSync, readdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
 import { isDeepStrictEqual } from 'node:util';
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady, heldStream, frame } from './shell.mjs';
+import { shellReady, heldStream, frame, countListeners } from './shell.mjs';
+import { served } from './copy-check.mjs';
 
 test.use({ timezoneId: 'UTC' });
-
-const SHELL_DIR = fileURLToPath(new URL('../../src/gateway/ui/shell/', import.meta.url));
-
-/** The single served file whose name fits `pattern`: its name and text. */
-function served(pattern) {
-  const hits = readdirSync(SHELL_DIR).filter((f) => pattern.test(f));
-  if (hits.length !== 1) throw new Error(`want exactly one ${pattern} in src/gateway/ui/shell, have ${hits.length}`);
-  return { name: hits[0], text: readFileSync(SHELL_DIR + hits[0], 'utf8') };
-}
 
 let corePromise = null;
 /**
@@ -624,6 +614,7 @@ const utc = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
 const HELLO = frame('hello', { kinds: ['status', 'reload', 'activity', 'config'], head: 'b1.s1.r1' });
 const STALE_TEXT = 'The newest calls could not be read.';
 const CONTROL = 'Newer activity · show';
+const NEWER_SAID = 'Newer activity is waiting above the list.';
 const MORE_FAILED = 'More calls could not be read.';
 const UNAVAILABLE = 'Activity is unavailable';
 const NOT_FINAL = 'delivery not yet recorded';
@@ -659,6 +650,27 @@ const rowsOf = (q, p, n = 2) => Array.from({ length: n }, (_, i) => callRow(`${q
 const textOf = (row) => `08:00:00 ops ${row.tool} ok`;
 let frameId = 1;
 const activityFrame = (row) => frame('activity', row, `b1.s1.r${(frameId += 1)}`);
+/** A live-stream reset frame; its data names the log that was reset, or nothing. */
+const resetFrame = (kind) => frame('reset', kind === undefined ? {} : { kind }, `b1.s1.r${(frameId += 1)}`);
+
+/**
+ * Count the stream events the shell hands the page, by kind, so a row knows a
+ * frame arrived before it judges what the screen did with it. Add before open.
+ */
+const countDelivered = (page) => page.addInitScript(() => {
+  window.__seen = { activity: 0, reset: 0 };
+  addEventListener('gateway-activity', () => { window.__seen.activity += 1; });
+  addEventListener('gateway-reset', () => { window.__seen.reset += 1; });
+});
+/** Filters an Activity address can carry; the list query names the caller where the address says `key`. */
+const FILTERS = { outcome: 'failed', server: 'mail', caller: 'build-bot', q: 'invoice' };
+/** The Activity address that opens with `filters` set. */
+const filteredPath = ({ caller, ...rest }) => `/ui/activity/status?${new URLSearchParams({ ...rest, key: caller })}`;
+/** Wait until the page has received exactly `n` events of `kind`. */
+const seen = (page, kind, n, what) => expect.poll(() => page.evaluate((k) => window.__seen[k], kind), {
+  message: `${what}: ${kind} events received`,
+  timeout: 5_000,
+}).toBe(n);
 
 /**
  * The Activity screen with every list request held until the row answers it.
@@ -1192,6 +1204,28 @@ test.describe('LE list screen', () => {
     expect(TOKENS.filter((t) => text.includes(t)), 'LE9b tokens found in the core').toEqual([]);
   });
 
+  test('V5 the list cell and the receipt heading both word an admin row through one changeText', () => {
+    // Comments go first: a doc comment that quotes a sentence must not fail correct code.
+    const text = served(/^activity\.[0-9a-f]{12}\.js$/).text.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, '');
+    expect(text.split('function changeText(').length - 1, 'V5 changeText is written once').toBe(1);
+    const body = (name) => {
+      const span = functionSpan(text, name);
+      expect(span, `V5 the screen has a function ${name}`).not.toBeNull();
+      return text.slice(...span);
+    };
+    expect(body('rowLink'), 'V5 the list cell asks changeText').toContain('changeText(');
+    expect(body('receiptTab'), 'V5 the receipt heading asks changeText').toContain('changeText(');
+    // The sentences the behavioural rows pin; none may be written out anywhere else.
+    const [start, end] = functionSpan(text, 'changeText');
+    const elsewhere = text.slice(0, start) + text.slice(end);
+    const PINNED = [
+      'Capability file changed',
+      'Saved capability billing · re-pinned', 'Created capability billing · pinned', 'Deleted capability billing',
+      'Saved capability billing', 'Saved capability billing · pinned',
+    ];
+    expect(PINNED.filter((s) => elsewhere.includes(s)), 'V5 pinned sentences outside changeText').toEqual([]);
+  });
+
   test('LE10 a frame draws nothing of its own; rows come from the list answer', async ({ page, request }, testInfo) => {
     const { screen, stream } = await screenFor(page, request, testInfo);
     const SECRETS = ['SECRET-TOP-7f3', 'SECRET-WHO-7f3'];
@@ -1567,4 +1601,143 @@ test.describe('LE list screen', () => {
       await expect(heading, `${label}: the heading has focus again`).toBeFocused();
     });
   }
+
+  // A reset frame for the activity log asks the list again, the way an activity frame does.
+
+  test('LE-R1 an activity reset refreshes page 1', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await screen.open(stream, filteredPath(FILTERS));
+    await (await screen.request(0, 'LE-R1 page 1')).answer({ rows: rowsOf('a', 1), next_cursor: null });
+    await screen.quiet(1, 'LE-R1 before the reset');
+    await page.clock.runFor(60_000);
+    const now = AT + 60_000;
+    await stream.send(resetFrame('activity'));
+    const live = await screen.request(1, 'LE-R1 the reset');
+    expect(live.params, 'LE-R1 page 1 again: same filters, window up to now, no cursor')
+      .toEqual({ ...FILTERS, from: utc(now - DAY), to: utc(now) });
+    const fresh = rowsOf('r', 1);
+    await live.answer({ rows: fresh, next_cursor: null });
+    await expect.poll(() => screen.texts(), { message: 'LE-R1 the rows are the answer\'s' }).toEqual(fresh.map(textOf));
+    await screen.quiet(2, 'LE-R1 one request, not two');
+  });
+
+  test('LE-R2 paged down, an activity reset shows the control and keeps the rows', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    const [one, two] = [rowsOf('a', 1), rowsOf('a', 2)];
+    await screen.open(stream);
+    await (await screen.request(0, 'LE-R2 page 1')).answer({ rows: one, next_cursor: 'c2' });
+    const p2 = await screen.request(1, 'LE-R2 page 2');
+    expect(p2.params.cursor, 'LE-R2 page 2 reads on from page 1').toBe('c2');
+    await p2.answer({ rows: two, next_cursor: null });
+    const both = [...one, ...two].map(textOf);
+    await expect.poll(() => screen.texts(), { message: 'LE-R2 both pages' }).toEqual(both);
+    // Page 2's answer is announced after the dwell; let it pass before counting.
+    await page.clock.runFor(2000);
+    const before = await screen.said();
+    await stream.send(resetFrame('activity'));
+    await screen.quiet(2, 'LE-R2 a held list asks nothing');
+    expect(await screen.texts(), 'LE-R2 the rows are unchanged').toEqual(both);
+    await expect(screen.control(), 'LE-R2 the control shows').toBeVisible();
+    await page.clock.runFor(2000);
+    expect(await screen.said() - before, 'LE-R2 announced once').toBe(1);
+    expect(await screen.heard(NEWER_SAID), 'LE-R2 the news is said once').toBe(1);
+    await screen.control().click();
+    const p1 = await screen.request(2, 'LE-R2 the control asks page 1');
+    expect(p1.params.cursor ?? null, 'LE-R2 page 1 has no cursor').toBeNull();
+    const fresh = rowsOf('n', 1);
+    await p1.answer({ rows: fresh, next_cursor: null });
+    await expect.poll(() => screen.texts(), { message: 'LE-R2 the new page 1' }).toEqual(fresh.map(textOf));
+    await expect(screen.control(), 'LE-R2 the control is gone').toHaveCount(0);
+  });
+
+  test('LE-R3 config, unknown and kindless resets are ignored', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await countDelivered(page);
+    await screen.open(stream);
+    await (await screen.request(0, 'LE-R3 page 1')).answer({ rows: rowsOf('a', 1), next_cursor: null });
+    await screen.quiet(1, 'LE-R3 settled');
+    for (const kind of ['config', 'audit', undefined]) {
+      await stream.send(resetFrame(kind));
+      await screen.quiet(1, `LE-R3 a ${kind ?? 'kindless'} reset asks nothing`);
+    }
+    // The stream still delivers: an activity reset on the same screen asks.
+    await stream.send(resetFrame('activity'));
+    const live = await screen.request(1, 'LE-R3 an activity reset asks');
+    await screen.quiet(2, 'LE-R3 once');
+    await live.answer({ rows: rowsOf('b', 1), next_cursor: 'c2' });
+    // The next page holds the list in the step that sends it.
+    const p2 = await screen.request(2, 'LE-R3 the next page, which holds the list');
+    expect(p2.params.cursor, 'LE-R3 the next page reads on').toBe('c2');
+    const delivered = await page.evaluate(() => window.__seen.reset);
+    await stream.send(resetFrame('config'));
+    await seen(page, 'reset', delivered + 1, 'LE-R3 the held config reset arrived');
+    await page.clock.runFor(2000);
+    await expect(screen.control(), 'LE-R3 no control for a config reset').toHaveCount(0);
+    expect(await screen.heard(NEWER_SAID), 'LE-R3 no news said for a config reset').toBe(0);
+    await screen.quiet(3, 'LE-R3 a held list asks nothing for config');
+    await stream.send(resetFrame('activity'));
+    await expect(screen.control(), 'LE-R3 an activity reset on a held list shows the control').toBeVisible();
+    await screen.quiet(3, 'LE-R3 and asks nothing');
+  });
+
+  test('LE-R4 leaving drops the reset listener', async ({ page, request }, testInfo) => {
+    await countListeners(page, ['gateway-reset', 'gateway-activity']);
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    const listeners = () => page.evaluate(() => ({
+      reset: window.__listeners('gateway-reset'),
+      activity: window.__listeners('gateway-activity'),
+    }));
+    const nav = (name) => page.getByRole('navigation').getByRole('link', { name, exact: true }).first();
+    await screen.open(stream);
+    await (await screen.request(0, 'LE-R4 page 1')).answer({ rows: rowsOf('a', 1), next_cursor: null });
+    expect(await listeners(), 'LE-R4 on the screen: one listener of each').toEqual({ reset: 1, activity: 1 });
+    await nav('Tools').click();
+    await expect(page).toHaveURL(/\/ui\/tools\//);
+    await stream.send(resetFrame('activity'));
+    await screen.quiet(1, 'LE-R4 a reset after leaving asks nothing');
+    expect(await listeners(), 'LE-R4 off the screen: none').toEqual({ reset: 0, activity: 0 });
+    await nav('Activity').click();
+    const back = await screen.request(1, 'LE-R4 page 1 on return');
+    expect(back.params.cursor ?? null, 'LE-R4 page 1 on return has no cursor').toBeNull();
+    await back.answer({ rows: rowsOf('b', 1), next_cursor: null });
+    expect(await listeners(), 'LE-R4 back on the screen: one of each').toEqual({ reset: 1, activity: 1 });
+    await stream.send(resetFrame('activity'));
+    await screen.request(2, 'LE-R4 a reset on return asks');
+    await screen.quiet(3, 'LE-R4 once');
+  });
+
+  test('LE-R5 resets during a request coalesce to one refresh', async ({ page, request }, testInfo) => {
+    const { screen, stream } = await screenFor(page, request, testInfo);
+    await countDelivered(page);
+    await screen.open(stream);
+    // Activity frames first: the landed path, which LE3 also pins.
+    const p1 = await screen.request(0, 'LE-R5 page 1');
+    for (let i = 0; i < 5; i += 1) await stream.send(activityFrame(callRow(`a.burst${i}`)));
+    await seen(page, 'activity', 5, 'LE-R5 five activity frames');
+    await screen.quiet(1, 'LE-R5 nothing more while page 1 is out');
+    await p1.answer({ rows: rowsOf('a', 1), next_cursor: null });
+    const live = await screen.request(1, 'LE-R5 one trailing refresh for the activity frames');
+    await screen.quiet(2, 'LE-R5 and only one');
+    // The same burst of resets while that refresh is out.
+    for (let i = 0; i < 5; i += 1) await stream.send(resetFrame('activity'));
+    await seen(page, 'reset', 5, 'LE-R5 five resets');
+    await screen.quiet(2, 'LE-R5 nothing more while the refresh is out');
+    await live.answer({ rows: rowsOf('b', 1), next_cursor: null });
+    const trailing = await screen.request(2, 'LE-R5 one trailing refresh for the resets');
+    expect(trailing.params.cursor ?? null, 'LE-R5 the trailing refresh is page 1').toBeNull();
+    await screen.quiet(3, 'LE-R5 and only one');
+    await trailing.answer({ rows: rowsOf('c', 1), next_cursor: null });
+    await screen.quiet(3, 'LE-R5 settled');
+    // Leaving: a refresh out and resets behind it ask nothing once the screen is gone.
+    await stream.send(resetFrame('activity'));
+    await seen(page, 'reset', 6, 'LE-R5 one more reset');
+    const out = await screen.request(3, 'LE-R5 a reset asks');
+    for (let i = 0; i < 5; i += 1) await stream.send(resetFrame('activity'));
+    await seen(page, 'reset', 11, 'LE-R5 five more while it is out');
+    await screen.quiet(4, 'LE-R5 nothing more while it is out');
+    await page.getByRole('link', { name: 'Tools', exact: true }).first().click();
+    await screen.aborted(out, 'LE-R5 leaving aborts the refresh');
+    await out.answer({ rows: rowsOf('late', 1), next_cursor: null });
+    await screen.quiet(4, 'LE-R5 nothing asked after the leave');
+  });
 });

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The shared atomic writer.
 
+#[cfg(not(unix))]
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -35,8 +36,9 @@ pub fn write_atomic(
     write_atomic_observed(path, bytes, mode, link, |_| {}, || Ok(()))
 }
 
-/// [`write_atomic`] with `check` run after the scratch is written, synced and
-/// closed, and before the rename: an `Err` from it removes the scratch and
+/// [`write_atomic`] with `check` run once the scratch's bytes are written and
+/// synced, before the rename (on unix also before the scratch's access is
+/// settled; elsewhere after the scratch is closed): an `Err` removes it and
 /// leaves `path` untouched. Config history's save checks there that its
 /// record is still the store's newest (design D-2), so a save past its
 /// deadline never renames over newer history.
@@ -65,9 +67,9 @@ pub(crate) fn write_atomic_observed_for_test(
     write_atomic_observed(path, bytes, mode, link, observe, || Ok(()))
 }
 
-/// `write_atomic` with `observe` called on the open scratch after `sync_all` and
-/// before the mode step: the test seam that pins "private while the bytes are in it".
-/// `check` runs once the scratch is closed, just before the rename.
+/// `write_atomic` with `observe` called on the open scratch after `sync_all`
+/// and before its access settles: the seam that pins "nobody else can open it
+/// while the bytes go in". `check` runs as [`write_atomic_checked`] says.
 fn write_atomic_observed(
     path: &Path,
     bytes: &[u8],
@@ -81,25 +83,51 @@ fn write_atomic_observed(
         Symlink::Follow => crate::identity_grants::journal::resolved(path),
         Symlink::Replace => path.to_path_buf(),
     };
+    write_at(&target, bytes, mode, observe, check)
+}
+
+/// The save off unix: the writer keeps the mode (`Inherit`) and, on Windows,
+/// the access list; see `windows` for its owner rule.
+#[cfg(not(unix))]
+fn write_at(
+    target: &Path,
+    bytes: &[u8],
+    mode: FileMode,
+    observe: impl FnOnce(&std::fs::File),
+    check: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     // The target's metadata, when there is a file to inherit from. A symlink
     // at the destination is not one: the rename swaps the link itself away,
     // so there is no mode to keep. Absence reads as absent; any other stat
-    // failure under `Inherit` is returned before any scratch is created, so a
-    // target we could not stat is never replaced by a wider default-mode file,
-    // while a `Private` write never needed the stat.
-    let target_meta = match std::fs::symlink_metadata(&target) {
+    // failure is returned before any scratch is created: under `Inherit` so a
+    // target we could not stat is never replaced by a wider default-mode
+    // file, and under `Private` on Windows so its owner check is never
+    // skipped.
+    let stat = std::fs::symlink_metadata(target);
+    #[cfg(all(test, windows))]
+    let stat = match windows::test_seams::METADATA_ERROR.with(std::cell::Cell::get) {
+        Some(code) => Err(std::io::Error::from_raw_os_error(code)),
+        None => stat,
+    };
+    let target_meta = match stat {
         Ok(meta) if !meta.file_type().is_symlink() => Some(meta),
         Ok(_) => None,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => {
-            if matches!(mode, FileMode::Inherit) {
+            if matches!(mode, FileMode::Inherit) || cfg!(windows) {
                 return Err(e);
             }
             None
         }
     };
+    // Windows: a private copy is owned by the gateway's account, so a
+    // `Private` save keeps the target's owner or refuses (WRITER.5).
+    #[cfg(windows)]
+    if mode == FileMode::Private && target_meta.is_some() {
+        windows::private_owner_allows(target)?;
+    }
     let (mut file, scratch) = create_scratch(
-        &target,
+        target,
         super::next_scratch_seed(),
         scratch_create_for(mode, target_meta.as_ref()),
     )?;
@@ -111,7 +139,8 @@ fn write_atomic_observed(
     };
     // Write through the handle the exclusive create returned. Reopening by
     // path would reopen the gap the exclusive create just closed.
-    if let Err(e) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+    let written = file.write_all(bytes).and_then(|()| file.sync_all());
+    if let Err(e) = written {
         // Close before cleanup: Windows cannot delete a file held open
         // without delete sharing.
         drop(file);
@@ -119,32 +148,62 @@ fn write_atomic_observed(
         return Err(e);
     }
     #[cfg(test)]
-    let staged = super::crash_fs::stage(&target, &scratch, bytes);
+    let staged = super::crash_fs::stage(target, &scratch, bytes);
     observe(&file);
-    #[cfg(unix)]
-    if matches!(mode, FileMode::Inherit)
-        && let Some(meta) = target_meta.as_ref()
-        && let Err(e) = apply_inherited_mode(&file, &target, meta)
-    {
-        drop(file);
-        cleanup(&scratch);
-        return Err(e);
-    }
     // Closed before the rename: Windows renames only a closed file.
     drop(file);
     if let Err(e) = check() {
         cleanup(&scratch);
         return Err(e);
     }
-    if let Err(e) = super::rename_with_retry(&scratch, &target) {
+    if let Err(e) = super::rename_with_retry(&scratch, target) {
         cleanup(&scratch);
         return Err(e);
     }
     #[cfg(test)]
     if let Some(staged) = staged {
-        super::crash_fs::bind(&target, staged);
+        super::crash_fs::bind(target, staged);
     }
     Ok(())
+}
+
+/// The typed code a writer refusal carries (`foreign-owner`,
+/// `target-changed`, ...), or `None` when `e` is not one.
+#[cfg(all(test, unix))]
+pub(crate) fn refusal_code(e: &std::io::Error) -> Option<&'static str> {
+    writer_refusal(e).map(|(code, _)| code)
+}
+
+/// A save the writer turned down: its code and the sentence the user reads,
+/// which names the file and user ids only, so a caller may show it as is.
+/// `None` for any other error, and off unix, where refusals carry no type.
+pub(crate) fn writer_refusal(e: &std::io::Error) -> Option<(&'static str, String)> {
+    #[cfg(unix)]
+    {
+        e.get_ref()
+            .and_then(|inner| inner.downcast_ref::<unix::WriterRefusal>())
+            .map(|refusal| (refusal.code, refusal.to_string()))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = e;
+        None
+    }
+}
+
+/// Remove the scratch of a refused save. A scratch that stays is not a clean
+/// refusal, so its removal error is returned instead: a writer refusal then
+/// always means nothing was left behind.
+#[cfg_attr(not(any(unix, windows)), allow(dead_code))]
+fn drop_scratch(scratch: &std::path::Path, refused: std::io::Error) -> std::io::Error {
+    match std::fs::remove_file(scratch) {
+        Err(kept) if kept.kind() != std::io::ErrorKind::NotFound => {
+            // The returned error is the cleanup's; the cause stays in the log.
+            tracing::warn!(cause = %refused, cleanup = %kept, "a refused save left its scratch");
+            kept
+        }
+        _ => refused,
+    }
 }
 
 // Windows `Inherit` keeps the target's access list.
@@ -152,11 +211,27 @@ fn write_atomic_observed(
 #[path = "config_persistence_atomic_windows.rs"]
 mod windows;
 
+// Unix: how a replacement takes the target's group and mode.
+#[cfg(unix)]
+#[path = "config_persistence_atomic_unix.rs"]
+mod unix;
+#[cfg(all(test, unix))]
+pub(crate) use unix::seams as writer_seams;
+#[cfg(unix)]
+use unix::write as write_at;
+#[cfg(all(test, unix))]
+use unix::{AclPresence, GidMatch, inherit_mode};
+
 /// How a scratch file is created.
 #[derive(Clone, Copy)]
 enum ScratchCreate {
     /// Owner-only from creation, via [`create_new_private`].
+    #[cfg(not(unix))]
     Private,
+    /// Unix: mode 0000, so nobody but the writer, through the descriptor the
+    /// create returns, can open it until its access is settled.
+    #[cfg(unix)]
+    Closed,
     /// Default creation: the umask mode on unix, the directory's inherited
     /// ACL on Windows.
     Default,
@@ -168,6 +243,7 @@ enum ScratchCreate {
 
 /// How the scratch for a (`mode`, `target`) write is created: private
 /// from creation whenever the bytes must never sit in a wider file.
+#[cfg(not(unix))]
 fn scratch_create_for(mode: FileMode, target: Option<&std::fs::Metadata>) -> ScratchCreate {
     match mode {
         FileMode::Private => ScratchCreate::Private,
@@ -195,7 +271,17 @@ fn create_scratch(
     create: ScratchCreate,
 ) -> std::io::Result<(std::fs::File, PathBuf)> {
     super::claim_scratch(path, first, |candidate| match create {
+        #[cfg(not(unix))]
         ScratchCreate::Private => super::create_new_private(candidate),
+        #[cfg(unix)]
+        ScratchCreate::Closed => {
+            use std::os::unix::fs::OpenOptionsExt as _;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o000)
+                .open(candidate)
+        }
         ScratchCreate::Default => std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -255,8 +341,10 @@ fn finish_kept(
     }
 }
 
-/// Copy `src` to `dst` (a backup), keeping `src`'s access: on unix
-/// `std::fs::copy`, which keeps the mode; on Windows, where a copy takes the
+/// Copy `src` to `dst` (a backup), keeping `src`'s access: on unix it is made
+/// like a save with `src` as the model (its owner kept or `foreign-owner`
+/// refused, never a wider mode, a link at `dst` replaced, the bytes and the
+/// model read through one descriptor); on Windows, where a copy takes the
 /// folder's list instead, the bytes are written to a scratch created with
 /// `src`'s list (checked as an `Inherit` save is) and renamed over `dst`.
 ///
@@ -265,9 +353,9 @@ fn finish_kept(
 /// Returns the copy's I/O error, or on Windows a refusal when `src`'s list
 /// cannot be copied exactly; `dst` is then left as it was.
 pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
-    #[cfg(not(windows))]
+    #[cfg(unix)]
     {
-        std::fs::copy(src, dst).map(|_| ())
+        unix::copy(src, dst)
     }
     #[cfg(windows)]
     {
@@ -307,122 +395,16 @@ pub fn copy_keeping_access(src: &Path, dst: &Path) -> std::io::Result<()> {
     }
 }
 
-/// Whether the scratch ended up in the target's group.
-#[cfg(unix)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum GidMatch {
-    /// `fchown` to the target's gid succeeded.
-    Matched,
-    /// `fchown` was refused; the mode keeps the owner bits only.
-    Unmatched,
-}
-
-/// Whether an ACL can widen the group bits past the mode.
-#[cfg(unix)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AclPresence {
-    /// Neither file carries an access ACL. Only the Linux probe can prove it.
-    #[cfg(any(target_os = "linux", target_os = "android"))]
-    Absent,
-    /// An ACL is present, or the probe could not tell.
-    PresentOrUnknown,
-}
-
-#[cfg(unix)]
-impl AclPresence {
-    /// Only a proven-absent ACL lets the full mode through; off Linux nothing
-    /// can be proven, so the answer is always no.
-    fn allows_full_mode(self) -> bool {
-        match self {
-            #[cfg(any(target_os = "linux", target_os = "android"))]
-            Self::Absent => true,
-            Self::PresentOrUnknown => false,
-        }
-    }
-}
-
-/// Never wider than the target: the full mode only when the group is the
-/// target's and no ACL can widen it; otherwise the owner bits only.
-#[cfg(unix)]
-fn inherit_mode(target_mode: u32, gid: GidMatch, acl: AclPresence) -> u32 {
-    if gid == GidMatch::Matched && acl.allows_full_mode() {
-        target_mode
-    } else {
-        target_mode & 0o700
-    }
-}
-
-/// Narrow the open scratch to the target's mode, never wider (unix,
-/// `Inherit` over an existing target only). Runs after the bytes are written
-/// and synced: the scratch was created private, so the bytes are never in a
-/// wider file. Order is fixed: `fchown` first, then `chmod`, never the other
-/// way round — the mode is only meaningful once the group is settled.
-#[cfg(unix)]
-fn apply_inherited_mode(
-    scratch: &std::fs::File,
-    target: &Path,
-    target_meta: &std::fs::Metadata,
-) -> std::io::Result<()> {
-    use std::os::unix::fs::MetadataExt as _;
-    use std::os::unix::fs::PermissionsExt as _;
-    // Take the target's group when the process may; a refusal only narrows
-    // what the chmod below keeps, and is never an error of the write.
-    let gid = match std::os::unix::fs::fchown(scratch, None, Some(target_meta.gid())) {
-        Ok(()) => GidMatch::Matched,
-        Err(_) => GidMatch::Unmatched,
-    };
-    // An ACL on either file can widen the group bits past the mode; a target
-    // that cannot be opened for the probe counts as widened.
-    // Only a regular file is opened for the probe, and without waiting: a path
-    // swapped for a FIFO after the stat must not block the save.
-    let acl = if target_meta.is_file() {
-        match crate::open_nonblocking::open_nonblocking(target) {
-            Ok(target) => acl_presence(&target, scratch),
-            Err(_) => AclPresence::PresentOrUnknown,
-        }
-    } else {
-        AclPresence::PresentOrUnknown
-    };
-    scratch.set_permissions(std::fs::Permissions::from_mode(inherit_mode(
-        target_meta.mode() & 0o7777,
-        gid,
-        acl,
-    )))
-}
-
-/// Whether either file carries an access ACL that can widen the group bits
-/// past the mode. Both fds are probed: the target's ACL widens what the mode
-/// means, and the scratch's own (inherited from the directory) survives the
-/// chmod below.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn acl_presence(target: &std::fs::File, scratch: &std::fs::File) -> AclPresence {
-    // An empty read asks only whether the attribute exists: `NODATA` means no
-    // ACL, anything else (present, or an error that hides the answer) counts
-    // as one.
-    fn absent(file: &std::fs::File) -> bool {
-        matches!(
-            rustix::fs::fgetxattr(file, "system.posix_acl_access", &mut [0u8; 0][..]),
-            Err(e) if e == rustix::io::Errno::NODATA
-        )
-    }
-    if absent(target) && absent(scratch) {
-        AclPresence::Absent
-    } else {
-        AclPresence::PresentOrUnknown
-    }
-}
-
-/// Without the Linux probe there is no way to tell, so every target counts
-/// as widened and keeps the owner bits only.
-#[cfg(all(unix, not(any(target_os = "linux", target_os = "android"))))]
-fn acl_presence(_target: &std::fs::File, _scratch: &std::fs::File) -> AclPresence {
-    AclPresence::PresentOrUnknown
-}
-
 #[cfg(tp3)]
 #[cfg(all(test, unix))]
 #[path = "config_persistence_atomic_tests.rs"]
 mod atomic_tests;
+
+// WRITER.7: the pin, the order and the backup, unprivileged.
+#[cfg(tp3)]
+#[cfg(all(test, unix))]
+#[path = "config_persistence_pin_tests.rs"]
+mod pin_tests;
 
 // Linux only: writes POSIX ACL xattrs, which only the Linux probe reads.
 #[cfg(tp3)]
@@ -430,11 +412,23 @@ mod atomic_tests;
 #[path = "config_persistence_acl_tests.rs"]
 mod acl_tests;
 
+// WRITER.6: the target's security labels, through the injected store.
+#[cfg(tp3)]
+#[cfg(all(test, any(target_os = "linux", target_os = "android")))]
+#[path = "config_persistence_label_tests.rs"]
+mod label_tests;
+
 // Windows: an `Inherit` save keeps the target's access list on Windows.
 #[cfg(tp3)]
 #[cfg(all(test, windows))]
 #[path = "config_persistence_winacl_tests.rs"]
 mod winacl_tests;
+
+// WRITER.5: a Windows `Private` save keeps the owner or refuses.
+#[cfg(tp3)]
+#[cfg(all(test, windows))]
+#[path = "config_persistence_winpriv_tests.rs"]
+mod winpriv_tests;
 
 // The same, through each runtime state caller.
 #[cfg(tp3)]

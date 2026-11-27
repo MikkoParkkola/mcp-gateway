@@ -8,8 +8,12 @@
 //! against the run's secrets, and printed by [`emit`].
 
 use mcp_gateway::cli::redact;
+// The transport half below serves the remote commands, which exist only with the web UI; the local half (the exit
+// table, the error shape and the three exits) builds in every configuration.
+#[cfg(feature = "webui")]
 use serde_json::Value;
 
+#[cfg(feature = "webui")]
 use super::dashboard_link::{AdminCallError, AdminFailureKind, TokenError};
 
 /// Exit table E. Each kind has one process code, independent of HTTP status.
@@ -22,12 +26,32 @@ pub(crate) enum CliExit {
     Ok,
     LocalFailure,
     Usage,
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "raised by the remote commands only")
+    )]
     AuthRefused,
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "raised by the remote commands only")
+    )]
     NotFound,
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "raised by the remote commands only")
+    )]
     Network,
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "raised by the remote commands only")
+    )]
     Gateway,
     #[allow(dead_code, reason = "reserved by the shared exit table")]
     Declined,
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "raised by the remote commands only")
+    )]
     UncertainOutcome,
     #[allow(dead_code, reason = "reserved by the shared exit table")]
     Interrupted,
@@ -60,6 +84,7 @@ pub(crate) struct CliOutcome {
 }
 
 /// What a success's stdout must satisfy before it prints (design D1).
+#[cfg(feature = "webui")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StdoutRule {
     /// The converted commands: refused when stdout still holds a secret after redaction (D6).
@@ -72,6 +97,7 @@ impl CliOutcome {
     /// The gated success: under [`StdoutRule::RefuseToken`], stdout still holding the token (the first secret) is
     /// refused as api refuses an unsafe body (design D6; the email or cursor may be data); the stderr `note` is
     /// redacted against every secret and gated as an error is.
+    #[cfg(feature = "webui")]
     pub(crate) fn success(
         stdout: Vec<u8>,
         note: &str,
@@ -103,7 +129,7 @@ impl CliOutcome {
     }
 
     /// An outcome as given, for the emitter's rows: they stage what a write failure meets.
-    #[cfg(test)]
+    #[cfg(all(test, feature = "webui"))]
     pub(crate) fn raw(stdout: Vec<u8>, stderr: String, exit: CliExit) -> Self {
         Self {
             stdout,
@@ -189,17 +215,24 @@ impl CliError {
 }
 
 /// api's uncertain-outcome, unsafe-body and protocol sentences, shared by every converted command (design D2, D4).
+#[cfg(feature = "webui")]
 pub(crate) const UNCERTAIN_MESSAGE: &str = "The gateway may have applied this change.";
+#[cfg(feature = "webui")]
 pub(crate) const UNCERTAIN_REMEDY: &str =
     "Inspect the gateway state before retrying; this command did not retry.";
+#[cfg(feature = "webui")]
 pub(crate) const UNSAFE_BODY_MESSAGE: &str = "The response could not be printed safely.";
+#[cfg(feature = "webui")]
 pub(crate) const UNSAFE_BODY_REMEDY: &str = "The response was received but could not be printed safely; inspect the gateway state before sending the request again.";
+#[cfg(feature = "webui")]
 pub(crate) const PROTOCOL_MESSAGE: &str = "The gateway returned an invalid response.";
+#[cfg(feature = "webui")]
 pub(crate) const PROTOCOL_REMEDY: &str = "Check the gateway response against UI API 1.";
 
 /// Whether `stdout`, read as one JSON document, holds `token` in any string or object key once decoded: JSON
 /// escaping turns a `"` or `\` in a token into two bytes, so the byte search alone can miss it (MIK-9764.JSONF.1,
 /// design D9). A stdout that is not JSON decodes to nothing; the byte search still covers it.
+#[cfg(feature = "webui")]
 fn decoded_holds(stdout: &[u8], token: &str) -> bool {
     fn walk(value: &serde_json::Value, token: &str) -> bool {
         match value {
@@ -236,6 +269,7 @@ fn gated(text: String, secrets: &[String]) -> String {
 }
 
 /// Whether a request changes gateway state, which decides what a lost or failed answer means (design D3).
+#[cfg(feature = "webui")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Request {
     Read,
@@ -244,6 +278,7 @@ pub(crate) enum Request {
 
 /// The exit for a transport failure (api's decisions, moved; design D1): a bad target or settings 2, local I/O 1,
 /// DNS, connect and TLS 5; a lost or oversized answer 8 on a mutation (it may have run), else 5.
+#[cfg(feature = "webui")]
 pub(crate) fn transport_kind(kind: AdminFailureKind, request: Request) -> CliExit {
     match kind {
         AdminFailureKind::Target | AdminFailureKind::Settings => CliExit::Usage,
@@ -261,6 +296,7 @@ pub(crate) fn transport_kind(kind: AdminFailureKind, request: Request) -> CliExi
 /// The exit for a gateway answer, `None` for a success (api's order, moved; design D1): an explicit uncertainty
 /// 8; a mutation's 5xx not known not to have run 8; an unsupported API version 6; a success known not to have run
 /// 6; any other success none; 401 and 403 3; 404 4; any other status 6.
+#[cfg(feature = "webui")]
 pub(crate) fn status_kind(
     status: reqwest::StatusCode,
     body: &serde_json::Value,
@@ -291,6 +327,7 @@ pub(crate) fn status_kind(
     )
 }
 
+#[cfg(feature = "webui")]
 pub(crate) fn unsafe_target() -> CliError {
     CliError::new(
         CliExit::Usage,
@@ -300,6 +337,7 @@ pub(crate) fn unsafe_target() -> CliError {
 }
 
 /// api's transport messages for a failure before an answer was read, with the kind [`transport_kind`] decides.
+#[cfg(feature = "webui")]
 pub(crate) fn transport_failure(error: AdminCallError, request: Request, token: &str) -> CliError {
     let kind = transport_kind(error.kind, request);
     let mut failure = match error.kind {
@@ -344,11 +382,13 @@ pub(crate) fn transport_failure(error: AdminCallError, request: Request, token: 
 }
 
 /// Only bounded, single-line diagnostic values from known fields are shown.
+#[cfg(feature = "webui")]
 pub(crate) fn safe_text(text: &str, token: &str) -> Option<String> {
     let text = redact::text(text, &[token.to_string()]);
     (!text.is_empty() && text.len() <= 4096 && !text.chars().any(char::is_control)).then_some(text)
 }
 
+#[cfg(feature = "webui")]
 pub(crate) fn gateway_code(body: &Value) -> Option<String> {
     let value = body
         .get("error")
@@ -369,6 +409,7 @@ pub(crate) fn gateway_code(body: &Value) -> Option<String> {
     }
 }
 
+#[cfg(feature = "webui")]
 pub(crate) fn known_not_run(status: reqwest::StatusCode, body: &Value) -> bool {
     body["disposition"].as_str() == Some("not_run")
         || (status == reqwest::StatusCode::SERVICE_UNAVAILABLE
@@ -381,6 +422,7 @@ pub(crate) fn known_not_run(status: reqwest::StatusCode, body: &Value) -> bool {
 /// The credential to send, or the refusal that ends the command before any
 /// request: none, empty, or holding a control character (a credential travels
 /// in a header line, so it can never hold CR or LF).
+#[cfg(feature = "webui")]
 pub(crate) fn resolve_token(
     credential: Result<String, TokenError>,
     origin: &str,
@@ -406,6 +448,7 @@ pub(crate) fn resolve_token(
 }
 
 /// The remedy for a missing or refused token (design D4).
+#[cfg(feature = "webui")]
 pub(crate) fn token_remedy(origin: &str) -> String {
     format!("Set MCP_GATEWAY_TOKEN to a valid token for {origin}, then retry.")
 }
@@ -460,6 +503,69 @@ pub(crate) fn emit(outcome: &CliOutcome, json: bool, secrets: &[&str]) -> std::p
         )
         .code(),
     )
+}
+
+// The three ways command code leaves with a non-zero code.
+
+/// `text` with each line break (LF, CR LF or a lone CR) written as one space, so a path or an OS error cannot split
+/// the two-line error shape.
+fn one_line(text: &str) -> String {
+    text.replace("\r\n", " ").replace(['\n', '\r'], " ")
+}
+
+/// The remedy line of a usage error: the command's own `--help`.
+fn usage_remedy(command: &str) -> String {
+    format!("Run 'mcp-gateway {command} --help' for usage.")
+}
+
+/// The two-line outcome `fail` prints: `error: <message>` and the remedy, each on one line.
+fn error_outcome(kind: CliExit, message: &str, remedy: &str) -> CliOutcome {
+    debug_assert!(!remedy.is_empty(), "a local error needs a remedy line");
+    CliError::new(kind, one_line(message), one_line(remedy)).outcome(false, &[])
+}
+
+/// The outcome `usage` prints: exit 2, the remedy naming `command`'s help.
+fn usage_outcome(command: &str, message: &str) -> CliOutcome {
+    error_outcome(CliExit::Usage, message, &usage_remedy(command))
+}
+
+/// A local failure: prints `error: <message>` and the remedy on stderr and returns `kind`'s code. The remedy must
+/// not be empty.
+pub(crate) fn fail(kind: CliExit, message: &str, remedy: &str) -> std::process::ExitCode {
+    emit(&error_outcome(kind, message, remedy), false, &[])
+}
+
+/// A wrong invocation of `command` (its leaf path, e.g. `tls issue-server`): exit 2, the remedy its `--help`.
+pub(crate) fn usage(command: &str, message: &str) -> std::process::ExitCode {
+    emit(&usage_outcome(command, message), false, &[])
+}
+
+/// A command that ran and whose answer is negative (a check failed, a file has findings): prints nothing, returns
+/// `code`. The command has already printed its result.
+pub(crate) fn verdict(code: u8) -> std::process::ExitCode {
+    std::process::ExitCode::from(code)
+}
+
+/// The two ways a [`crate::cli::output::Printed`] result leaves with a non-zero code, kept beside `fail` and
+/// `verdict` so they share its folding.
+impl crate::cli::output::Printed {
+    /// A local failure as a built result: the two error lines on stderr, the kind's code.
+    pub(crate) fn error(kind: CliExit, message: &str, remedy: &str) -> Self {
+        Self {
+            stdout: String::new(),
+            stderr: error_outcome(kind, message, remedy).stderr,
+            exit: kind.code(),
+        }
+    }
+
+    /// A finished command's negative answer: what it printed, and its code.
+    pub(crate) fn verdict(code: u8, stdout: String, stderr: String) -> Self {
+        Self {
+            stdout,
+            stderr,
+            exit: code,
+        }
+    }
 }
 
 #[cfg(tp2)]
