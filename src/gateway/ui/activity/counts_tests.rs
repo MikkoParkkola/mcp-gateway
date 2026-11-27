@@ -269,13 +269,13 @@ async fn c1_counts_equal_the_rows_the_list_returns_per_outcome() {
     let got = counts(&logs, window()).await;
     assert_eq!(
         got["counts"],
-        json!({"all": 13, "ok": 5, "failed": 2, "blocked": 4, "cleaned": 2})
+        json!({"all": 13, "ok": 5, "failed": 3, "blocked": 3, "cleaned": 2})
     );
     let per_value = [
         (None, 13),
         (Some("ok"), 5),
-        (Some("failed"), 2),
-        (Some("blocked"), 4),
+        (Some("failed"), 3),
+        (Some("blocked"), 3),
         (Some("cleaned"), 2),
     ];
     for (outcome, rows) in per_value {
@@ -299,7 +299,7 @@ async fn c15_a_count_is_a_row_the_list_would_show() {
         ended("failed-2", "error"),
         ended("failed-3", "error"),
         ended("blocked-1", "denied"),
-        ended("blocked-2", "invalid"),
+        ended("failed-4", "invalid"),
         unlisted(ended("blocked-3", "denied")),
     ];
     let logs = written(&dir, main, Vec::new());
@@ -310,13 +310,13 @@ async fn c15_a_count_is_a_row_the_list_would_show() {
     let got = counts(&logs, window()).await;
     assert_eq!(
         got["counts"],
-        json!({"all": 8, "ok": 3, "failed": 3, "blocked": 2, "cleaned": 0})
+        json!({"all": 8, "ok": 3, "failed": 4, "blocked": 1, "cleaned": 0})
     );
     let per_value = [
         (None, 8),
         (Some("ok"), 3),
-        (Some("failed"), 3),
-        (Some("blocked"), 2),
+        (Some("failed"), 4),
+        (Some("blocked"), 1),
     ];
     for (outcome, rows) in per_value {
         assert_eq!(

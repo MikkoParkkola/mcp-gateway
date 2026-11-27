@@ -224,10 +224,14 @@ pub(super) fn kind_of(line: &Line) -> Option<Kind> {
 }
 
 fn feed_outcome(entry: &Value) -> Option<FeedOutcome> {
-    match str_field(entry, "outcome")? {
+    let word = str_field(entry, "outcome")?;
+    // The counters' rule: a rule's refusal is blocked; an invalid call fails.
+    if crate::security::audit::AuditOutcome::is_blocked_label(word) {
+        return Some(FeedOutcome::Blocked);
+    }
+    match word {
         "ok" => Some(FeedOutcome::Ok),
-        "tool_error" | "error" => Some(FeedOutcome::Failed),
-        "denied" | "invalid" => Some(FeedOutcome::Blocked),
+        "tool_error" | "error" | "invalid" => Some(FeedOutcome::Failed),
         _ => None,
     }
 }

@@ -155,16 +155,17 @@ impl Tally {
                     cache_hit,
                     ..Self::default()
                 },
-                AuditOutcome::Denied(_) => Self {
+                outcome if outcome.is_blocked() => Self {
                     blocked: true,
                     ..Self::default()
                 },
-                AuditOutcome::ToolError | AuditOutcome::Invalid(_) | AuditOutcome::Error(_) => {
-                    Self {
-                        error: true,
-                        ..Self::default()
-                    }
-                }
+                AuditOutcome::Denied(_)
+                | AuditOutcome::ToolError
+                | AuditOutcome::Invalid(_)
+                | AuditOutcome::Error(_) => Self {
+                    error: true,
+                    ..Self::default()
+                },
             },
         }
     }
