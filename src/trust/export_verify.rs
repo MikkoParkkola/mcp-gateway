@@ -175,11 +175,17 @@ pub(crate) fn export_verdict(
     let trust = match trust_set(jwk, config) {
         Ok(t) => t,
         Err(why) => {
-            return Printed::error(
-                CliExit::LocalFailure,
-                &why,
-                "Pass --jwk naming the key 'mcp-gateway provenance public-key' printed, or fix the gateway's signing key.",
+            // The remedy names what was read: the --jwk file, else the config whose signing key is used.
+            let remedy = jwk.map_or_else(
+                || crate::commands::write_remedy(config),
+                |path| {
+                    format!(
+                        "Check that {} holds the key 'mcp-gateway provenance public-key' printed.",
+                        path.display()
+                    )
+                },
             );
+            return Printed::error(CliExit::LocalFailure, &why, &remedy);
         }
     };
     let verdict = match read_bounded(file, MAX_EXPORT_BYTES) {

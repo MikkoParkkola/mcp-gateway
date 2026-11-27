@@ -160,7 +160,7 @@ fn wrong_invocations_exit_two() {
         (
             "tool invoke",
             strings(&["tool", "invoke", "zz", "-C", &dir, "--args", "{"]),
-            Pin::Starts("error: "),
+            Pin::Starts("error: --args is not valid JSON"),
         ),
     ];
     let results: Vec<_> = cases

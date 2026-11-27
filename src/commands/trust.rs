@@ -176,7 +176,15 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
                     }
                     lab_exit_code(&report.evaluations, enforce)
                 }
-                Err(e) => capabilities_failure(&capabilities, &e),
+                // The evaluation reads the capabilities and any baseline, registry or fixture file it was given.
+                Err(e) => fail(
+                    CliExit::LocalFailure,
+                    &e,
+                    &format!(
+                        "Check {} and any baseline, registry or fixture file the message names, then rerun.",
+                        capabilities.display()
+                    ),
+                ),
             }
         }
     }

@@ -106,8 +106,8 @@ async fn cap_pin_never_writes_a_file_the_loader_refuses() {
 }
 
 /// J11, the failures before the call (MIK-9764.JSONF.1): an unreadable capability file, arguments that are not
-/// JSON and arguments the input schema refuses each leave stdout empty in both forms, exit 1, and name the
-/// failure on stderr, the same in both forms.
+/// JSON and arguments the input schema refuses each leave stdout empty in both forms and name the failure on stderr,
+/// the same in both forms. Arguments that are not JSON are a wrong invocation, exit 2; the other two exit 1.
 #[tokio::test]
 async fn cap_test_failures_before_the_call_print_nothing_on_stdout() {
     use crate::cli::output::Render;
