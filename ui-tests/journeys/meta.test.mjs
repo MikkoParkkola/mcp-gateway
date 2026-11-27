@@ -14,25 +14,15 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { gatewayEnv, listenerIsChild } from './gateway.mjs';
+import { assertFailedWith, journeysRun } from './nested.mjs';
 
 const UI_TESTS = dirname(dirname(fileURLToPath(import.meta.url)));
 const REAL_BIN = process.env.JOURNEYS_GATEWAY_BIN;
-
-function journeysRun(env) {
-  const r = spawnSync('npx', ['playwright', 'test', '--project=journeys', 'journeys/harness.journey.mjs', '-g', 'H3'],
-    { cwd: UI_TESTS, env: { ...process.env, ...env }, encoding: 'utf8', timeout: 240_000 });
-  return { status: r.status, out: `${r.stdout}\n${r.stderr}` };
-}
-
-function assertFailedWith(run, diagnostic) {
-  assert.notEqual(run.status, 0, `the run passed:\n${run.out}`);
-  assert.match(run.out, diagnostic, `the harness's own diagnostic is missing:\n${run.out}`);
-  assert.doesNotMatch(run.out, /\bskipped\b/i, `the run skipped instead of failing:\n${run.out}`);
-}
+const H3 = ['journeys/harness.journey.mjs', '-g', 'H3'];
 
 test('the companion run with the real binary passes', () => {
   assert.ok(REAL_BIN, 'meta needs JOURNEYS_GATEWAY_BIN set to the real gateway binary');
-  const run = journeysRun({ JOURNEYS_GATEWAY_BIN: REAL_BIN });
+  const run = journeysRun(H3, { JOURNEYS_GATEWAY_BIN: REAL_BIN });
   assert.equal(run.status, 0, run.out);
 });
 
@@ -47,11 +37,11 @@ test('H1 an unset JOURNEYS_GATEWAY_BIN fails the run', () => {
 test('H1b a missing or non-executable binary fails the run', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'jh-meta-'));
   const missing = join(dir, 'no-such-gateway');
-  assertFailedWith(journeysRun({ JOURNEYS_GATEWAY_BIN: missing }), /does not exist/);
+  assertFailedWith(journeysRun(H3, { JOURNEYS_GATEWAY_BIN: missing }), /does not exist/);
   const plain = join(dir, 'not-executable');
   await writeFile(plain, '#!/bin/sh\n');
   await chmod(plain, 0o644);
-  assertFailedWith(journeysRun({ JOURNEYS_GATEWAY_BIN: plain }), /not executable/);
+  assertFailedWith(journeysRun(H3, { JOURNEYS_GATEWAY_BIN: plain }), /not executable/);
 });
 
 test('H2 a PATH without lsof fails the run; the same PATH with lsof passes', async () => {
@@ -62,9 +52,9 @@ test('H2 a PATH without lsof fails the run; the same PATH with lsof passes', asy
     const at = which(tool);
     if (at) await symlink(at, join(bin, tool));
   }
-  assertFailedWith(journeysRun({ JOURNEYS_GATEWAY_BIN: REAL_BIN, PATH: bin }), /lsof is required/);
+  assertFailedWith(journeysRun(H3, { JOURNEYS_GATEWAY_BIN: REAL_BIN, PATH: bin }), /lsof is required/);
   await symlink(which('lsof'), join(bin, 'lsof'));
-  const run = journeysRun({ JOURNEYS_GATEWAY_BIN: REAL_BIN, PATH: bin });
+  const run = journeysRun(H3, { JOURNEYS_GATEWAY_BIN: REAL_BIN, PATH: bin });
   assert.equal(run.status, 0, run.out);
 });
 
