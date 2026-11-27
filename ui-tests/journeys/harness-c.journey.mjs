@@ -161,6 +161,8 @@ test.describe('seed needsYou (C-H3, J10)', () => {
   test.use({ seed: 'needsYou' });
   test('O1 S10 with its provider stub up, signin needs signing in, and a restart-only change is pending', async ({ gw }) => {
     expect(await signInOf(gw, 'signin')).toEqual({ status: 'never_signed_in', needsSignIn: true });
+    // No assertion on gw.browserOpens() yet: today the gateway's start opens the authorization page by itself, which
+    // is the defect tracked for 4.0.0; once its fix lands, this row asserts that no launch happened.
     const { pending_restart: pending } = await (await gw.api('/ui/api/gateway')).json();
     expect(JSON.stringify(pending?.fields ?? []), JSON.stringify(pending)).toContain('cost_governance');
   });
