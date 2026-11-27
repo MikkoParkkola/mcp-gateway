@@ -354,9 +354,20 @@ test('L2 once the map has left the page, its reads stop', async ({ page }) => {
   const leave = () => page.evaluate(() => document.querySelector('#content [data-panel="flow-map"]').remove());
   // Left with the timer running.
   const live = await liveMap(page, SMALL);
+  // Counted in the page as each read is asked for: the paused clock fires the timer inside runFor,
+  // and a read started there may not reach the route before the count below is taken.
+  await page.evaluate(() => {
+    window.__asked = 0;
+    const real = window.fetch;
+    window.fetch = (req, ...rest) => {
+      if (new URL(req.url ?? req, location.href).pathname === '/ui/api/overview') window.__asked += 1;
+      return real(req, ...rest);
+    };
+  });
   await fire(page);
   await leave();
   await page.clock.runFor(2500);
+  expect(await page.evaluate(() => window.__asked)).toBe(0);
   expect(live.reads).toBe(1);
   expect(thrown).toEqual([]);
 });
@@ -383,6 +394,7 @@ test('L3 a failed re-read says so under the map, and the next good one clears it
   await fire(page);
   await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(2);
   await expect(map(page).locator('.ov-map-stale')).toHaveText('Not updated since 14:00');
+  await expect(map(page).locator('.ov-map-stale')).toBeVisible();
   await expect(callsOf(agentRows(page))).toHaveText(['120', '80', '40']);
   live.status = 0;
   await fire(page);
@@ -417,6 +429,11 @@ test('R1 nothing moves with reduced motion, and at most three dots pulse at once
   await fire(page);
   await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(2);
   await expect(map(page).locator('.ov-dot:visible')).toHaveCount(1);
+  // The rule itself, read from the computed style: motion events alone can miss a pulse or a line.
+  expect(await map(page).evaluate((card) => ({
+    pulse: getComputedStyle(card.querySelector('.ov-dot.ov-pulse') ?? card.querySelector('.ov-dot:not(.ov-dot-off)'), '::before').animationName,
+    line: getComputedStyle(card.querySelector('svg.ov-lines path')).transitionProperty,
+  }))).toEqual({ pulse: 'none', line: 'none' });
   await page.clock.runFor(500);
   expect(await page.evaluate(() => ({ moved: window.__moved, running: document.getAnimations().length }))).toEqual({ moved: 0, running: 0 });
 
