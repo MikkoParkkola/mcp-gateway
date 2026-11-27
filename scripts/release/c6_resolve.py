@@ -922,7 +922,7 @@ def _statement_start(src: list[str], blanked: list[str], k: int, col: int) -> tu
                 depth -= 1 if depth else 0
             elif ch == "{" and depth:
                 depth -= 1
-            elif ch in ";,{}":
+            elif ch in ";,{}" and not depth:
                 return _first_code(src, j, c + 1)
             c -= 1
         j -= 1
