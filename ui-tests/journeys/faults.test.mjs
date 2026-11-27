@@ -29,7 +29,7 @@ function reportErrors(node, found = []) {
  * its first line, the one before the message). Read from Playwright's structured JSON report, never from printed
  * text, whose source excerpts could quote the message beside an unrelated error.
  */
-function redAt(file, fault, message) {
+function redAt(file, fault, message, cause = '') {
   const dir = mkdtempSync(join(tmpdir(), 'jh-fault-'));
   let run;
   let json;
@@ -45,6 +45,8 @@ function redAt(file, fault, message) {
   const [first] = reportErrors(json.suites);
   assert.ok(first, `the report holds no error:\n${run.out}`);
   assert.ok(String(first.message).includes(message), `the first error is not the row's own:\n${first.message}`);
+  // `cause`: the specific problem the planted fault must produce, beyond the row's general message.
+  assert.ok(String(first.message).includes(cause), `the first error does not name the fault's cause "${cause}":\n${first.message}`);
   const at = readFileSync(join(JOURNEYS, file), 'utf8').split('\n').findIndex((l) => l.includes(message)) + 1;
   assert.ok(at > 0, `${file} has no line holding "${message}"`);
   assert.ok(String(first.location?.file).endsWith(`/${file}`) && [at - 1, at].includes(first.location?.line),
@@ -60,5 +62,6 @@ test('J4:remove, a Remove answered but never forwarded, fails at the config read
 });
 
 test('JOURNEY7:drop-J4, a journey missing from the project, fails the coverage row', () => {
-  redAt('coverage.journey.mjs', 'JOURNEY7:drop-J4', 'JOURNEY7: the project does not cover the smoke and every journey');
+  redAt('coverage.journey.mjs', 'JOURNEY7:drop-J4', 'JOURNEY7: the project does not cover the smoke and every journey',
+    'J4: neither a real test nor waiting');
 });

@@ -37,11 +37,12 @@ test('JOURNEY.7 coverage: the project holds the harness smoke and every journey,
   let report;
   try {
     run = journeysRun(['--list', '--reporter=json'], { PLAYWRIGHT_JSON_OUTPUT_NAME: join(dir, 'list.json'), JH_FAULT: '' });
+    // The listing's own failure is the diagnostic; the report is read only after it succeeded.
+    expect(run.status, `the listing failed:\n${run.out}`).toBe(0);
     report = JSON.parse(readFileSync(join(dir, 'list.json'), 'utf8'));
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-  expect(run.status, `the listing failed:\n${run.out}`).toBe(0);
   let tests = listedTests(report);
   if (process.env.JH_FAULT === 'JOURNEY7:drop-J4') tests = tests.filter((t) => idOf(t.title) !== 'J4');
   else if ((process.env.JH_FAULT ?? '') !== '') throw new Error(`JH_FAULT=${process.env.JH_FAULT} is not a coverage fault`);

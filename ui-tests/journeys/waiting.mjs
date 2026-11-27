@@ -33,8 +33,11 @@ export function idOf(title) {
   return title.match(/^((?:J|K)\d+[a-z]?)[: ]/)?.[1] ?? null;
 }
 
-// A skip decided inside a test body never shows in the list, so journey files may not call one at all.
-const SKIP_CALL = /\.(?:skip|fixme|fail)\s*\(/;
+// A skip decided inside a test body never shows in the list, so journey files may not call one at all. Comments are
+// removed first (block comments, and line comments that start a line or follow a space), so `x.skip /* why */ (` and
+// a bracketed `x['skip'](` are caught as well.
+const SKIP_CALL = /(?:\.\s*(?:skip|fixme|fail)|\[\s*['"`](?:skip|fixme|fail)['"`]\s*\])\s*\(/;
+const withoutComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|\s)\/\/.*$/gm, '$1');
 
 /**
  * Every coverage problem, as a sentence naming its id or file; empty when covered. `tests`: the listed tests as
@@ -70,7 +73,7 @@ export function checkCoverage({ tests, waiting, sources }) {
     else if (wt > 1) problems.push(`${id}: ${wt} waiting entries`);
   }
   for (const [file, text] of Object.entries(sources)) {
-    if (SKIP_CALL.test(text)) problems.push(`${file}: calls a skip, fixme or fail; a journey that waits goes on WAITING`);
+    if (SKIP_CALL.test(withoutComments(text))) problems.push(`${file}: calls a skip, fixme or fail; a journey that waits goes on WAITING`);
   }
   return problems;
 }
