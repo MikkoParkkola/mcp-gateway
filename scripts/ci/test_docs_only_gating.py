@@ -16,7 +16,6 @@ until someone decides which side of the line it belongs on.
 from __future__ import annotations
 
 import re
-import subprocess
 import sys
 from pathlib import Path
 
@@ -37,8 +36,6 @@ SKIPPED = {
     "gws-dry-run",
     # One keychain test against a real Secret Service; no docs file is read.
     "linux-keychain",
-    # The UI journeys on the real gateway binary: a browser walk, no docs file is read.
-    "journeys",
 }
 # Workflows with no pull_request trigger: they cannot run on a docs-only PR, so
 # they need no gate. Gaining a pull_request trigger fails main() until gated.
@@ -121,8 +118,6 @@ POST_MERGE_SKIPPED = {
     "service-template-smoke", "usability-smoke", "upgrade-rehearsal", "helm-oci-roundtrip",
     "helm-supply-chain", "helm-airgap", "k8s-kind-rollback", "gws-dry-run", "task-sdk-recovery",
     "linux-keychain",
-    # It takes linux-gateway-bin's binary, which the release-line push does not build.
-    "journeys",
 }
 POST_MERGE_PUSH = {"event_name": "push", "ref": f"refs/heads/{RELEASE_LINE}"}
 
@@ -518,60 +513,6 @@ def ui_tests_apt_errors() -> list[str]:
     return out
 
 
-def journeys_errors(jobs: dict) -> list[str]:
-    """Rows C1 and C3 (design delta r4). ci.yml's `journeys` job calls ui-tests.yml with journeys_bin and
-    the build's result; that workflow's one job then runs only the journeys steps. C2 (docs-only skip, both gating
-    sets) is the generic classification above. A failed build must make the call run and go red, never skip."""
-    job = jobs.get("journeys")
-    if job is None:
-        return ["ci.yml has no journeys job"]
-    errs = []
-    needs = job.get("needs") or []
-    needs = [needs] if isinstance(needs, str) else needs
-    if "linux-gateway-bin" not in needs:
-        errs.append("journeys does not need linux-gateway-bin, so the binary it builds is not ready for the call")
-    if job.get("uses") != "./.github/workflows/ui-tests.yml":
-        errs.append("journeys does not call ./.github/workflows/ui-tests.yml")
-    given = job.get("with") or {}
-    if given.get("journeys_bin") is not True or "needs.linux-gateway-bin.result" not in str(given.get("build_result", "")):
-        errs.append("journeys must pass journeys_bin: true and build_result: needs.linux-gateway-bin.result")
-    broken = ctx("pull_request", "success", "false")
-    broken["needs"]["linux-gateway-bin"] = {"result": "failure", "outputs": {}}
-    if not runs(job, broken):
-        errs.append("journeys skips when linux-gateway-bin fails: the call must run and go red (if: !cancelled() && ...)")
-    return errs + called_journeys_errors()
-
-
-def called_journeys_errors() -> list[str]:
-    """The called side: ui-tests.yml's steps judged by their own `if:` in both modes (its own triggers leave the
-    inputs empty; a call sets journeys_bin), plus the build check run as GitHub would run it."""
-    wf = yaml.safe_load((ROOT / ".github/workflows" / "ui-tests.yml").read_text())
-    steps = next(iter(wf["jobs"].values()))["steps"]
-    errs = []
-
-    def active(step, inputs):
-        return step_runs(step, dict(ctx("pull_request", "success", "false"), inputs=inputs))
-
-    standalone, called_ok = {}, {"journeys_bin": True, "build_result": "success"}
-    called_bad = {"journeys_bin": True, "build_result": "failure"}
-    first = steps[0]
-    if active(first, standalone) or active(first, called_ok) or not active(first, called_bad):
-        errs.append("ui-tests.yml's first step must fire only for a call whose build did not succeed")
-    elif subprocess.run(["bash", "-c", str(first.get("run", ""))], env={"PATH": "/usr/bin:/bin", "RESULT": "failure"},
-                        capture_output=True, timeout=30).returncode == 0:
-        errs.append("ui-tests.yml's build check fires but exits 0")
-    called = [s for s in steps if active(s, called_ok) and not active(s, standalone)]
-    text = "\n".join(str(s.get("run", "")) + str(s.get("with", "")) + str(s.get("env", "")) for s in called)
-    for need in ("linux-gateway-bin", "u+x", "--project=journeys", "JOURNEYS_GATEWAY_BIN", "journeys/timing.mjs",
-                 "journeys/meta.test.mjs"):
-        if need not in text:
-            errs.append(f"no journeys-only step in ui-tests.yml has `{need}`")
-    suite = [s for s in steps if "--project=chromium" in str(s.get("run", "")) or "--project=perf" in str(s.get("run", ""))]
-    if not suite or any(active(s, called_ok) or not active(s, standalone) for s in suite):
-        errs.append("ui-tests.yml's fixture suite must run on its own triggers and never in a journeys call")
-    return errs
-
-
 def main() -> int:
     jobs = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text())["jobs"]
     errors = []
@@ -629,7 +570,6 @@ def main() -> int:
     errors += dead_save_errors(jobs)
     errors += cache_writers.errors() + cache_writers.self_test()
     errors += ui_tests_apt_errors()
-    errors += journeys_errors(jobs)
     # The macOS cases must be able to fail: each mutant is caught by the case
     # named beside it, not merely by some case.
     import copy
