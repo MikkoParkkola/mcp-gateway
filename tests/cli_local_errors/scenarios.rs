@@ -174,6 +174,7 @@ fn a_bad_grant_argument_is_a_usage_error() {
         "not-a-time",
     ]));
     let case = Case {
+        env: Vec::new(),
         args,
         exit: 2,
         stdout: String::new(),

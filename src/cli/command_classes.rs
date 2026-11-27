@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! Every leaf command's output class and error-conversion state (design D7).
+//! Every leaf command's output class (design D7), and the four remote leaves on the shared error shape.
 //!
-//! Two families of named lists, each a partition of the CLI's leaf commands, keyed by the full command path as
-//! typed. The classes: `JSON_CAPABLE`, `JSON_DEFAULT`, `PENDING_JSON` (empty since `MIK-9764.JSONF.2`; a new data command without a JSON form goes there), `ACTION`, `SCRIPT`. The
-//! errors: `REMOTE_ON_SHARED_ERRORS` and `PENDING_SHARED_ERRORS` (the local-errors follow-up, `MIK-9765.LERR.2`, empties it). A row walks the real clap
+//! One family of named lists partitions the leaf commands, keyed by the full command path as
+//! typed. The classes: `JSON_CAPABLE`, `JSON_DEFAULT`, `PENDING_JSON` (empty; a new data command without a JSON form goes there), `ACTION`, `SCRIPT`. `REMOTE_ON_SHARED_ERRORS` is a plain list, not a family: the local-errors behaviour table
+//! (tests/cli_local_errors.rs) checks every other leaf. A row walks the real clap
 //! tree and fails on a leaf missing from a family, a leaf in two lists of one family, a list naming no command, or a
 //! class its arguments contradict, so a new command cannot ship off the output contract unnoticed.
 
@@ -81,72 +81,12 @@ pub(crate) const ACTION: &[&str] = &[
 ];
 /// Leaves that print a script.
 pub(crate) const SCRIPT: &[&str] = &["tool completions"];
-/// Leaves whose failures go through the shared exit table and error shape.
+/// The remote leaves, which keep the remote error shape; the behaviour table subtracts them.
 pub(crate) const REMOTE_ON_SHARED_ERRORS: &[&str] = &[
     "api",
     "audit lookup-email",
     "dashboard-link",
     "events dead-letters",
-];
-/// Leaves not yet on the shared error shape; each entry cites `MIK-9765.LERR.2`.
-pub(crate) const PENDING_SHARED_ERRORS: &[&str] = &[
-    "accounts init-store",          // MIK-9765.LERR.2
-    "accounts migrate-credentials", // MIK-9765.LERR.2
-    "add",                          // MIK-9765.LERR.2
-    "audit show",                   // MIK-9765.LERR.2
-    "audit verify",                 // MIK-9765.LERR.2
-    "cap discover",                 // MIK-9765.LERR.2
-    "cap import",                   // MIK-9765.LERR.2
-    "cap import-url",               // MIK-9765.LERR.2
-    "cap install",                  // MIK-9765.LERR.2
-    "cap list",                     // MIK-9765.LERR.2
-    "cap pin",                      // MIK-9765.LERR.2
-    "cap registry-list",            // MIK-9765.LERR.2
-    "cap search",                   // MIK-9765.LERR.2
-    "cap test",                     // MIK-9765.LERR.2
-    "cap validate",                 // MIK-9765.LERR.2
-    "doctor",                       // MIK-9765.LERR.2
-    "get",                          // MIK-9765.LERR.2
-    "hash-key",                     // MIK-9765.LERR.2
-    "identity grants grant",        // MIK-9765.LERR.2
-    "identity grants list",         // MIK-9765.LERR.2
-    "identity grants revoke",       // MIK-9765.LERR.2
-    "import apply",                 // MIK-9765.LERR.2
-    "import preview",               // MIK-9765.LERR.2
-    "init",                         // MIK-9765.LERR.2
-    "kubernetes apply-plan",        // MIK-9765.LERR.2
-    "kubernetes controller",        // MIK-9765.LERR.2
-    "kubernetes plan",              // MIK-9765.LERR.2
-    "list",                         // MIK-9765.LERR.2
-    "provenance public-key",        // MIK-9765.LERR.2
-    "provenance verify",            // MIK-9765.LERR.2
-    "ranking eval",                 // MIK-9765.LERR.2
-    "remove",                       // MIK-9765.LERR.2
-    #[cfg(feature = "runtime-substrate")]
-    "runtime compile", // MIK-9765.LERR.2
-    "serve",                        // MIK-9765.LERR.2
-    "setup export",                 // MIK-9765.LERR.2
-    "setup wizard",                 // MIK-9765.LERR.2
-    "skills generate",              // MIK-9765.LERR.2
-    "skills import",                // MIK-9765.LERR.2
-    "skills list",                  // MIK-9765.LERR.2
-    "skills remove",                // MIK-9765.LERR.2
-    "skills search",                // MIK-9765.LERR.2
-    "skills show",                  // MIK-9765.LERR.2
-    "stats",                        // MIK-9765.LERR.2
-    "tls init-ca",                  // MIK-9765.LERR.2
-    "tls issue-client",             // MIK-9765.LERR.2
-    "tls issue-server",             // MIK-9765.LERR.2
-    "tool completions",             // MIK-9765.LERR.2
-    "tool inspect",                 // MIK-9765.LERR.2
-    "tool invoke",                  // MIK-9765.LERR.2
-    "tool list",                    // MIK-9765.LERR.2
-    "trust generate",               // MIK-9765.LERR.2
-    "trust inspect",                // MIK-9765.LERR.2
-    "trust lab evaluate",           // MIK-9765.LERR.2
-    "trust validate",               // MIK-9765.LERR.2
-    "upgrade",                      // MIK-9765.LERR.2
-    "validate",                     // MIK-9765.LERR.2
 ];
 /// `JSON_CAPABLE` leaves whose `format` is free text (no declared values): each is classed JSON-capable only because
 /// a row runs it with `--format json` and parses its stdout (the lead, 2026-11-17: no inference).
@@ -158,27 +98,18 @@ pub(crate) struct Family<'a> {
     pub(crate) lists: &'a [(&'a str, &'a [&'a str])],
 }
 
-/// The two families checked against the real tree.
-pub(crate) fn families() -> [Family<'static>; 2] {
-    [
-        Family {
-            name: "classes",
-            lists: &[
-                ("JSON_CAPABLE", JSON_CAPABLE),
-                ("JSON_DEFAULT", JSON_DEFAULT),
-                ("PENDING_JSON", PENDING_JSON),
-                ("ACTION", ACTION),
-                ("SCRIPT", SCRIPT),
-            ],
-        },
-        Family {
-            name: "errors",
-            lists: &[
-                ("REMOTE_ON_SHARED_ERRORS", REMOTE_ON_SHARED_ERRORS),
-                ("PENDING_SHARED_ERRORS", PENDING_SHARED_ERRORS),
-            ],
-        },
-    ]
+/// The family checked against the real tree.
+pub(crate) fn families() -> [Family<'static>; 1] {
+    [Family {
+        name: "classes",
+        lists: &[
+            ("JSON_CAPABLE", JSON_CAPABLE),
+            ("JSON_DEFAULT", JSON_DEFAULT),
+            ("PENDING_JSON", PENDING_JSON),
+            ("ACTION", ACTION),
+            ("SCRIPT", SCRIPT),
+        ],
+    }]
 }
 
 /// Every leaf of `root` by its full path ("events dead-letters"), skipping clap's generated `help` nodes. `root`

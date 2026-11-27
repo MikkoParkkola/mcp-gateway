@@ -411,7 +411,7 @@ pub(super) fn lab_exit_code(evaluations: &[TrustLabEvaluation], enforce: bool) -
             .iter()
             .any(|evaluation| evaluation.policy_verdict == TrustLabPolicyVerdict::Block)
     {
-        ExitCode::FAILURE
+        crate::commands::verdict(1)
     } else {
         ExitCode::SUCCESS
     }
