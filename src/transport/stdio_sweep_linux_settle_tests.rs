@@ -534,3 +534,35 @@ fn a_child_stat_read_after_its_parent_was_reaped_adopts_nothing() {
     assert_eq!(pids(&listing), vec![s], "the newcomer was adopted");
     assert!(!listing.settled, "a reaped parent left it settled");
 }
+
+/// Confirm review (gpt, the M10 question): a walk that adopts nothing still
+/// reads only its own process. K is Stopped with no child. After K's first
+/// task state (read 7, numbered as in the row above) K is reaped: its `task`
+/// directory leaves the pinned directory, so every later read through it
+/// finds K gone. A Stopped newcomer with no child takes K's path. Through
+/// the pinned directory the walk sees K gone and the reading stays
+/// unsettled; no batch forms, so the identity check never runs. Red if the
+/// walk reads by path (mutant M10: the newcomer's Stopped state settles it).
+#[test]
+fn a_reaped_childless_member_replaced_mid_walk_never_settles() {
+    let tree = s_and_k('T');
+    let k = fake(2);
+    assert!(read_from_s(&tree).settled, "premise: untouched, it settles");
+    tree.write("newcomer/stat", &stat_line(k, fake(1), 'T', 2));
+    tree.write(&format!("newcomer/task/{k}/stat"), &stat_line(k, 1, 'T', 2));
+    tree.write(&format!("newcomer/task/{k}/children"), "");
+    let mut reaping = LinuxTable::with_root(tree.path());
+    let at = |rel: &str| tree.path().join(rel);
+    reaping.move_after_read = Some((
+        7,
+        vec![
+            (at(&format!("{k}/task")), at("reaped-task")),
+            (at(&k.to_string()), at("old-k")),
+            (at("newcomer"), at(&k.to_string())),
+        ],
+    ));
+    let listing = reaping.read(&[who(fake(1), 1)], &[], Duration::MAX);
+    assert_eq!(reaping.moved, 3, "the reap did not happen inside K's walk");
+    assert_eq!(pids(&listing), vec![fake(1), k], "S and K were recorded");
+    assert!(!listing.settled, "a reaped member settled the reading");
+}
