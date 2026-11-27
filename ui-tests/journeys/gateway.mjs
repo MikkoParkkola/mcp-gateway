@@ -178,9 +178,20 @@ async function start({ seed, port, onSpawn }, owned) {
 
   const origin = `http://127.0.0.1:${chosen}`;
   const api = (p, { key = adminKey } = {}) => fetch(origin + p, { signal: AbortSignal.timeout(REQUEST_MS), headers: key ? { Authorization: `Bearer ${key}` } : {} });
+  // A JSON read that names its route and status when the answer is not 2xx JSON: on the first real run an unguarded
+  // .json() on an empty 405 body hid a wrong route as "Unexpected end of JSON input".
+  const read = async (p, opts) => {
+    const reply = await api(p, opts);
+    const text = await reply.text();
+    if (!reply.ok) throw new Error(`GET ${p} answered ${reply.status}: ${text.slice(0, 200)}`);
+    try { return JSON.parse(text); } catch { throw new Error(`GET ${p} answered ${reply.status} with no JSON: ${text.slice(0, 200)}`); }
+  };
+  // Every server the gateway knows by name: GET /ui/api/status servers[] (registry backends and switched-off config
+  // entries). /ui/api/backends takes only POST (it adds a server), so it is no read.
+  const serverNames = async () => ((await read('/ui/api/status')).servers ?? []).map((s) => s.name);
   const handle = {
     origin, port: chosen, pid: child.pid, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
-    stubs: seeded.stubs ?? [], api,
+    stubs: seeded.stubs ?? [], api, read, serverNames,
     listenerPids: () => listenerPids(chosen),
     stubLog: (name) => readFile(join(home, `stub-${name}.log`), 'utf8').catch(() => ''),
     stop: async () => {
@@ -227,7 +238,7 @@ async function start({ seed, port, onSpawn }, owned) {
     await until(Date.now() + SETTLE_MS, 'the gateway never listed h-planted: it is not reading the test home', async () =>
       JSON.stringify(await (await api('/ui/api/discovery')).json()).includes('h-planted'));
   } catch (e) { return fail(e.message); }
-  const seen = JSON.stringify(await (await api('/ui/api/discovery')).json()) + JSON.stringify(await (await api('/ui/api/backends')).json());
+  const seen = JSON.stringify(await read('/ui/api/discovery')) + JSON.stringify(await serverNames());
   if (seen.includes('decoy-planted')) return fail('the gateway read the decoy home: decoy-planted is listed');
   if ((await api('/ui/api/status', { key: decoyKey })).status !== 401) return fail('the decoy home\'s key is accepted');
   if ((await api('/ui/api/status')).status !== 200) return fail('the test home\'s own key is refused');
