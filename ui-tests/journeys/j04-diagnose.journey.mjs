@@ -53,7 +53,7 @@ test('J4 diagnose: a silent server is found, retried and removed', async ({ page
     state = await tideState(gw);
     console.log(`J4 drive attempt ${attempt}: call ${r.error ? `rejected (${r.error})` : `status ${r.status}`}; tide state ${state}`);
   }
-  expect(['unhealthy', 'paused'], 'stop and report: the status read never showed tide failing').toContain(state);
+  expect(['unhealthy', 'paused'], `stop and report: the status read never showed tide failing (last state ${state})`).toContain(state);
 
   // Tide recovers before the click (Retry reconnects it, and a silent stub would leave that unanswered). With health
   // checks off, nothing may reconnect it on its own: the quiet window.
@@ -90,5 +90,5 @@ test('J4 diagnose: a silent server is found, retried and removed', async ({ page
   // Outside the browser: the config file no longer names tide, and the gateway's status read does not list it.
   await expect.poll(async () => /^ {2}tide:$/m.test(await readFile(gw.configPath, 'utf8')),
     { message: 'J4-remove: the config file still names tide', timeout: 10_000 }).toBe(false);
-  await until(Date.now() + 10_000, 'J4-remove: the status read still lists tide', async () => (await tideState(gw)) === null);
+  await until(Date.now() + 10_000, 'J4-remove: the status read still lists tide', async () => !(await gw.serverNames()).includes('tide'));
 });
