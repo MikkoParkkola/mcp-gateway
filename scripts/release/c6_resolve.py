@@ -871,16 +871,24 @@ def _apply_reanchored(source: str, patch: str) -> str:
     return text
 
 
-def _statement(src: list[str], blanked: list[str], line: int) -> str:
-    """The statement that starts at 1-based `line`, whitespace-collapsed, from the source lines
-    `src` and the same lines blanked: from the source line's first non-blank character (a
-    literal or comment there still counts), reading brackets only in the blanked text, up to a
-    `;` or `,` at depth 0 (kept), a closer that would take the depth below 0 (left out), or a
-    line end at depth 0."""
+def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int, int], str]:
+    """The statement holding 1-based `line`, as (its start (line index, column), its
+    whitespace-collapsed source text), from the source lines `src` and the same lines blanked.
+    Rust reports a chained call's panic at its continuation line (`.unwrap_err(),`), which
+    starts no statement and can repeat inside one test: a line that opens with `.` belongs to
+    the statement found by scanning back, in the blanked text, to the previous `;`, `,`, `{` or
+    `}` at depth 0 (an opening `(` or `[` passed at depth 0 means the chain sits inside a call
+    or list, and the scan goes on). Any other line starts its own statement at its first
+    non-blank source character. From the start the text runs forward up to a `;` or `,` at
+    depth 0 (kept), a closer that would take the depth below 0 (left out), or a line end at
+    depth 0."""
+    col = len(src[line - 1]) - len(src[line - 1].lstrip())
+    j, c = (_statement_start(src, blanked, line - 1, col) if src[line - 1].lstrip().startswith(".")
+            else (line - 1, col))
     depth, parts = 0, []
-    for k in range(line - 1, len(blanked)):
+    for k in range(j, len(blanked)):
         text = blanked[k]
-        start = len(src[k]) - len(src[k].lstrip()) if k == line - 1 else 0
+        start = c if k == j else 0
         end, done = len(text), False
         for i in range(start, len(text)):
             ch = text[i]
@@ -897,7 +905,39 @@ def _statement(src: list[str], blanked: list[str], line: int) -> str:
         parts.append(src[k][start:end])
         if done or depth == 0:
             break
-    return _collapse(" ".join(parts))
+    return (j, c), _collapse(" ".join(parts))
+
+
+def _statement_start(src: list[str], blanked: list[str], k: int, col: int) -> tuple[int, int]:
+    """Where the statement holding position (line index `k`, column `col`) starts: the first
+    non-blank source character after the nearest boundary before it (see `_statement`)."""
+    depth, j, c = 0, k, col - 1
+    while j >= 0:
+        text = blanked[j]
+        while c >= 0:
+            ch = text[c]
+            if ch in ")]" or (ch == "}" and depth):
+                depth += 1
+            elif ch in "([":
+                depth -= 1 if depth else 0
+            elif ch == "{" and depth:
+                depth -= 1
+            elif ch in ";,{}":
+                return _first_code(src, j, c + 1)
+            c -= 1
+        j -= 1
+        c = len(blanked[j]) - 1 if j >= 0 else -1
+    return _first_code(src, 0, 0)
+
+
+def _first_code(src: list[str], j: int, c: int) -> tuple[int, int]:
+    """The first non-blank source position at or after (line index `j`, column `c`)."""
+    while j < len(src):
+        rest = src[j][c:]
+        if rest.strip():
+            return j, c + len(rest) - len(rest.lstrip())
+        j, c = j + 1, 0
+    return j, 0
 
 
 def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: str) -> str | None:
@@ -950,13 +990,16 @@ def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: 
         if path != killer_file or not kdecl.start <= line <= kdecl.end:
             return f"{site} is not inside {killer}"
         span = kdecl
-    statement = _statement(src, blanked, line)
+    _, statement = _statement(src, blanked, line)
     actual = hashlib.sha256(statement.encode()).hexdigest()[:8]
     if _collapse(src[line - 1]) != _collapse(text):
         return f"{site} does not carry the recorded text (statement digest there is {actual})"
     if actual != digest:
         return f"{site} statement digest is {actual}, recorded {digest}"
-    same = sum(_statement(src, blanked, k) == statement for k in range(span.start, span.end + 1))
+    # Distinct statements in the span (each line maps to the statement holding it), counted by
+    # start, so a multi-line statement counts once and two identical statements count twice.
+    found = dict(_statement(src, blanked, k) for k in range(span.start, span.end + 1))
+    same = sum(text == statement for text in found.values())
     if same != 1:
         return f"statement at {path}:{line} occurs {same} times in {span.name}"
     return None
