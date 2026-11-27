@@ -277,6 +277,9 @@ async function start({ seed, port, onSpawn }, owned) {
     },
     listenerPids: () => listenerPids(chosen),
     stubLog: (name) => readFile(join(home, `stub-${name}.log`), 'utf8').catch(() => ''),
+    // C-H4: makes stub `name` stop answering (it still logs what reaches it), or answer again.
+    silence: (name, on = true) => (on ? writeFile(join(home, `stub-${name}.silent`), '')
+      : rm(join(home, `stub-${name}.silent`), { force: true })),
     // Harness-internal (restart and stop use it): ends the current child and proves its port refuses again.
     kill: async () => {
       if (!exited) {

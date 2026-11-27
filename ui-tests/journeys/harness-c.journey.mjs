@@ -3,13 +3,13 @@
 //
 // Part C's harness rows (part C design, "The harness contract"): the additions the journeys use, each proved here
 // where no journey row proves it yet. M1 gw.mcp and the key-acceptance read (C-H2); R1-R5 and R3b restart (C-H1;
-// R6 and the command check also run as units in startcmd.test.mjs).
+// R6 and the command check also run as units in startcmd.test.mjs); Q1 stub silent mode (C-H4); S5 the J4 seed.
 import { readFileSync, realpathSync } from 'node:fs';
 import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
-import { test, expect, answers, parseStartCommand, startGateway, TIMING_FILE } from './gateway.mjs';
+import { test, expect, answers, parseStartCommand, startGateway, TIMING_FILE, until } from './gateway.mjs';
 
 const BIN = process.env.JOURNEYS_GATEWAY_BIN;
 
@@ -88,6 +88,34 @@ test.describe('restart (C-H1)', () => {
     }
     for (const pid of [first, gw.pid]) expect(() => process.kill(pid, 0), `gateway ${pid} is still alive`).toThrow();
     expect(await answers(gw.port), 'the port still answers').toBe(false);
+  });
+});
+
+test.describe('stub silent mode (C-H4)', () => {
+  test.use({ seed: 'populated' });
+
+  test('Q1 a call answers; with the stub silenced the same call reaches its log and gets no answer', async ({ gw }) => {
+    const call = { key: gw.adminKey, method: 'tools/call',
+      params: { name: 'gateway_invoke', arguments: { server: 'tide', tool: 'tide_table', arguments: {} } } };
+    const calls = async () => (await gw.stubLog('tide')).split('\n').filter((l) => l.includes('"tools/call"')).length;
+    const answered = await gw.mcp(call);
+    expect(JSON.stringify(answered.body), 'the unsilenced call did not answer').toContain('tide-answered');
+    const mark = await calls();
+    await gw.silence('tide');
+    // The silent stub never answers, so the gateway's wait outlasts gw.mcp's 5 s request limit: a rejection is expected.
+    const silent = await gw.mcp(call).catch((error) => ({ error }));
+    expect(JSON.stringify(silent.body ?? null), 'a silenced stub answered').not.toContain('tide-answered');
+    await until(Date.now() + 10_000, 'the silenced stub never logged the call', async () => (await calls()) > mark);
+  });
+});
+
+test.describe('seed silentStub (C-H3, J4)', () => {
+  test.use({ seed: 'silentStub' });
+
+  test('S5 the J4 seed turns health checks off in init\'s config and the gateway serves both stubs with it', async ({ gw }) => {
+    expect(await readFile(gw.configPath, 'utf8')).toMatch(/^failsafe:\n {2}health_check:\n {4}enabled: false$/m);
+    const servers = JSON.stringify(await (await gw.api('/ui/api/backends')).json());
+    for (const name of ['tide', 'harbour']) expect(servers).toContain(name);
   });
 });
 

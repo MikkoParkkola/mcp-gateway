@@ -9,7 +9,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { until } from './gateway.mjs';
 
-const STUB = join(dirname(fileURLToPath(import.meta.url)), 'stub-mcp.mjs');
+export const STUB = join(dirname(fileURLToPath(import.meta.url)), 'stub-mcp.mjs');
 
 /** One stdio stub server per name; each logs every request to <home>/stub-<name>.log. */
 function backends(home, names) {
@@ -28,6 +28,16 @@ const SEEDS = {
     const stubs = ['tide', 'harbour'];
     await appendFile(configPath, `\nenvironment: ${marker}\n${backends(home, stubs)}`);
     return { stubs };
+  },
+  // J4 (part C): a populated gateway whose health checks are off, so it learns that a stub stopped answering
+  // (gw.silence) only from a failing call. init writes no failsafe block; if it ever does, this fails loudly.
+  silentStub: async (ctx) => {
+    const seeded = await SEEDS.populated(ctx);
+    if (/^failsafe:/m.test(await readFile(ctx.configPath, 'utf8'))) {
+      throw new Error('init\'s starter config now has a failsafe block: set health_check inside it instead of appending one');
+    }
+    await appendFile(ctx.configPath, '\nfailsafe:\n  health_check:\n    enabled: false\n');
+    return seeded;
   },
   // For the harness's own row H11 only: a config the gateway refuses, so it never becomes healthy.
   'refused-config': async ({ configPath }) => {
