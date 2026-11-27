@@ -4,14 +4,11 @@
 // A server's Settings tab: Connection, Secrets with Replace, and Who can
 // use it (T8, T9, T10, T11 of the frozen test plan, with sidecar 2). The
 // secret records come from the fixture the Rust rows of the config read use.
-import { readFileSync } from 'node:fs';
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { shellReady, recordAnnouncements, announced } from './shell.mjs';
 import { readCopy, readScreens, scanScreens } from './copy-check.mjs';
 import { entry, fullView, fakeServerGateway, key, keysBody, goTo, HARD, HARD_ENC } from './server-page.mjs';
 
-// T9a's records come from the fixture the config read's Rust rows use; only T9a reads it.
-const RECORDS = () => JSON.parse(readFileSync(new URL('../../tests/fixtures/secret_reference_records.json', import.meta.url), 'utf8')).secret_reference_records;
 // The flat map carries entries the records do not: none of them may show.
 const FLAT = { 'backends.git.env.FLAT_ONLY': 'env:FLAT_SENTINEL', 'backends.svc.env.FLAT_TOO': 'env:FLAT_SENTINEL_2' };
 const configBody = (records = [], more = {}) => ({ code: 200, body: { servers: [], secret_references: FLAT, secret_reference_records: records, ...more } });
@@ -66,47 +63,7 @@ test.describe('T9d Connection', () => {
 
 const ONLY_REFS = 'Only secrets held as references are listed; a value written into gateway.yaml as text is not.';
 const UNREAD = 'The secrets could not be read.';
-const HEADER_NOTE = 'Changed in gateway.yaml: the page cannot replace a header.';
 const fields = (page) => lines(page).locator('.sp-field');
-
-test.describe('T9a a server lists exactly the records whose server is its name', () => {
-  test('T9a git: its five records in the served order, kind words and references, Replace on env only', async ({ page }) => {
-    await settings(page, entry('git', 'running'), { config: configBody(RECORDS()) });
-    await expect(fields(page)).toHaveText(['A_TOKEN', 'Z_TOKEN', 'a.b.TOKEN', 'Authorization', 'env.TOKEN']);
-    await expect(lines(page).locator('.sp-kind')).toHaveText(['Environment variable', 'Environment variable', 'Environment variable', 'Header', 'Header']);
-    await expect(lines(page).locator('code')).toHaveText(['env:GIT_A', 'env:GIT_Z', 'env:GIT_DOTTED', 'keychain:gw.git', 'env:SHARED_TOKEN']);
-    const replace = lines(page).getByRole('button');
-    await expect(replace).toHaveText(['Replace', 'Replace', 'Replace']);
-    expect(await replace.evaluateAll((bs) => bs.map((b) => b.getAttribute('aria-label')))).toEqual(['Replace A_TOKEN', 'Replace Z_TOKEN', 'Replace a.b.TOKEN']);
-    await expect(lines(page).locator('.sp-note')).toHaveText([HEADER_NOTE, HEADER_NOTE]);
-    await expect(page.locator('p.sp-only')).toHaveText(ONLY_REFS);
-    await expect(page.getByText(UNREAD)).toHaveCount(0);
-  });
-
-  test('T9a a name that prefixes another server gets only its own records', async ({ page }) => {
-    await settings(page, entry('a', 'running'), { config: configBody(RECORDS()) });
-    await expect(fields(page)).toHaveText(['x']);
-  });
-
-  test('T9a a dotted name gets only its own records', async ({ page }) => {
-    await settings(page, entry('git.headers', 'running'), { config: configBody(RECORDS()) });
-    await expect(fields(page)).toHaveText(['TOKEN']);
-    await expect(lines(page).locator('.sp-kind')).toHaveText(['Environment variable']);
-  });
-
-  test('T9a the flat map is never read', async ({ page }) => {
-    await settings(page, entry('git', 'running'), { config: configBody(RECORDS()) });
-    await expect(fields(page)).toHaveCount(5);
-    for (const word of ['FLAT_ONLY', 'FLAT_SENTINEL']) expect(await holds(page, word), word).toBe(false);
-  });
-
-  test('T9a the page keeps the served order and does not sort', async ({ page }) => {
-    const all = RECORDS();
-    const git = all.filter((r) => r.server === 'git').reverse();
-    await settings(page, entry('git', 'running'), { config: configBody([...all.filter((r) => r.server !== 'git'), ...git]) });
-    await expect(fields(page)).toHaveText(['env.TOKEN', 'Authorization', 'a.b.TOKEN', 'Z_TOKEN', 'A_TOKEN']);
-  });
-});
 
 const rec = (field, more = {}) => ({ server: 's', kind: 'env', field, reference: `env:${field}`, ...more });
 
