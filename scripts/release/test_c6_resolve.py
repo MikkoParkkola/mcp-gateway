@@ -804,6 +804,26 @@ class DeclaredAssertions(unittest.TestCase):
                 self.repo.declare(cell)
                 self.accepted()
 
+    def test_blank_and_comment_only_lines_never_end_a_continued_statement(self) -> None:
+        # Digests are sha256 of the expected whitespace-collapsed statement, computed by hand.
+        # A comment's text is part of the statement (editing it refuses the row: fails closed).
+        cases = (
+            # After a trailing `=`: the continuation must survive a comment line and a blank line.
+            ("    let err =\n        // why\n\n        make(a, b)\n            .unwrap_err();\n",
+             "src/checks.rs:7 .unwrap_err(); [stmt:b483de43]"),
+            # Before a `.` line: the next code line is found past the comment and the blank line.
+            ("    let x = make(a, b)\n        // why\n\n        .unwrap_err();\n",
+             "src/checks.rs:6 .unwrap_err(); [stmt:eca195cf]"),
+            # A line holding only `?` continues the statement.
+            ("    let v = make(a, b)\n        // why\n        ?\n        .unwrap_err();\n",
+             "src/checks.rs:6 .unwrap_err(); [stmt:2e571dd8]"),
+        )
+        for body, cell in cases:
+            with self.subTest(cell=cell):
+                self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + body + "}\n")
+                self.repo.declare(cell)
+                self.accepted()
+
     def test_a_continuation_form_not_followed_fails_closed(self) -> None:
         # `as Total` opens with a keyword, a form the statement rule does not follow, so the
         # statement found from the head ends at line 3 and never reaches the declared line 6.
