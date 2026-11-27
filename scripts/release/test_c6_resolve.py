@@ -773,6 +773,23 @@ class DeclaredAssertions(unittest.TestCase):
         self.repo.declare("src/checks.rs:6 .unwrap_err(), [stmt:dc5561ca]")
         self.refused("statement at src/checks.rs:6 occurs 2 times in guard_admits_only_its_host")
 
+    def test_a_bare_chain_digests_through_its_last_link(self) -> None:
+        # Two statements share the head line `make(a, b)` and differ only in a later link: the
+        # statement runs on while the next line opens with `.`, so each is whole and unique.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    make(a, b)\n        .take()\n        .unwrap_err();\n"
+                    "    make(a, b)\n        .put()\n        .unwrap_err();\n}\n")
+        self.repo.declare("src/checks.rs:5 .unwrap_err(); [stmt:0eb136cf]")
+        self.accepted()
+
+    def test_a_chain_on_a_block_receiver_starts_at_the_block(self) -> None:
+        # `}` then `.await`: the brace closes the chain's receiver, not a statement.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    let x = async {\n        1\n    }\n    .await\n    .unwrap_err();\n"
+                    "    let y = async {\n        2\n    }\n    .await\n    .unwrap_err();\n}\n")
+        self.repo.declare("src/checks.rs:7 .unwrap_err(); [stmt:d7a63421]")
+        self.accepted()
+
     # -- [via F]: the panic is reported inside a helper the killer calls ---------------------
 
     HELP = "fn check(x: u8) {\n    assert!(ok(x));\n}\nfn other(x: u8) {\n    assert!( ok(x + 1) );\n}\n"
