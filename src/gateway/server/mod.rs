@@ -129,6 +129,8 @@ mod tools_changed;
 // the same function the bind path calls, named here for the caller.
 pub(crate) use cleartext::reload_posture_refusal;
 pub(crate) use support::start_refusal as next_start_refusal;
+#[cfg(test)]
+mod http_test_config;
 mod warmstart;
 mod window_saver;
 #[cfg(test)]

@@ -32,12 +32,8 @@ use crate::protocol_revision_telemetry::window::{self, stall_seam};
 const ARRIVAL: Duration = Duration::from_secs(60);
 
 fn config(dir: &std::path::Path, mode: ProtocolRevisionWindow, backend: &str) -> Config {
-    let mut config = Config::default();
-    config.server.host = "127.0.0.1".to_string();
-    config.server.port = 0;
-    config.server.shutdown_timeout = Duration::from_secs(30);
+    let mut config = super::http_test_config::http_test_config(dir);
     config.server.protocol_revision_window = mode;
-    config.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
     config.backends.insert(
         "remote_docs".to_string(),
         BackendConfig {
