@@ -41,6 +41,10 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/chart.8cb6bfe27b11.js"),
     ),
     (
+        "decisions-words.78a8be737bd9.js",
+        include_bytes!("shell/decisions-words.78a8be737bd9.js"),
+    ),
+    (
         "BigShoulders-700.5faff1f81ec2.woff2",
         include_bytes!("shell/fonts/BigShoulders-700.5faff1f81ec2.woff2"),
     ),
