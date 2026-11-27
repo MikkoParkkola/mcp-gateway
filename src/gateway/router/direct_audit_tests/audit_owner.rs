@@ -75,3 +75,48 @@ async fn p4_1_a_refused_answer_is_one_denial_on_both_routes_with_and_without_a_l
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// One meta call under `setup`: exactly one invocation record, of `class`,
+/// and the counters moved by exactly `counts`.
+async fn once(case: &str, setup: Setup, class: &str, counts: [u64; 5]) -> Vec<String> {
+    let fx = fixture(setup).await;
+    let store = attach(&fx);
+    let call = meta_invoke("alpha", "t", &json!({}));
+    let _ = post_to(&fx, "/mcp", &call, &Caller::Anonymous).await;
+    let mut wrong = Vec::new();
+    let counted = totals(&store);
+    if counted != counts {
+        wrong.push(format!("{case}: counters {counted:?}, want {counts:?}"));
+    }
+    let records = invocations(&fx);
+    match records.as_slice() {
+        [record] if record["outcome"] == class => {}
+        [record] => wrong.push(format!(
+            "{case}: outcome {}, want {class}",
+            record["outcome"]
+        )),
+        _ => wrong.push(format!("{case}: {} records, want exactly 1", records.len())),
+    }
+    wrong
+}
+
+/// P4 (3), the commit points today's code can reach without a hook: a
+/// delivered answer, a backend's own error and a transport failure each leave
+/// exactly one record with today's class and today's counts, so moving the
+/// record behind finalize cannot lose or double one.
+#[tokio::test]
+async fn p4_3_each_finished_meta_call_writes_exactly_one_record() {
+    let mut wrong = Vec::new();
+    wrong.extend(once("delivered", Setup::default(), "ok", [1, 0, 0, 0, 0]).await);
+    let backend_error = Setup {
+        backend_error: Some(-32010),
+        ..Setup::default()
+    };
+    wrong.extend(once("backend error", backend_error, "error", [1, 0, 1, 0, 0]).await);
+    let transport = Setup {
+        backend_fail: Some(|| crate::Error::Transport("the peer went away".into())),
+        ..Setup::default()
+    };
+    wrong.extend(once("transport failure", transport, "error", [1, 0, 1, 0, 0]).await);
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
