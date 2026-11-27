@@ -551,6 +551,13 @@ fn each_reason_alone_makes_the_stop_warn_and_a_clean_report_does_not() {
         !SweepReport::default().needs_warn(),
         "a clean report warned"
     );
+    let done = SweepReport {
+        killed: vec![id(5)],
+        continued: vec![id(6)],
+        passes: 3,
+        ..SweepReport::default()
+    };
+    assert!(!done.needs_warn(), "a successful sweep warned: {done:?}");
     let reasons: [(&str, SweepReport); 6] = [
         (
             "a residual member",
