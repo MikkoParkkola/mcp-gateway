@@ -245,6 +245,13 @@ test.describe('T9c-who Who can use it: every key, a link to its page and what it
     await expect(who(page)).toHaveCount(0);
     await expect(page.locator('p.sp-keys-unread')).toHaveText(KEYS_UNREAD);
   });
+
+  test('T9c-who a key named . or .. is plain text: no link can resolve to another page', async ({ page }) => {
+    await settings(page, entry('s', 'running'), { keys: keysBody(key('.', ['s']), key('..', ['*']), key('k1', ['s'])) });
+    await expect(who(page).locator('.sp-reach')).toHaveText([ALL, ALL, ALL]);
+    await expect(who(page).getByRole('link')).toHaveText(['k1']);
+    await expect(who(page).nth(1)).toContainText('..');
+  });
 });
 
 test.describe('T9c every path that carries a name is encoded (PR B sites)', () => {
