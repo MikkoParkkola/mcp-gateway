@@ -104,7 +104,7 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-b": [("suite", ["--test", GLOB_B], [], 1238)],
     },
     # macOS builds the lib test parts, never the whole binary (it swapped the 3-core, 7 GB runner): `lib-b`
-    # builds and runs parts 1-4 one at a time, `int` runs its suite and `int-lib` builds and runs part 5 in the
+    # builds and runs parts 1 and 3, `lib-c` parts 2 and 4 in its own job, one at a time, `int` runs its suite and `int-lib` builds and runs part 5 in the
     # same job. PARTS is the one source of which leg takes which part; the workflow names the leg only.
     "macos": {
         "lib-b": [("parts", ["--lib"], [], 0)],
@@ -112,8 +112,10 @@ SHARDS: dict[str, dict[str, list[tuple[str, list[str], list[str], int]]]] = {
         "int-lib": [("parts", ["--lib"], [], 0)],
     },
 }
-# Which lib test parts each part-building leg builds and runs (`run-prebuilt-parts <os> <leg> --build`).
-PARTS = {"macos": {"lib-b": (1, 2, 3, 4), "int-lib": (5,)}}
+# Which lib test parts each part-building leg builds and runs (`run-prebuilt-parts <os> <leg> --build`). lib-b's
+# four parts were the train's longest macOS job; split over two legs as 1+3 and 2+4, the pairing whose slower leg
+# was shortest on two measured trains' per-part compile and test times, int becomes the longest.
+PARTS = {"macos": {"lib-b": (1, 3), "lib-c": (2, 4), "int-lib": (5,)}}
 # The macOS part counts the floors come from (each part's list less the macOS skips), with the run they were read
 # from: the E1 dispatch run at 0a3037aecd, both legs' per-part notices. Each leg's floor is its parts' sum, 2% under.
 MACOS_PART_COUNTS = {"run": "44460056220 (E1, macOS, 0a3037aecd)", 1: 3827, 2: 3700, 3: 4526, 4: 5157, 5: 3615}
