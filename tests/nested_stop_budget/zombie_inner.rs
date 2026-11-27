@@ -96,11 +96,11 @@ async fn zombie_chain(stop: Stop) -> Ended {
         During::Nothing,
         Some(SWEEP_LOG),
     );
-    // spawn-check: the outer's exit is awaited below; Reaped reaps it, KillGroup ends the tree on a panic
-    let spawned = outer_command(root, &config)
-        .spawn()
-        .expect("the stdio outer starts");
-    let mut outer = gateway_bin::Reaped::new(spawned);
+    let mut outer = gateway_bin::Reaped::new(
+        outer_command(root, &config)
+            .spawn()
+            .expect("the stdio outer starts"),
+    );
     let pid = outer.child_mut().id().expect("outer pid");
     let guard = KillGroup {
         pid,
