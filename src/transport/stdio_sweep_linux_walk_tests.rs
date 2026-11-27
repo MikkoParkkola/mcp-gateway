@@ -367,6 +367,15 @@ fn a_member_reparented_after_the_snapshot_is_still_killed() {
     let mut sweep = super::super::Sweep::new(root, config);
     sweep.snapshot(&mut table);
     send(&mut table, inner, Sig::Kill);
+    // The sweep must meet the member reparented: wait (10 s deadline, on the
+    // process state) until the inner is gone, then the leaf names another parent.
+    wait_for(&mut table, inner, ProcState::Gone);
+    let now = table.read(&[leaf], &[], Duration::MAX).rows;
+    assert!(
+        now.iter()
+            .any(|(id, ppid)| *id == leaf && *ppid != inner.pid),
+        "premise: the leaf was not reparented: {now:?}"
+    );
     let report = sweep.run(&mut table, &super::super::PidfdBudget::new(64));
     assert!(
         report.killed.contains(&leaf),

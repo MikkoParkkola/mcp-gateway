@@ -286,10 +286,13 @@ fn a_child_turned_away_under_one_parent_is_taken_under_its_real_one() {
     tree.proc(m, s, 'T', 1, &[g]);
     tree.proc(g, m, 'T', 1, &[]);
     let listing = read_from_s(&tree);
-    assert!(
-        pids(&listing).contains(&g),
-        "G was lost after K turned it away"
-    );
+    let parents: Vec<u32> = listing
+        .rows
+        .iter()
+        .filter(|(id, _)| id.pid == g)
+        .map(|(_, parent)| *parent)
+        .collect();
+    assert_eq!(parents, vec![m], "G once, under M (its real parent)");
     assert!(
         !listing.settled,
         "K's listing of a child that names another parent did not unsettle"
