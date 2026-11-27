@@ -251,7 +251,9 @@ class CoverageGrade(unittest.TestCase):
             (["run", "view", RUN, "-R", REPO, "--json", "headSha", "-q", ".headSha"], "@PROBE@"),
             (["run", "view", RUN, "-R", REPO, "--json", "status", "-q", ".status"], "completed"),
             (["run", "view", RUN, "-R", REPO, "--json", "jobs", "-q", JOBS_QUERY], "success"),
-            (["run", "download", RUN, "-R", REPO, "-D", str(out / "art")], "@DOWNLOAD@"),
+            # Only the two graded reports: the run's raw-profile shards are ~14 GB unpacked.
+            (["run", "download", RUN, "-R", REPO, "-n", "coverage-linux", "-n", "coverage-windows",
+              "-D", str(out / "art")], "@DOWNLOAD@"),
         ]
 
     def assert_fixture_calls(self, expected):
