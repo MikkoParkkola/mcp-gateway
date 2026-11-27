@@ -489,8 +489,10 @@ for (const [where, body] of [['a low row', WITH_DOT], ['a lone caller, level wit
   const off = await map(page).locator('.ov-map').evaluate((box) => {
     const rows = [...box.querySelectorAll('ol.ov-agents > li')];
     const i = rows.findIndex((li) => li.querySelector('.ov-dot:not(.ov-dot-off)'));
-    const m = box.getBoundingClientRect();
     const dot = rows[i].querySelector('.ov-dot');
+    // A low row can sit below the window, where nothing is hit: brought into view before measuring.
+    dot.scrollIntoView({ block: 'center' });
+    const m = box.getBoundingClientRect();
     const d = dot.getBoundingClientRect();
     const y = ((i + 0.5) / rows.length) * 100;
     const cx = d.left + d.width / 2;
