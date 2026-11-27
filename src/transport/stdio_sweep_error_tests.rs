@@ -515,7 +515,9 @@ fn a_snapshot_that_keeps_being_cut_stops_after_four_readings() {
 /// so only the cut readings' finds can get them killed. Both are killed, and
 /// the report carries the short readings the stop's warning is raised on.
 /// Red if a snapshot that hit the cap drops what its cut readings found
-/// (mutant M21).
+/// (mutant M21). It covers killing what the cut readings recorded, not finding
+/// a descendant none of them recorded that was reparented before the stop's
+/// first reading: that one escapes, warned only by the count.
 #[test]
 fn a_stop_after_four_cut_readings_still_kills_what_they_found() {
     let mut fake = Fake::new(&[(90, 1), (91, 1), (92, 1)]);

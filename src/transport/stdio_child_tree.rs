@@ -332,7 +332,9 @@ impl ChildTree {
     /// Record this tree's descendants now: called before the first signal of a
     /// stop (including the stdin close) and on every reaper step before the
     /// group kill. A start-time read that failed at construction is retried.
-    /// The snapshot spends at most `limit`, the time the stop has left.
+    /// The snapshot is given `limit`, the time the stop has left, and may spend
+    /// more: its first reading always has a whole slice, and a host stall
+    /// stretches any reading. The time it took is charged to the stop's plan.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn sweep_snapshot(&mut self, limit: std::time::Duration) {
         if self.sweep.is_none()
