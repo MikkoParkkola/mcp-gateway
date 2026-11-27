@@ -66,6 +66,12 @@ for (const profile of ['phone', 'desktop']) {
     await open(page);
     await expect(page.locator('#content [data-panel="flow-map"] .ov-map')).toHaveCount(1);
     const cdp = await profileOn(page, profile);
+    // The bodies differ in a drawn row's key (the spec's shape): every sample makes a row and lets one go.
+    const keys = await page.evaluate(async (pair) => {
+      const { flowModel } = await import(JSON.parse(document.getElementById('screens').textContent).overview.js);
+      return pair.map((b) => flowModel(b).agents.map((r) => r.key).join(' '));
+    }, [big(0), big(1)]);
+    expect(keys[0], 'the two bodies draw a different caller').not.toBe(keys[1]);
     const samples = await sample(page, [big(0), big(1)]);
     console.log(`F1 ${profile}: p95 ${p95(samples).toFixed(3)} ms, max ${Math.max(...samples).toFixed(3)} ms`);
     expect(miss(samples), 'the update budget').toBeNull();
