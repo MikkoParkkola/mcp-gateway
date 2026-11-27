@@ -266,6 +266,8 @@ impl Gateway {
         let inflight = Arc::new(tokio::sync::Semaphore::new(10_000));
         #[cfg(test)]
         self.test_seams.report_inflight(&inflight);
+        #[cfg(test)]
+        self.test_seams.report_audit_jobs(&meta_mcp.audit_jobs);
 
         // Create key server if enabled
         let key_server =

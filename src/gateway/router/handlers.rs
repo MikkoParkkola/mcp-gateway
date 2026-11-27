@@ -654,6 +654,8 @@ async fn meta_mcp_dispatch(
     // D2.3: this request's invocation records are written now, with the
     // verdict of the scan just made, before the answer is judged or stored;
     // a failed write under fail-closed withholds the answer (D1-f).
+    #[cfg(test)]
+    state.meta_mcp.audit_jobs.before_commit_for_test().await;
     if let Err(error) =
         crate::gateway::meta_mcp::invoke::audit_owner::commit(execution.as_ref()).await
     {

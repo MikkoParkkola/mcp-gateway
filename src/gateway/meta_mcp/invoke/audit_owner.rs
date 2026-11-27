@@ -70,6 +70,22 @@ fn hand_off(meta: Arc<MetaMcp>, pending: Vec<InvocationRecord>, verdict: AnswerV
 pub(crate) struct AuditJobs {
     open: AtomicUsize,
     idle: Notify,
+    #[cfg(test)]
+    pub(crate) seams: JobSeams,
+}
+
+/// Test hooks on the jobs of one gateway: park a request at its commit (so
+/// only its drop can write its records), hold each job at a gate, and
+/// report each drain with the jobs open when it started.
+#[cfg(test)]
+#[derive(Debug, Default)]
+pub(crate) struct JobSeams {
+    pub(crate) hold_commit: std::sync::atomic::AtomicBool,
+    pub(crate) parked: Notify,
+    pub(crate) gate_jobs: std::sync::atomic::AtomicBool,
+    pub(crate) job_gate: Notify,
+    pub(crate) drains: std::sync::Mutex<Vec<usize>>,
+    pub(crate) draining: Notify,
 }
 
 /// Ends one job when dropped, so a job that panics still ends.
@@ -92,18 +108,57 @@ impl AuditJobs {
             return;
         };
         self.open.fetch_add(1, Ordering::AcqRel);
+        #[cfg(test)]
+        let gated = self.seams.gate_jobs.load(Ordering::SeqCst);
         let end = JobEnd(self);
         runtime.spawn(async move {
-            let _end = end;
+            #[cfg(test)]
+            if gated {
+                end.0.seams.job_gate.notified().await;
+            }
             job.await;
+            // Also dropped if `job` panics: the future owns it.
+            drop(end);
         });
     }
 
     /// Wait until no job is open, or `within` has passed. Returns how many
     /// are still open (0 when all ended).
     pub(crate) async fn drain(&self, within: std::time::Duration) -> usize {
-        let _ = within;
+        #[cfg(test)]
+        {
+            let open = self.open.load(Ordering::Acquire);
+            self.seams
+                .drains
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(open);
+            self.seams.draining.notify_one();
+        }
+        let _ = tokio::time::timeout(within, async {
+            loop {
+                let idle = self.idle.notified();
+                tokio::pin!(idle);
+                // Registered before the count is read, so a job ending in
+                // between still wakes this wait.
+                idle.as_mut().enable();
+                if self.open.load(Ordering::Acquire) == 0 {
+                    return;
+                }
+                idle.await;
+            }
+        })
+        .await;
         self.open.load(Ordering::Acquire)
+    }
+
+    /// Park the request at its commit while `hold_commit` is set.
+    #[cfg(test)]
+    pub(crate) async fn before_commit_for_test(&self) {
+        if self.seams.hold_commit.load(Ordering::SeqCst) {
+            self.seams.parked.notify_one();
+            std::future::pending::<()>().await;
+        }
     }
 }
 

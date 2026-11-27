@@ -61,6 +61,12 @@ pub(super) struct TestSeams {
     /// open across the drain (MIK-8156).
     #[cfg(test)]
     inflight: Option<oneshot::Sender<std::sync::Arc<tokio::sync::Semaphore>>>,
+    /// Receives `run`'s audit jobs, so a test can hold one across the drain
+    /// (D2.5).
+    #[cfg(test)]
+    audit_jobs: Option<
+        oneshot::Sender<std::sync::Arc<crate::gateway::meta_mcp::invoke::audit_owner::AuditJobs>>,
+    >,
     /// Receives the stdio session's Meta-MCP, so a test can read the
     /// continuation table that session holds (MIK-8176). A mutex because
     /// `run_stdio_on` reports it through `&self`.
@@ -186,6 +192,17 @@ impl TestSeams {
             sender.send(std::sync::Arc::clone(inflight)).ok();
         }
     }
+
+    /// Hand `run`'s audit jobs to the test that asked for them.
+    #[cfg(test)]
+    pub(super) fn report_audit_jobs(
+        &mut self,
+        jobs: &std::sync::Arc<crate::gateway::meta_mcp::invoke::audit_owner::AuditJobs>,
+    ) {
+        if let Some(sender) = self.audit_jobs.take() {
+            sender.send(std::sync::Arc::clone(jobs)).ok();
+        }
+    }
 }
 
 /// `shutdown_signal`, also started by a test's trigger. Test builds only, so
@@ -295,6 +312,17 @@ impl super::Gateway {
         receiver
     }
 
+    /// `run`'s audit jobs, sent once `run` builds them.
+    #[cfg(test)]
+    pub(super) fn audit_jobs_for_test(
+        &mut self,
+    ) -> oneshot::Receiver<std::sync::Arc<crate::gateway::meta_mcp::invoke::audit_owner::AuditJobs>>
+    {
+        let (sender, receiver) = oneshot::channel();
+        self.test_seams.audit_jobs = Some(sender);
+        receiver
+    }
+
     /// The stdio session's Meta-MCP, sent once `run_stdio_on` builds it.
     #[cfg(test)]
     pub(super) fn stdio_meta_mcp_for_test(
@@ -339,6 +367,11 @@ impl super::Gateway {
 #[cfg(test)]
 #[path = "shutdown_order_tests.rs"]
 mod shutdown_order_tests;
+
+#[cfg(tp4)]
+#[cfg(test)]
+#[path = "audit_jobs_shutdown_tests.rs"]
+mod audit_jobs_shutdown_tests;
 
 #[cfg(tp4)]
 #[cfg(test)]
