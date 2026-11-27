@@ -83,8 +83,7 @@ test.describe('seeds', () => {
   test.describe('populated', () => {
     test.use({ seed: 'populated' });
     test('S2 the populated seed lists its stub servers', async ({ gw }) => {
-      const backends = await (await gw.api('/ui/api/backends')).json();
-      const names = JSON.stringify(backends);
+      const names = JSON.stringify(await gw.serverNames());
       for (const stub of gw.stubs) expect(names).toContain(stub);
     });
   });
@@ -117,7 +116,7 @@ test.describe('the gateway reads only the test home', () => {
     const seen = JSON.stringify(await (await gw.api('/ui/api/discovery')).json());
     expect(seen).toContain('h-planted');
     expect(seen).not.toContain('decoy-planted');
-    expect(JSON.stringify(await (await gw.api('/ui/api/backends')).json())).not.toContain('decoy-planted');
+    expect(await gw.serverNames()).not.toContain('decoy-planted');
   });
 
   // From gpt r3's MEDIUM (init does write the store-backed bearer: cli_support/init.rs:22-86), these controls make
