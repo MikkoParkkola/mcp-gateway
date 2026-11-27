@@ -10,6 +10,7 @@
 import { test, expect } from '../tests/base.mjs';
 import { serve, open } from '../tests/overview.mjs';
 import { big } from '../tests/flowmap.mjs';
+import { readFileSync } from 'node:fs';
 
 const BUDGET_MS = 4;
 const SAMPLES = 50;
