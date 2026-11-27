@@ -1,2 +1,3 @@
 # id	patch	spec	grep (one row each; each leg's killing line is listed in the PR body)
 M-field-editable	M-field-editable.patch	tests/server-page-settings.spec.mjs	T8e nothing can be typed or saved again
+M-no-focus-back	M-no-focus-back.patch	tests/server-page-settings.spec.mjs	T8e a refusal while still on the page

@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.144bf4fbd66f.js b/src/gateway/ui/shell/server-page.144bf4fbd66f.js
-index b3e46c2e15..855a46518d 100644
---- a/src/gateway/ui/shell/server-page.144bf4fbd66f.js
-+++ b/src/gateway/ui/shell/server-page.144bf4fbd66f.js
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..32a9638158 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
 @@ -387,7 +387,6 @@ function secretLine(r, server, ctx) {
      save.disabled = true;
      cancel.disabled = true;
