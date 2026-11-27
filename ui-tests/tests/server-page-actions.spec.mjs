@@ -358,9 +358,9 @@ test.describe('review round 1: the replay contract, stale actions, final sign-in
 
   test('T6 the sign-in start and a refusal are announced', async ({ page }) => {
     await recordAnnouncements(page);
-    await actions(page, OAUTH(), { backend: signInFake({ code: 404, body: { error: 'no_sign_in', message: 'msg-said' } }) });
+    await actions(page, OAUTH(), { backend: signInFake({ code: 404, body: { error: 'no_sign_in', message: 'Msg said.' } }) });
     await startAndFinish(page);
-    await expect.poll(() => announced(page)).toEqual(expect.arrayContaining(['Sign-in started.', 'msg-said']));
+    await expect.poll(() => announced(page)).toEqual(expect.arrayContaining(['Sign-in started.', 'Msg said.']));
   });
 
   test('T4 Remove opens no confirm when the user left while the keys were read', async ({ page }) => {
