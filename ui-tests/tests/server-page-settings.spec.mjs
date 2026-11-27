@@ -223,14 +223,13 @@ test.describe('T8d the typed value leaves the page on every way out', () => {
 });
 
 test.describe('T8e while a Save is pending', () => {
-  test('T8e typing again cannot re-enable Save or send a second PATCH', async ({ page }) => {
+  test('T8e nothing can be typed or saved again while the PATCH is pending', async ({ page }) => {
     const held = gate();
     const seen = await saveSecret(page, () => ({ ...stored('env.API_TOKEN'), hold: held.shut }));
     await expect.poll(() => patches(seen).length).toBe(1);
-    const field = page.getByLabel('API_TOKEN', { exact: true });
-    await field.fill(`${SENT}-more`);
+    // A value typed now would sit in the field, and stay there if the user left before the answer.
+    await expect(page.getByLabel('API_TOKEN', { exact: true })).toBeDisabled();
     await expect(page.getByRole('button', { name: 'Save' })).toBeDisabled();
-    await field.press('Enter');
     held.open();
     await expect(lines(page).locator('.sp-done')).toHaveCount(1);
     expect(patches(seen)).toHaveLength(1);
