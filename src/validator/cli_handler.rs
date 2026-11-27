@@ -130,10 +130,12 @@ pub async fn run_validate_command(paths: &[PathBuf], config: &ValidateConfig) ->
     let files = collect_capability_files(paths);
 
     if files.is_empty() {
-        return crate::commands::usage(
+        return mutant!("N16", crate::commands::fail(crate::commands::CliExit::LocalFailure, 
+            "validate",
+            "No YAML capability files found in the given paths."), crate::commands::usage(
             "validate",
             "No YAML capability files found in the given paths.",
-        );
+        ));
     }
 
     let validator = AgentUxValidator::new();
@@ -296,7 +298,7 @@ pub async fn run_validate_command(paths: &[PathBuf], config: &ValidateConfig) ->
 
     // Verdicts: the report is printed; 2 when a file did not parse, 1 when a finding failed.
     if parse_errors {
-        crate::commands::verdict(2)
+        mutant!("N17", crate::commands::verdict(1), crate::commands::verdict(2))
     } else if has_failures {
         crate::commands::verdict(1)
     } else {

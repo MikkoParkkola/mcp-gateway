@@ -132,9 +132,9 @@ fn run_audit_verify(
                 );
             }
             if render == Render::Json {
-                return print_verdict(&result, signed, verify_mode, verdict(1));
+                return print_verdict(&result, signed, verify_mode, mutant!("N18", crate::commands::fail(crate::commands::CliExit::LocalFailure, "chain verification failed", "See the line above."), verdict(1)));
             }
-            verdict(1)
+            mutant!("N18", crate::commands::fail(crate::commands::CliExit::LocalFailure, "chain verification failed", "See the line above."), verdict(1))
         }
     }
 }

@@ -50,18 +50,23 @@ pub fn run_hash_key_command(verify: Option<&str>, render: crate::cli::output::Re
     }
     let key = strip_one_line_ending(&raw);
     if key.is_empty() {
-        return usage("hash-key", "the key is empty");
+        return mutant!("N12", crate::commands::fail(crate::commands::CliExit::LocalFailure, "hash-key", "the key is empty"), usage("hash-key", "the key is empty"));
     }
     // New keys only: `--verify` still checks a key chosen before the floor.
     if verify.is_none() && key.len() < MIN_SECRET_LEN {
         // ci-allow-secret-log: MIN_SECRET_LEN is the constant 20, a length floor; the key itself is never printed, only its length
-        return usage(
+        return mutant!("N13", crate::commands::fail(crate::commands::CliExit::LocalFailure, 
+            "hash-key",
+            &format!(
+                "the key is {} bytes; a new key needs at least {MIN_SECRET_LEN} bytes",
+                key.len()
+            )), usage(
             "hash-key",
             &format!(
                 "the key is {} bytes; a new key needs at least {MIN_SECRET_LEN} bytes",
                 key.len()
             ),
-        );
+        ));
     }
     let presented = api_key_digest_spec(key);
     match verify {
@@ -91,7 +96,7 @@ pub fn run_hash_key_command(verify: Option<&str>, render: crate::cli::output::Re
             } else {
                 // A verdict: the answer is printed, and the code says no.
                 eprintln!("hash-key: the key does not match");
-                verdict(1)
+                mutant!("N19", crate::commands::usage("hash-key", "the key does not match"), verdict(1))
             }
         }
     }
