@@ -1,0 +1,30 @@
+head_sha	7a9ea9de3fa559dcf43fa691aeed2a07f303d9d0
+#mutant N1
+mcp_gateway	commands::cli_exit::tests::printed_error_folds_and_takes_the_kinds_code	src/commands/cli_exit_tests.rs:552
+cli_local_errors	guards::a_line_break_in_a_built_error_keeps_two_lines	tests/cli_local_errors/guards.rs:34
+#mutant N2
+mcp_gateway	commands::cli_exit::tests::printed_error_folds_and_takes_the_kinds_code	src/commands/cli_exit_tests.rs:552
+#mutant N3
+mcp_gateway	commands::cli_exit::tests::printed_error_folds_and_takes_the_kinds_code	src/commands/cli_exit_tests.rs:556
+cli_local_errors	guards::wrong_invocations_exit_two	tests/cli_local_errors/guards.rs:34
+#mutant N4
+mcp_gateway	commands::cli_exit::tests::printed_verdict_keeps_what_it_is_given	src/commands/cli_exit_tests.rs:564
+#mutant N5
+mcp_gateway	commands::cli_exit::tests::printed_verdict_keeps_what_it_is_given	src/commands/cli_exit_tests.rs:564
+#mutant N12
+cli_local_errors	local_errors_are_two_lines	tests/cli_local_errors.rs:552
+#mutant N13
+cli_local_errors	guards::exits_that_were_two_stay_two	tests/cli_local_errors/guards.rs:34
+#mutant N14
+cli_local_errors	guards::exits_that_were_two_stay_two	tests/cli_local_errors/guards.rs:34
+#mutant N16
+cli_local_errors	local_errors_are_two_lines	tests/cli_local_errors.rs:552
+cli_local_errors	guards::local_errors_end_with_the_two_lines	tests/cli_local_errors/guards.rs:371
+#mutant N17
+cli_local_errors	guards::validate_unparseable_keeps_its_verdict	tests/cli_local_errors/guards.rs:48
+#mutant N18 multi=2
+cli_json_forms_verify	audit_verify_failed_verdicts_print_their_document_with_exit_1	tests/cli_json_forms_verify.rs:290
+#mutant N19
+e4_hash_key_cli	hash_key_verify_exit_codes	tests/e4_hash_key_cli.rs:96
+#mutant N28
+cli_local_errors	guards::hash_key_on_a_terminal_is_a_wrong_call	tests/cli_local_errors/guards.rs:34
