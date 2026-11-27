@@ -548,6 +548,7 @@ function fillDot(nodes, row, y, mid) {
   if (nodes.dot && (!want || nodes.dot.localName !== want)) {
     nodes.dot.remove();
     nodes.dot = null;
+    nodes.dw = {};
   }
   if (!want) return;
   if (!nodes.dot) {
@@ -559,10 +560,14 @@ function fillDot(nodes, row, y, mid) {
     }
     nodes.li.append(nodes.dot);
   }
-  if (want === 'a') nodes.dot.setAttribute('href', callsOfCaller(row.account));
-  nodes.dot.textContent = `${n(row.blocks)} blocked`;
-  nodes.dot.style.setProperty('--at-x', `${mid}%`);
-  nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
+  const dw = nodes.dw ?? (nodes.dw = {});
+  const put = (name, v, write) => { if (dw[name] !== v) { write(v); dw[name] = v; } };
+  if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
+  put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
+  put('at', `${mid}% ${(y + 50) / 2}%`, () => {
+    nodes.dot.style.setProperty('--at-x', `${mid}%`);
+    nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
+  });
 }
 /** A line's width: 1 to 8 px by its calls against the column's busiest; no number gives the neutral 1. */
 const width = (calls, max) => (calls === null || !max ? 1 : Math.round((1 + (7 * calls) / max) * 100) / 100);
@@ -593,18 +598,21 @@ function fillRow(nodes, row, side, i, count, max) {
     nodes.go = go;
   }
   nodes.li.classList.toggle('ov-fold', Boolean(row.fold));
-  nodes.li.dataset.up = String(Boolean(row.up));
-  nodes.name.textContent = row.name;
-  nodes.name.title = row.name;
-  if (side === 'servers' && !row.fold) nodes.sub.replaceChildren(serverBadge(row.state, { plain: true }));
-  else nodes.sub.textContent = row.sub;
-  nodes.calls.textContent = row.calls === null ? '' : n(row.calls);
+  // Only what changed is written: an unchanged text or attribute set again still costs style work.
+  const was = nodes.was ?? {};
+  const set = (k, v, write) => { if (was[k] !== v) { write(v); was[k] = v; } };
+  set('up', String(Boolean(row.up)), (v) => { nodes.li.dataset.up = v; });
+  set('name', row.name, (v) => { nodes.name.textContent = v; nodes.name.title = v; });
+  if (side === 'servers' && !row.fold) set('state', row.state, (v) => nodes.sub.replaceChildren(serverBadge(v, { plain: true })));
+  else set('sub', row.sub, (v) => { was.state = undefined; nodes.sub.textContent = v; });
+  set('calls', row.calls === null ? '' : n(row.calls), (v) => { nodes.calls.textContent = v; });
   const y = ((i + 0.5) / count) * 100;
   const x0 = side === 'agents' ? 0 : 100;
   const mid = (EDGE[side] + 50) / 2;
-  nodes.path.setAttribute('d', `M ${x0} ${y} L ${EDGE[side]} ${y} C ${mid} ${y}, ${mid} 50, 50 50`);
-  nodes.path.setAttribute('stroke-width', String(width(row.calls, max)));
-  nodes.path.classList.toggle('ov-dashed', Boolean(row.dashed));
+  set('d', `M ${x0} ${y} L ${EDGE[side]} ${y} C ${mid} ${y}, ${mid} 50, 50 50`, (v) => nodes.path.setAttribute('d', v));
+  set('w', String(width(row.calls, max)), (v) => nodes.path.setAttribute('stroke-width', v));
+  set('dashed', Boolean(row.dashed), (v) => nodes.path.classList.toggle('ov-dashed', v));
+  nodes.was = was;
   if (side === 'agents') fillDot(nodes, row, y, mid);
 }
 
@@ -628,13 +636,16 @@ export function updateMap(root, model) {
     state = { box, lines, hub, note, empty, lists: { agents, servers }, rows: { agents: new Map(), servers: new Map() } };
     drawn.set(root, state);
   }
-  state.empty.textContent = model.empty ?? '';
-  state.empty.hidden = !model.empty;
-  state.box.hidden = Boolean(model.empty);
-  state.note.textContent = model.note;
-  state.note.hidden = !model.note;
+  // Each element is written only when its own value changed: a same-value write still costs a relayout.
+  const text = (el, v) => { if (el.textContent !== v) el.textContent = v; };
+  const hide = (el, v) => { if (el.hidden !== v) el.hidden = v; };
+  text(state.empty, model.empty ?? '');
+  hide(state.empty, !model.empty);
+  hide(state.box, Boolean(model.empty));
+  text(state.note, model.note);
+  hide(state.note, !model.note);
   const words = [model.hub.servers === null ? '' : `${n(model.hub.servers)} servers`, model.hub.tools === null ? '' : `${n(model.hub.tools)} tools`];
-  state.hub.textContent = words.filter(Boolean).join(', ');
+  text(state.hub, words.filter(Boolean).join(', '));
   for (const side of ['agents', 'servers']) {
     const rows = model[side];
     const held = state.rows[side];

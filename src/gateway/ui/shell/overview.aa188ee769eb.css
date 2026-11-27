@@ -89,6 +89,9 @@ a.ny-row:hover .ny-title { text-decoration: underline; }
   font: var(--type-small); color: var(--color-text-secondary); text-align: center; }
 .ov-row { min-width: 0; display: flex; align-items: center; min-height: var(--size-row-touch); }
 .ov-row-go { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-2);
+  /* A set height and contained layout: a changed number re-lays out this box alone, not the map.
+     No paint containment, so a focus ring drawn outside the box stays visible. */
+  height: var(--space-10); contain: size layout style;
   color: inherit; text-decoration: none; background: var(--color-bg-surface); }
 a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
 .ov-row-name { font: var(--type-body); color: var(--color-text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

@@ -65,12 +65,12 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.999936c78713.js"),
     ),
     (
-        "overview.8903759d5f5d.css",
-        include_bytes!("shell/overview.8903759d5f5d.css"),
+        "overview.21e722587da5.js",
+        include_bytes!("shell/overview.21e722587da5.js"),
     ),
     (
-        "overview.a48337a9f432.js",
-        include_bytes!("shell/overview.a48337a9f432.js"),
+        "overview.aa188ee769eb.css",
+        include_bytes!("shell/overview.aa188ee769eb.css"),
     ),
     (
         "servers.a2711ee29891.css",
