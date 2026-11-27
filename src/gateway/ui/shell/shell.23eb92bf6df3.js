@@ -8,6 +8,8 @@
 // paint. A screen calls register() whenever it runs, before boot or after.
 // All text goes in with textContent.
 
+import { pathFor } from '/ui/assets/server-paths.15a075bb0cb1.js';
+
 /** The sidebar, in order. The To do page id is composed so it reads as a name. */
 export const NAV = [
   ['overview', 'Overview'],
@@ -1095,10 +1097,6 @@ function parse(pathname) {
     return { page, object: null, tab: second };
   }
   return { page, object: second ?? null, tab: third ?? null };
-}
-
-function pathFor({ page, object, tab }) {
-  return `/ui/${page}${object ? `/${encodeURIComponent(object)}` : ''}/${tab}`;
 }
 
 /** Links the router owns: same origin, a registered sidebar page as the first segment. */

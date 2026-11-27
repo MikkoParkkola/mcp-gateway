@@ -262,18 +262,23 @@ export function frame(event, data, id = null) {
 
 /**
  * From before the shell loads, keep a count of the live window listeners for
- * each event type in `types`, read as window.__listeners(type).
+ * each event type in `types`, read as window.__listeners(type), and the add and remove
+ * calls made, read as window.__listenerCalls(type).
  */
 export const countListeners = (page, types) => page.addInitScript((watched) => {
   const fns = new Map(watched.map((type) => [type, new Set()]));
+  const calls = new Map(watched.map((type) => [type, { add: 0, delete: 0 }]));
   for (const [name, op] of [['addEventListener', 'add'], ['removeEventListener', 'delete']]) {
     const real = window[name];
     window[name] = function (type, fn, ...more) {
+      if (calls.has(type)) calls.get(type)[op] += 1;
       fns.get(type)?.[op](fn);
       return real.call(this, type, fn, ...more);
     };
   }
   window.__listeners = (type) => fns.get(type).size;
+  // How many add and remove calls the window saw for `type`, whatever they changed.
+  window.__listenerCalls = (type) => ({ ...calls.get(type) });
 }, types);
 
 /** Record the text of every entry added to the announcer, from first paint. */
