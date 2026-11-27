@@ -533,6 +533,21 @@ class KillerFilters(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("fn guard_admits_only_its_host is defined 2 times", out)
 
+    def test_a_nested_block_comment_between_fn_and_its_name_still_declares_it(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod more;\n"
+        self.repo.files["src/more.rs"] = "#[test]\nfn /* a /* nested */ note */ guard_admits_only_its_host() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("fn guard_admits_only_its_host is defined 2 times", out)
+
+    def test_a_spaced_test_attribute_path_is_still_a_test(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "#[tokio :: test]\nasync fn guard_admits_only_its_host_twice() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("matches 2 tests", out)
+
     def test_a_mod_inside_a_macro_definition_is_not_a_module(self) -> None:
         self.repo.files["src/lib.rs"] = "mod checks;\nmacro_rules! wrap {\n    () => {\n        mod gone;\n    };\n}\n"
         code, out = self.repo.run()
