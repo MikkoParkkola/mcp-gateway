@@ -13,7 +13,10 @@ import { test, expect, until, signIn } from './gateway.mjs';
 test.use({ seed: 'silentStub' });
 
 const FAULT = process.env.JH_FAULT ?? '';
-const initializes = (log) => log.split('\n').filter((l) => /"method"\s*:\s*"initialize"/.test(l)).length;
+/** How many initialize requests reached the stub: each log line parsed as a JSON-RPC message, never a text match. */
+const initializes = (log) => log.split('\n').filter((l) => {
+  try { return JSON.parse(l).method === 'initialize'; } catch { return false; }
+}).length;
 const tideState = async (gw) => {
   const { servers } = await (await gw.api('/ui/api/status')).json();
   return servers.find((s) => s.name === 'tide')?.state ?? null;
