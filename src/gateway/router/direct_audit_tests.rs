@@ -28,6 +28,10 @@ mod extras;
 use extras::{Extra, Log, arm_extras, audit_log, backend_config, harden};
 #[cfg(tp1)]
 mod anon_key;
+/// The record and counts a response-firewall refusal leaves, on both routes.
+#[cfg(tp1)]
+#[cfg(feature = "firewall")]
+mod audit_owner;
 mod backend_oracle;
 #[cfg(tp1)]
 mod backend_origin;
