@@ -285,10 +285,11 @@ pub(crate) fn print_document(doc: Result<String, String>) -> std::process::ExitC
             crate::cli::stdout::print!("{doc}");
             std::process::ExitCode::SUCCESS
         }
-        Err(why) => {
-            eprintln!("Error: could not print the document: {why}");
-            std::process::ExitCode::FAILURE
-        }
+        Err(why) => crate::commands::fail(
+            crate::commands::CliExit::LocalFailure,
+            &format!("could not print the document: {why}"),
+            "Rerun without the JSON output flag for the text form, and report this as a bug.",
+        ),
     }
 }
 

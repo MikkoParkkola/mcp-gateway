@@ -24,6 +24,10 @@ spec.loader.exec_module(c6)
 
 RANK_HEAD = "rank\tstatus\tnamed_path\tfile\tqualified\toccurrence\treason\n"
 REPL_HEAD = "named_path\tslot_rank\trule\tunderstudy_rank\tfile\tqualified\toccurrence\tevidence\n"
+GAP_TABLE = "docs/release/c6-gap/v4.0.0-c6-gap-table.tsv"
+GAP_HEAD = "rank\tpath\tfile\tfunction\tmutant\tdeclared_killer_args\n"
+# The killer the gap row names, at the module path its filter spells.
+KILLER = "#[test]\nfn guard_admits_only_its_host() {}\n"
 GUARD = """impl Guard {
     fn admits(&self, host: &str) -> bool {
         let allowed = host == self.host;
@@ -59,6 +63,9 @@ class Repo:
             c6.REPLACEMENTS: REPL_HEAD,
             f"{c6.PATCHES}/http/1_admits.patch": PATCH,
             "src/guard.rs": GUARD,
+            GAP_TABLE: GAP_HEAD + "1\tHTTP dispatch\tsrc/guard.rs\tGuard::admits\t1_admits.patch\t--lib checks::guard_admits_only_its_host\n",
+            "src/lib.rs": "mod checks;\n",
+            "src/checks.rs": KILLER,
         }
 
     def git(self, *args: str) -> str:
@@ -415,9 +422,147 @@ class RoundThree(unittest.TestCase):
             self.repo.run()
 
 
+class KillerFilters(unittest.TestCase):
+    """The gap row's test filter must name exactly one test in the crate's module tree."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+
+    def tearDown(self) -> None:
+        self.repo.close()
+
+    def filter(self, args: str) -> None:
+        table = self.repo.files[GAP_TABLE]
+        self.repo.files[GAP_TABLE] = table.replace("--lib checks::guard_admits_only_its_host", args)
+
+    def test_a_test_moved_to_another_module_is_refused_naming_where_it_is(self) -> None:
+        self.repo.files["src/checks.rs"] = "mod host;\n"
+        self.repo.files["src/checks/host.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("test filter checks::guard_admits_only_its_host does not match the module tree: "
+                      "fn guard_admits_only_its_host is checks::host::guard_admits_only_its_host at src/checks/host.rs:2", out)
+
+    def test_a_bare_name_defined_twice_is_refused_naming_both(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = "mod host;\n" + KILLER
+        self.repo.files["src/checks/host.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("fn guard_admits_only_its_host is defined 2 times: ", out)
+        self.assertIn("checks::guard_admits_only_its_host at src/checks.rs:3", out)
+        self.assertIn("checks::host::guard_admits_only_its_host at src/checks/host.rs:2", out)
+
+    def test_a_filter_naming_no_fn_is_refused(self) -> None:
+        self.filter("--lib checks::guard_refuses_a_foreign_host")
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("no fn guard_refuses_a_foreign_host in the crate rooted at src/lib.rs", out)
+
+    def test_a_path_mounted_module_resolves_to_its_declared_name(self) -> None:
+        self.repo.files["src/lib.rs"] = '#[cfg(test)]\n#[path = "guard_checks.rs"]\nmod checks;\n'
+        self.repo.files.pop("src/checks.rs")
+        self.repo.files["src/guard_checks.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_inline_modules_add_their_names_and_their_directories(self) -> None:
+        self.filter("--lib checks::inner::deep::guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = "mod inner {\n    mod deep;\n}\n"
+        self.repo.files["src/checks/inner/deep.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_an_unmounted_copy_does_not_count(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/old/checks.rs"] = KILLER  # no `mod` loads it: not part of the crate
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_an_integration_test_target_is_its_own_crate(self) -> None:
+        self.filter("--test acs issuer::guard_admits_only_its_host")
+        self.repo.files["tests/acs.rs"] = "mod issuer;\n"
+        self.repo.files["tests/issuer.rs"] = KILLER
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_test_target_with_a_declared_path_is_read_from_that_path(self) -> None:
+        self.filter("--test acs guard_admits_only_its_host")
+        self.repo.files["Cargo.toml"] = ('[package]\nname = "x"\n\n[[test]]\nname = "acs"\n'
+                                         'path = "tests/suites/acs_main.rs"\n\n[features]\n')
+        self.repo.files["tests/suites/acs_main.rs"] = KILLER
+        self.repo.files["tests/acs.rs"] = "// not the target: cargo reads the declared path\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_filter_that_is_part_of_a_second_tests_path_is_refused(self) -> None:
+        # Cargo matches the filter as a substring of each test path: both would run.
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "#[tokio::test]\nasync fn guard_admits_only_its_host_twice() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("test filter guard_admits_only_its_host matches 2 tests: checks::guard_admits_only_its_host, "
+                      "checks::guard_admits_only_its_host_twice", out)
+
+    def test_a_filter_inside_a_module_name_counts_that_modules_tests(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "mod guard_admits_only_its_host_cases {\n    #[test]\n    fn first() {}\n}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("checks::guard_admits_only_its_host_cases::first", out)
+
+    def test_a_helper_whose_name_contains_the_filter_is_not_a_test(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "fn guard_admits_only_its_host_fixture() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_spaced_path_attribute_is_still_the_modules_file(self) -> None:
+        # rustc reads `#[ path = ... ]` too: src/checks.rs is then not part of the crate.
+        self.repo.files["src/lib.rs"] = '#[ path = "guard_checks.rs" ]\nmod checks;\n'
+        self.repo.files["src/guard_checks.rs"] = "// the killer moved away\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("no fn guard_admits_only_its_host in the crate rooted at src/lib.rs", out)
+
+    def test_a_comment_between_fn_and_its_name_still_declares_it(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod more;\n"
+        self.repo.files["src/more.rs"] = "#[test]\nfn /* moved */ guard_admits_only_its_host() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("fn guard_admits_only_its_host is defined 2 times", out)
+
+    def test_a_nested_block_comment_between_fn_and_its_name_still_declares_it(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod more;\n"
+        self.repo.files["src/more.rs"] = "#[test]\nfn /* a /* nested */ note */ guard_admits_only_its_host() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("fn guard_admits_only_its_host is defined 2 times", out)
+
+    def test_a_spaced_test_attribute_path_is_still_a_test(self) -> None:
+        self.filter("--lib guard_admits_only_its_host")
+        self.repo.files["src/checks.rs"] = KILLER + "#[tokio :: test]\nasync fn guard_admits_only_its_host_twice() {}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("matches 2 tests", out)
+
+    def test_a_mod_inside_a_macro_definition_is_not_a_module(self) -> None:
+        self.repo.files["src/lib.rs"] = "mod checks;\nmacro_rules! wrap {\n    () => {\n        mod gone;\n    };\n}\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+
+    def test_a_declared_module_with_no_file_is_unreadable_not_skipped(self) -> None:
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod gone;\n"
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn("mod gone in src/lib.rs: none of src/gone.rs, src/gone/mod.rs", out)
+
+
 class TheReleaseLine(unittest.TestCase):
     """The resolver on this repository's own tree: the 68 obligations, their manifest ids in
-    killer-gap order, and the three freeze-day batches the procedure documents."""
+    killer-gap order, and the six freeze-day batches the procedure documents."""
 
     def test_every_obligation_resolves_and_the_batches_are_the_documented_ones(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:
@@ -429,11 +574,15 @@ class TheReleaseLine(unittest.TestCase):
             rows = (Path(scratch) / "manifest.tsv").read_text().splitlines()[1:]
         ids = [row.split("\t")[0] for row in rows]
         self.assertEqual(len(ids), 68)
-        batches = [[i for k, i in enumerate(ids) if k % 3 == b] for b in range(3)]
-        self.assertEqual(batches[2][:6], ["HTTP_03", "HTTP_06", "HTTP_09", "HTTP_12", "HTTP_15", "ACCT_02"])
-        self.assertIn("STARTUP_09", batches[2])
+        # The procedure's six hosted batches: the manifest's rows dealt round robin.
+        batches = [[i for k, i in enumerate(ids) if k % 6 == b] for b in range(6)]
+        self.assertEqual([len(b) for b in batches], [12, 12, 11, 11, 11, 11])
+        self.assertEqual(sorted(i for b in batches for i in b), sorted(ids))
+        self.assertEqual(batches[4][:6], ["HTTP_05", "HTTP_11", "ACCT_01", "ACCT_07", "ACCT_13", "OAUTH_03"])
+        # Batch 5 carries the three rows whose patches once had a tracker id in their context.
+        self.assertTrue({"HTTP_11", "OAUTH_03", "STARTUP_03"} <= set(batches[4]))
+        self.assertIn("STARTUP_09", ids)
         self.assertNotIn("STARTUP_01", ids)  # replaced under G11
-        self.assertEqual([len(b) for b in batches], [23, 23, 22])
 
 
 

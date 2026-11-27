@@ -137,6 +137,9 @@ pub(crate) mod personal_accounts;
 pub mod playbook;
 #[doc(hidden)]
 pub mod preview_sandbox;
+#[cfg(tp3)]
+#[cfg(test)]
+mod print_sites_tests;
 
 // The preview sandbox's test seams must never ship: a release build with them
 // fails here, and CI proves it with a build that must fail.
@@ -400,6 +403,10 @@ mod file_mode_inherit_tests;
 #[cfg(all(test, unix))]
 #[cfg(feature = "tool-profiles")]
 mod state_save_atomic_tests;
+// The shared writer's owner, ACL and label rows; root-only rows are ignored outside their CI job.
+#[cfg(tp3)]
+#[cfg(test)]
+mod config_persistence_access_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 mod state_save_turn_tests;

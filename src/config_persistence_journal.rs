@@ -2,11 +2,15 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! The replace journal: what a byte replacement of gateway.yaml needs so that
 //! a crash, or a refused reload, never leaves bytes on disk that no reload
-//! accepted (ADR-024).
+//! accepted (ADR-024). One bounded exception (ADR-024's 2026-11-23
+//! amendment): a first API key whose reload was refused only because a running
+//! gateway cannot become multi-user, after the writer checked that a start
+//! from those bytes succeeds. Those bytes wait on disk for the next start.
 //!
 //! A replacement writes, in order: a private copy of the original beside the
 //! file, this journal in state `staged`, the new bytes over the file, then,
-//! once the reload is accepted, state `all_renamed`. Whoever next takes the
+//! once the reload has accepted them (or refused them for that waiting first
+//! key alone), state `all_renamed`. Whoever next takes the
 //! config lock (any gateway writer, the CLI, a starting gateway) recovers a
 //! journal it finds before reading the file: `staged` puts the original
 //! back, `all_renamed` keeps the new bytes. Either way the journal and the
@@ -27,7 +31,16 @@ use crate::identity_grants::journal::resolved;
 
 const VERSION: u32 = 1;
 
-pub(super) const SETTLEMENT_PENDING: &str = "A config write is awaiting audit settlement. Run mcp-gateway audit settle --abandon <journal> --yes.";
+/// The refusal when a v2 journal still owes its audit record. Its remedy is the
+/// one this build ships: `serve` settles the journal at startup
+/// (`commands::load_for_serve` calls `startup_settle::prepare_start`, whose
+/// `open_locked` repairs it under the config lock, and `finish_start` then has
+/// `drain_locked` deliver its records to the serving audit log), or refuses
+/// with the startup gate's own reason. A command it names is written in
+/// backticks and must parse with the CLI's own parser
+/// (`config_persistence_journal_remedy_tests.rs`). The journal sits beside the
+/// config it belongs to, so only a start on that same file settles it.
+pub(super) const SETTLEMENT_PENDING: &str = "A config write is waiting for its audit record. Start or restart the gateway with `mcp-gateway serve` on this same config file, with the audit log that write was bound to configured and reachable: its startup settles the write or says why it cannot. Once it has started, run this again.";
 
 #[path = "config_persistence_journal_v2.rs"]
 pub(crate) mod v2;
@@ -41,7 +54,8 @@ pub(crate) enum State {
     /// The original is staged; the new bytes may or may not be in place, and
     /// no reload accepted them. Recovery puts the original back.
     Staged,
-    /// The new bytes are in place and a reload accepted them. Recovery keeps
+    /// The new bytes are in place, and a reload accepted them or refused them
+    /// only for a first key that waits for the next start. Recovery keeps
     /// them.
     AllRenamed,
 }
@@ -207,6 +221,16 @@ pub(crate) fn begin(target: &Path, original_revision: String) -> std::io::Result
     )
 )]
 pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
+    #[cfg(test)]
+    if fault::fires(&resolved(target), |f| {
+        matches!(f, fault::Fault::FailJournalMark)
+    })
+    .is_some()
+    {
+        return Err(std::io::Error::other(
+            "injected: the journal cannot be marked",
+        ));
+    }
     let path = journal_path(target);
     let mut journal = match read(&path) {
         Ok(Some(journal)) => journal,
@@ -230,6 +254,15 @@ pub(crate) fn mark_all_renamed(target: &Path) -> std::io::Result<()> {
 /// Remove the journal, durably, then the staged original. A crash between
 /// the two leaves only debris, which the next recovery or staging removes.
 pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
+    finish_exact(target, &journal_path(target), &original_path(target))
+}
+
+/// [`finish`] on the journal and staged original by the names one save gave
+/// them, never resolved again: a target re-pointed since cannot redirect the
+/// removal to another config's recovery files.
+pub(crate) fn finish_exact(target: &Path, path: &Path, original: &Path) -> std::io::Result<()> {
+    #[cfg(not(test))]
+    let _ = target;
     #[cfg(test)]
     if matches!(fault::get(target), Some(fault::Fault::FailJournalRemove)) {
         fault::note_fired(target);
@@ -237,10 +270,9 @@ pub(crate) fn finish(target: &Path) -> std::io::Result<()> {
             "injected: the journal cannot be removed",
         ));
     }
-    let path = journal_path(target);
-    std::fs::remove_file(&path)?;
-    sync_dir_of(&path)?;
-    remove_if_present(&original_path(target))
+    std::fs::remove_file(path)?;
+    sync_dir_of(path)?;
+    remove_if_present(original)
 }
 
 /// Recover a journal beside `config`, if there is one. The caller holds the
@@ -533,6 +565,9 @@ pub(crate) mod fault {
     pub(crate) enum Fault {
         /// `finish` fails before removing the journal.
         FailJournalRemove,
+        /// `mark_all_renamed` fails before touching the journal, which stays
+        /// `staged`.
+        FailJournalMark,
         /// Recovery of a `staged` journal stops until released.
         Pause(Arc<Pause>),
         /// A commit fails before its rename.

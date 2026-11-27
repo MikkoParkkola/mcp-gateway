@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //! `POST /ui/api/keys`, the rows that refuse: the strict body, the
 //! preconditions in their order, the validation that names a field, the
-//! expiry, the audit posture, the multi-user flip and the keyedit refusals.
+//! expiry, the audit posture and the keyedit refusals. (Creating the first
+//! key of a single-user gateway is not refused; `keys_first_key_tests.rs`
+//! holds those rows.)
 //! Every refusal leaves the file byte-identical and the answer free of the
 //! secret and its digest.
 
@@ -144,12 +146,13 @@ fn p3_each_precondition_refuses_alone() {
         reload: false,
         ..Setup::default()
     });
-    let unavailable = StatusCode::SERVICE_UNAVAILABLE;
-    refused(&off, &off.body("a"), unavailable, &reload_off());
+    // Reload off or an unloadable file attempted nothing: 409.
+    let posture = StatusCode::CONFLICT;
+    refused(&off, &off.body("a"), posture, &reload_off());
     let broken = Fixture::new(Setup::default());
     let body = broken.body("a");
     std::fs::write(broken.path(), "backends: [\n").expect("break");
-    refused(&broken, &body, unavailable, &reload_off());
+    refused(&broken, &body, posture, &reload_off());
     let stale = Fixture::new(Setup::default());
     let mut body = stale.body("a");
     body["revision"] = json!("0000");
@@ -165,7 +168,7 @@ fn p3_combined_faults_answer_the_earlier_refusal() {
         b["revision"] = json!("0000");
         b
     };
-    let (conflict, unavailable) = (StatusCode::CONFLICT, StatusCode::SERVICE_UNAVAILABLE);
+    let conflict = StatusCode::CONFLICT;
     let absent = Fixture::new(Setup {
         file: false,
         ..Setup::default()
@@ -176,8 +179,8 @@ fn p3_combined_faults_answer_the_earlier_refusal() {
         reload: false,
         ..Setup::default()
     });
-    refused(&off, &stale(&off, "a"), unavailable, &reload_off());
-    refused(&off, &off.body("root"), unavailable, &reload_off());
+    refused(&off, &stale(&off, "a"), conflict, &reload_off());
+    refused(&off, &off.body("root"), conflict, &reload_off());
     let taken = Fixture::new(Setup::default());
     refused(
         &taken,
@@ -193,10 +196,11 @@ fn p3_combined_faults_answer_the_earlier_refusal() {
     let broken = Fixture::new(Setup::default());
     let body = stale(&broken, "a");
     std::fs::write(broken.path(), "backends: [\n").expect("break");
-    refused(&broken, &body, unavailable, &reload_off());
+    refused(&broken, &body, conflict, &reload_off());
 }
 
-/// A3: no audit log (auth on, and auth off) is 503 `audit_unavailable`.
+/// A3: no audit log (auth on, and auth off) is the posture refusal: nothing
+/// was attempted, so 409 `audit_unavailable` with no `Retry-After`.
 #[test]
 fn a3_no_audit_log_refuses_the_write() {
     let on = Fixture::new(Setup {
@@ -206,7 +210,7 @@ fn a3_no_audit_log_refuses_the_write() {
     refused(
         &on,
         &on.body("a"),
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::CONFLICT,
         &code("audit_unavailable"),
     );
     let mut running = Setup::default().running;
@@ -219,32 +223,8 @@ fn a3_no_audit_log_refuses_the_write() {
     refused(
         &off,
         &off.body("a"),
-        StatusCode::SERVICE_UNAVAILABLE,
-        &code("audit_unavailable"),
-    );
-}
-
-/// F2: the first key beside a lone bearer flips the gateway to multi-user:
-/// 409 `restart_required`, nothing written, no intent.
-#[test]
-fn f2_a_key_that_flips_the_mode_is_refused_before_the_write() {
-    let mut running = Setup::default().running;
-    running.api_keys.clear();
-    running.single_user = true;
-    running.bearer_token = Some("a-bearer".into());
-    let text =
-        "secrets:\n  store: files\nbackends: {}\nauth:\n  enabled: true\n  single_user: true\n"
-            .to_owned();
-    let fx = Fixture::new(Setup {
-        text,
-        running,
-        ..Setup::default()
-    });
-    refused(
-        &fx,
-        &fx.body("first"),
         StatusCode::CONFLICT,
-        &code("restart_required"),
+        &code("audit_unavailable"),
     );
 }
 
@@ -474,9 +454,9 @@ fn a4_a_failed_intent_append_or_fsync_refuses_the_write() {
             "{fault:?} never reached the intent"
         );
         // The writer records "intent" only after the append returned: a
-        // failed append or fsync leaves no such step, and no commit follows.
+        // failed append or fsync leaves only the traced writer's first step.
         let steps = crate::config_reload::write_order::take(&target);
-        assert!(steps.is_empty(), "{fault:?}: the writer went on: {steps:?}");
+        assert_eq!(steps, ["traced"], "{fault:?}: the writer went on");
     }
 }
 

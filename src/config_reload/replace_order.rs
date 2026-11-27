@@ -33,7 +33,6 @@ pub(super) fn record(target: &Path, event: &'static str) {
 
 /// Runs `hook` when the writer records `event` for `target`, until the
 /// target's events are taken.
-#[cfg(feature = "webui")]
 pub(crate) fn on(target: &Path, event: &'static str, hook: Hook) {
     HOOKS
         .lock()
@@ -42,7 +41,6 @@ pub(crate) fn on(target: &Path, event: &'static str, hook: Hook) {
 }
 
 /// The events recorded for `target`, in order, cleared with its hooks.
-#[cfg(feature = "webui")]
 pub(crate) fn take(target: &Path) -> Vec<&'static str> {
     HOOKS.lock().expect("hooks").retain(|(p, _, _)| p != target);
     let mut all = EVENTS.lock().expect("order");

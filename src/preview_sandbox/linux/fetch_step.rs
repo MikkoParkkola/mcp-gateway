@@ -12,10 +12,11 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::control_client::{self, HELPER_BOUNDS};
+use super::helper::{SetupFailure, step_call};
 use super::mounts::{PREVIEW_CONFIG, PROXY_SOCKET};
 use super::plan::{self, Limits, NpmFetch};
 use super::relay::{MAX_PAIRS, Relay};
-use crate::preview_sandbox::control_msg::FetchStep;
+use crate::preview_sandbox::control_msg::{FetchStep, SetupStep};
 use crate::preview_sandbox::fetch_output::{last_line, read_tail};
 use crate::preview_sandbox::install::check_lock;
 
@@ -143,7 +144,11 @@ const LOCK_CAP: u64 = 4 * 1024 * 1024;
 /// The helper's npm fetch step (ADR-027 step 6): npm's steps inside the
 /// shared fetch frame; the run is returned only when the fetch and all of the
 /// teardown succeeded.
-pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> Result<Run, String> {
+pub(super) fn npm(
+    control: &mut UnixStream,
+    npm: &NpmFetch,
+    limits: Limits,
+) -> Result<Run, FetchError> {
     frame(control, &npm.ip, |credential, port, deadline| {
         install(npm, credential, port, deadline, limits)
     })?;
@@ -153,7 +158,25 @@ pub(super) fn npm(control: &mut UnixStream, npm: &NpmFetch, limits: Limits) -> R
         &npm.run_args,
         &npm.node_dir,
     )
-    .map_err(|r| r.to_string())
+    .map_err(|r| FetchError::Setup(SetupFailure::new(SetupStep::TargetMissing, r.to_string())))
+}
+
+/// How a fetch step failed, by where: before `fetch_start` it is a setup
+/// step, reported as the helper's status; from `fetch_start` until the run
+/// line is out, the fetch's own `fetch_done` refusal went out (or the channel
+/// is dead), so no status may follow; after the run line it is the run's
+/// entry point, a setup step again.
+/// The helper's whole setup ends the same two ways, so it shares this type.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum FetchError {
+    Setup(SetupFailure),
+    Reported(String),
+}
+
+impl From<SetupFailure> for FetchError {
+    fn from(failure: SetupFailure) -> Self {
+        Self::Setup(failure)
+    }
 }
 
 /// The fetch frame every fetcher's steps run inside. Setup that can fail
@@ -166,25 +189,31 @@ pub(super) fn frame(
     control: &mut UnixStream,
     ip: &str,
     fetch: impl FnOnce(&str, u16, Instant) -> Result<(), FetchFailure>,
-) -> Result<(), String> {
-    lo_up(ip)?;
-    let relay = Relay::start(Path::new(PROXY_SOCKET), MAX_PAIRS)
-        .map_err(|e| format!("starting the relay ({e})"))?;
+) -> Result<(), FetchError> {
+    lo_up(ip).map_err(FetchError::Setup)?;
+    let relay = step_call(
+        SetupStep::Loopback,
+        || "starting the relay".to_owned(),
+        || Relay::start(Path::new(PROXY_SOCKET), MAX_PAIRS),
+    )
+    .map_err(FetchError::Setup)?;
     let issued = match control_client::start_fetch(control, HELPER_BOUNDS) {
         Ok(issued) => issued,
         Err(step) => {
             let _ = relay.stop(RELAY_BOUND);
-            return Err(step);
+            return Err(FetchError::Reported(step));
         }
     };
     // One deadline for the whole fetch: every step of it.
     let Some(deadline) = fetch_deadline(issued.deadline_ms) else {
         // A channel failure: no step to report; the gateway refuses at EOF.
         let _ = relay.stop(RELAY_BOUND);
-        return Err("the gateway's fetch deadline is out of range".into());
+        return Err(FetchError::Reported(
+            "the gateway's fetch deadline is out of range".into(),
+        ));
     };
     let fetched = fetch(&issued.credential, relay.port(), deadline);
-    teardown(control, relay, fetched)
+    teardown(control, relay, fetched).map_err(FetchError::Reported)
 }
 
 /// A failed fetch step: the step the gateway is told, and the detail kept for
@@ -243,19 +272,25 @@ fn teardown(
 
 /// `ip link set lo up`, run by the helper itself (it keeps the namespace's
 /// capabilities; `ip` is the host's own binary), environment cleared.
-fn lo_up(ip: &str) -> Result<(), String> {
-    let mut child = Command::new(ip)
-        .args(["link", "set", "lo", "up"])
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|e| format!("bringing lo up ({e})"))?;
+fn lo_up(ip: &str) -> Result<(), SetupFailure> {
+    let mut child = step_call(
+        SetupStep::Loopback,
+        || "bringing lo up".to_owned(),
+        || {
+            Command::new(ip)
+                .args(["link", "set", "lo", "up"])
+                .env_clear()
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+        },
+    )?;
+    let failed = |detail: String| SetupFailure::new(SetupStep::Loopback, detail);
     match wait_until(&mut child, Instant::now() + LO_BOUND) {
         Some(status) if status.success() => Ok(()),
-        Some(status) => Err(format!("bringing lo up (ip {status})")),
-        None => Err("bringing lo up (ip did not end within 2 s)".into()),
+        Some(status) => Err(failed(format!("bringing lo up (ip {status})"))),
+        None => Err(failed("bringing lo up (ip did not end within 2 s)".into())),
     }
 }
 

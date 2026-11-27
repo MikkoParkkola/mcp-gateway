@@ -596,15 +596,20 @@ impl HttpTransport {
             // notification until the call it belongs to had already finished
             // -- the liveness `MIK-7272.SUB.2b` asks for is unreachable from a
             // complete body. Each frame is published as its chunk arrives.
-            use super::sse_decoder::decode_sse_exchange;
+            use super::sse_decoder::decode_sse_answer;
             use futures::TryStreamExt;
             let stream = response
                 .bytes_stream()
                 .map_err(|e| safe_request_error("Failed to read SSE response", &e));
             let needles = self.needles.get().map(AsRef::as_ref);
+            // Each event is held only while it is assembled (notifications
+            // are published as they complete), so the limit bounds one event.
+            // The preview also counts every byte against its kept budget.
             match self.body_budget.get() {
-                Some(budget) => decode_sse_exchange(budget.metered(stream), needles).await,
-                None => decode_sse_exchange(stream, needles).await,
+                Some(budget) => {
+                    decode_sse_answer(budget.metered(stream), needles, budget.per_response()).await
+                }
+                None => decode_sse_answer(stream, needles, self.max_response_bytes()).await,
             }
         } else if let Some(waiting) = waiting {
             self.body_or_stream(status, response, waiting).await
@@ -613,27 +618,33 @@ impl HttpTransport {
         }
     }
 
-    /// A non-2xx body as text. Under a byte budget an over-budget body is
-    /// that refusal, never an empty body read past; without one, an unreadable
-    /// body is empty, as before.
+    /// A non-2xx body as text. A body past its limit is that refusal, never
+    /// an empty body read past; an unreadable one is empty, as before, except
+    /// under the preview's budget, which reports it.
     async fn error_body(&self, response: reqwest::Response) -> Result<String> {
-        Ok(match self.body_budget.get() {
-            Some(budget) => String::from_utf8_lossy(&budget.read(response).await?).into_owned(),
-            None => response.text().await.unwrap_or_default(),
+        match self.answer_budget().read(response).await {
+            Ok(body) => Ok(String::from_utf8_lossy(&body).into_owned()),
+            Err(e @ Error::ResponseTooLarge { .. }) => Err(e),
+            Err(e) if self.body_budget.get().is_some() => Err(e),
+            Err(_) => Ok(String::new()),
+        }
+    }
+
+    /// The budget one answer is read under: the preview's where it is set
+    /// (it is kept across reads), else a fresh one at this backend's limit.
+    fn answer_budget(&self) -> std::sync::Arc<super::budget::ByteBudget> {
+        self.body_budget.get().cloned().unwrap_or_else(|| {
+            std::sync::Arc::new(super::budget::ByteBudget::for_answer(
+                self.max_response_bytes(),
+            ))
         })
     }
 
-    /// A 2xx JSON body, counted against the byte budget when one is set.
+    /// A 2xx JSON body, counted against its budget while it is read.
     async fn json_body(&self, response: reqwest::Response) -> Result<JsonRpcResponse> {
-        match self.body_budget.get() {
-            Some(budget) => serde_json::from_slice(&budget.read(response).await?).map_err(|e| {
-                Error::Transport(super::parse_failure("Failed to parse response", &e))
-            }),
-            None => response
-                .json()
-                .await
-                .map_err(|e| safe_request_error("Failed to parse response", &e)),
-        }
+        let body = self.answer_budget().read(response).await?;
+        serde_json::from_slice(&body)
+            .map_err(|e| Error::Transport(super::parse_failure("Failed to parse response", &e)))
     }
 
     /// A 2xx answer in SSE mode: its body when it carries one, else the
@@ -647,13 +658,7 @@ impl HttpTransport {
         // A 2024-11-05 SSE peer answers 202 and puts the response on the
         // session stream (MIK-8835.SSE.2); a JSON body, if one came, is the
         // answer as before.
-        let body = match self.body_budget.get() {
-            Some(budget) => budget.read(response).await?,
-            None => response
-                .bytes()
-                .await
-                .map_err(|e| safe_request_error("Failed to read response", &e))?,
-        };
+        let body = self.answer_budget().read(response).await?;
         // 202 is "the answer comes on the stream" whatever its body (the
         // TS SDK's SSE server writes "Accepted"); an empty 2xx is too.
         if status == reqwest::StatusCode::ACCEPTED || body.iter().all(u8::is_ascii_whitespace) {

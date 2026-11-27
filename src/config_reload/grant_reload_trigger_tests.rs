@@ -208,8 +208,14 @@ async fn t10b_a_busy_refusal_publishes_nothing_and_the_retry_applies() {
 // reload task, not through `reload_outcome`, because the gap is the wiring.
 #[tokio::test]
 async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = crate::test_dir_keep::kept_tempdir();
     let config_path = dir.path().join("gateway.yaml");
+    // The watcher's reload takes the config lock on a thread that can outlive
+    // this test; only a kept dir waits for it (`crate::spawn_keep`).
+    assert!(
+        !crate::test_dir_keep::kept_dirs_for(&config_path).is_empty(),
+        "W: the test's dir is kept"
+    );
     crate::gateway::test_helpers::write_config_fixture(&config_path, &Config::default())
         .expect("write config");
     let grants_path = dir.path().join("grants.json");
@@ -230,6 +236,7 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
 
     let (event_tx, event_rx) = tokio::sync::mpsc::channel(4);
     let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+    let watched = config_path.clone();
     ConfigWatcher::spawn_reload_task(
         config_path,
         Arc::new(LiveConfig::new(Config::default())),
@@ -260,6 +267,11 @@ async fn w_a_watcher_driven_config_reload_applies_a_revocation() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     let _ = shutdown_tx.send(());
+    // Still kept after shutdown, when a reload's lock thread may still run.
+    assert!(
+        !crate::test_dir_keep::kept_dirs_for(&watched).is_empty(),
+        "W: the test's dir is still kept at shutdown"
+    );
 
     assert!(
         !allows(&store, "alice", "cal"),
@@ -325,6 +337,52 @@ async fn identity_grants_reload_refused_keeps_live() {
         "the live grants still apply"
     );
     assert_eq!(epoch.load(Ordering::Acquire), epoch_before);
+}
+
+/// Lead ruling 2026-11-22: the grants reload stays ungated. Goes red when it
+/// asks the restart gate: with the gate paused a removed grant still applies.
+/// It must never become a config reload either: gateway.yaml is edited too,
+/// and the running config stays the one loaded before.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_revocation_applies_while_the_gate_is_paused_and_without_a_restart() {
+    use crate::gateway::restart_config_floor::support::{BASE, paused_floor};
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (grants, config) = (
+        dir.path().join("grants.json"),
+        dir.path().join("gateway.yaml"),
+    );
+    crate::gateway::test_helpers::write_owner_only(&config, BASE).expect("config");
+    let (store, _epoch, sink) = live_store(&grants);
+    let loaded = Config::load(Some(&config)).expect("the fixture config loads");
+    let ctx = ReloadContext::new(
+        config.clone(),
+        Arc::new(LiveConfig::new(loaded)),
+        Arc::new(BackendRegistry::new()),
+        crate::config::FailsafeConfig::default(),
+        Duration::from_secs(300),
+    )
+    .expect("the registry pairs with the config")
+    .with_identity_grant_sink(sink);
+    let floor = paused_floor(&ctx.registry, &config).await;
+    let edited = format!("{BASE}environment: \"edited\"\n");
+    crate::gateway::test_helpers::write_owner_only(&config, edited).expect("edit");
+    let running = ctx.live_config.get();
+    assert!(allows(&store, "alice", "cal"), "alice holds cal before");
+
+    write_grants(&grants, &[grant("g2", "bob", "mail")]);
+    let got = reload_bounded(&ctx).await;
+    assert!(matches!(got, Some(Ok(_))), "reloaded while paused: {got:?}");
+    assert!(!allows(&store, "alice", "cal"), "the revocation applies");
+    let same = Arc::ptr_eq(&running, &ctx.live_config.get());
+    assert!(same, "the grants reload loaded no config");
+
+    let refused = ctx.reload_outcome().await.map(|o| o.changes);
+    let gate_text = crate::config_reload::RELOAD_REPLAY_OWED.to_owned();
+    assert_eq!(refused, Err(gate_text), "a config reload is still refused");
+    let same = Arc::ptr_eq(&running, &ctx.live_config.get());
+    assert!(same, "still the config loaded before");
+    // One pause and one context throughout: nothing restarted in between.
+    drop(floor);
 }
 
 /// L3: a grants file that stays unreadable across retried reloads logs its

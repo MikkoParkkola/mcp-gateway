@@ -14,14 +14,17 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 
 use super::config_file::{Gateway, read_gateway};
-use super::errors::{flat_error, gate_refusal, stale, structured_error};
+use super::errors::{
+    classed, flat_error, gate_refusal, nothing_attempted, stale, structured_error,
+};
 use super::guard::Guard;
 use crate::config_persistence::keyedit::{
     Change, ComputeRefusal, FieldPath, GiveUp, Segment, edit_in_place,
 };
 use crate::config_reload::{
-    AuditPosture, Expected, GatewayAuth, Generation, IntentKind, RELOAD_LOCK_WAIT, Replace,
-    ReplaceError, Replaced, RevokeCheck, refuse_multi_user_flip, replace_audited_revoke,
+    AuditPosture, Decision, Expected, GatewayAuth, Generation, IntentKind, RELOAD_LOCK_WAIT,
+    Replace, ReplaceError, Replaced, RevokeCheck, StatusChange, Waiting, replace_audited_revoke,
+    restart_pending_decision, waiting_first_key, waiting_names,
 };
 use crate::gateway::auth::{digest_tag_of, presented_digest};
 use crate::gateway::router::AppState;
@@ -85,7 +88,8 @@ pub(super) async fn revoke_key(
         return flat_error(StatusCode::CONFLICT, error).into_response();
     }
     let Some(log) = state.transparency_log.clone() else {
-        return flat_error(StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable").into_response();
+        // No log is the posture: the writer's own no-log refusal (409).
+        return refused(&name, ReplaceError::NoAuditLog);
     };
     let who =
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
@@ -102,6 +106,8 @@ pub(super) async fn revoke_key(
     let tags = Arc::new(OnceLock::new());
     let refusal = Arc::new(OnceLock::new());
     let kept = refusal.clone();
+    let stop = Arc::new(OnceLock::new());
+    let stopped = Arc::clone(&stop);
     let check = RevokeCheck {
         name: name.clone(),
         tags: tags.clone(),
@@ -114,6 +120,7 @@ pub(super) async fn revoke_key(
         expected: Expected::Revision(revision),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: StatusChange::Refuse,
         compute: Box::new(move |bytes| {
             let text = std::str::from_utf8(bytes).map_err(|_| "config_refused".to_owned())?;
             let mut config: crate::config::Config =
@@ -125,10 +132,7 @@ pub(super) async fn revoke_key(
                 &name,
                 body.expected_key_tag.as_deref(),
             )?;
-            let at = config.auth.api_keys.iter().position(|key| key.name == name);
-            config.auth.api_keys.retain(|key| key.name != name);
-            refuse_multi_user_flip(live.running(), &config.auth)
-                .map_err(|_| "restart_required".to_owned())?;
+            let at = take_out(&mut config, &name, (&live, &env.get()), &stopped)?;
             let template = remove_key(text, at, &kept)?;
             tags.set(selected)
                 .map_err(|_| "target_changed".to_owned())?;
@@ -145,7 +149,83 @@ pub(super) async fn revoke_key(
     )
         .await
         .map(|receipt| serde_json::json!({"name": receipt.name, "revoked": true, "revision": receipt.revision.as_str()}));
-    revoke_response(&target_name, result, refusal.get(), &state)
+    revoke_response(&target_name, result, (refusal.get(), stop.get()), &state)
+}
+
+/// Drops the entry called `name` from `config` (the file as read; the
+/// selection already refused a duplicate name) and judges the rest with
+/// [`judge_removal`]. Gives the entry's index for the in-place edit.
+fn take_out(
+    config: &mut crate::config::Config,
+    name: &str,
+    (live, overlay): (
+        &crate::config_reload::LiveConfig,
+        &crate::config::EnvOverlay,
+    ),
+    stop: &OnceLock<Stopped>,
+) -> Result<Option<usize>, String> {
+    let published = live.generation();
+    let waiting_before = waiting_names(&published, config);
+    let index = (config.auth.api_keys.iter()).position(|entry| entry.name == name);
+    if let Some(index) = index {
+        config.auth.api_keys.remove(index);
+    }
+    let left = waiting_first_key(live.running(), &published, config, overlay);
+    judge_removal(left, &waiting_before, stop)?;
+    Ok(index)
+}
+
+/// The route's own answer for a revoke its compute stopped.
+fn stopped_answer(stopped: &Stopped) -> Response {
+    match stopped {
+        Stopped::Waiting(keys) => super::errors::restart_pending(keys),
+        Stopped::Invalid(message) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({"error": "invalid", "message": message, "revoked": false})),
+        )
+            .into_response(),
+    }
+}
+
+/// Why the compute stopped a revoke that the route answers itself; the
+/// writer only sees [`ANSWERED_HERE`].
+enum Stopped {
+    /// API keys would still wait in gateway.yaml: the shared 409, naming them.
+    Waiting(Vec<String>),
+    /// The file without the key fails a check: the invalid answer, its text.
+    Invalid(String),
+}
+
+/// The compute's refusal text when [`Stopped`] holds the answer.
+const ANSWERED_HERE: &str = "answered_by_the_route";
+
+/// The file without the key, judged by the first-key question (`candidate`)
+/// and the shared decision, with `file_waiting` the keys the file as read
+/// holds that the published table lacks. Removing every waiting key ends the
+/// wait and goes ahead, as does an ordinary revoke. A removal that changes
+/// the status of a gateway on which nothing waits keeps its old refusal.
+fn judge_removal(
+    candidate: Waiting,
+    file_waiting: &[String],
+    stop: &OnceLock<Stopped>,
+) -> Result<(), String> {
+    let stopped = match restart_pending_decision(&candidate, file_waiting.to_vec()) {
+        Decision::Pending(waiting) => Stopped::Waiting(waiting.names().to_vec()),
+        Decision::Invalid(refusal) => Stopped::Invalid(refusal.sentence().to_owned()),
+        Decision::Continue => match candidate {
+            Waiting::No | Waiting::Yes { .. } => return Ok(()),
+            Waiting::Faulty { .. } if file_waiting.is_empty() => {
+                return Err("restart_required".to_owned());
+            }
+            Waiting::Faulty { reason, .. } => Stopped::Invalid(format!(
+                "{reason}; the API keys {} still wait in gateway.yaml, and nothing was written",
+                file_waiting.join(", ")
+            )),
+        },
+    };
+    // One compute per write and a refusal ends it, so the cell is empty here.
+    let _ = stop.set(stopped);
+    Err(ANSWERED_HERE.to_owned())
 }
 
 /// Remove the selected file entry while preserving the surrounding YAML.
@@ -207,9 +287,15 @@ mod keys_revoke_instructions_body_tests;
 fn revoke_response(
     name: &str,
     result: Result<serde_json::Value, ReplaceError>,
-    keyedit: Option<&ComputeRefusal>,
+    (keyedit, stopped): (Option<&ComputeRefusal>, Option<&Stopped>),
     state: &AppState,
 ) -> Response {
+    // The compute stopped the revoke and holds the answer itself.
+    if let (Err(ReplaceError::Refused(error)), Some(stopped)) = (&result, stopped)
+        && error == ANSWERED_HERE
+    {
+        return stopped_answer(stopped);
+    }
     if let Err(ReplaceError::Refused(error)) = &result
         && error == "not_written"
         && let Some(ComputeRefusal::Unprovable { code, reason }) = keyedit
@@ -235,17 +321,22 @@ fn revoke_response(
 }
 
 /// Only the receipt proves success; never infer it from disk or reauthenticate.
+/// A refusal that attempted nothing is 409, with `Retry-After` when it clears
+/// by itself.
 fn refused(name: &str, error: ReplaceError) -> Response {
+    let class = nothing_attempted(&error);
+    let answer = refused_answer(name, error);
+    classed(class, answer)
+}
+
+fn refused_answer(name: &str, error: ReplaceError) -> Response {
     let (status, message) = match error {
         ReplaceError::Stale { current } => return stale(&current).into_response(),
         ReplaceError::Gated(refusal) => return gate_refusal(refusal),
-        ReplaceError::Busy => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        ),
-        ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog => {
-            (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable")
-        }
+        ReplaceError::Busy => (StatusCode::CONFLICT, "the config is being written; retry"),
+        // No log is the posture (409); a refused append was started (503).
+        ReplaceError::NoAuditLog => (StatusCode::CONFLICT, "audit_unavailable"),
+        ReplaceError::AuditRefused(_) => (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable"),
         ReplaceError::NoConfigFile => (StatusCode::CONFLICT, "no_config_file"),
         ReplaceError::ConfigRefused(_) => return super::errors::config_refusal().into_response(),
         ReplaceError::Refused(error) => {
@@ -255,6 +346,8 @@ fn refused(name: &str, error: ReplaceError) -> Response {
             )
                 .into_response();
         }
+        // The writer refused before the target changed and left no scratch.
+        ReplaceError::WriterRefused { .. } => (StatusCode::CONFLICT, "not_written"),
         ReplaceError::Unsupported(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Write(_)
@@ -345,6 +438,11 @@ impl KeyIdentity<'_> {
 #[cfg(test)]
 #[path = "keys_revoke_select_tests.rs"]
 mod select_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_revoke_class_tests.rs"]
+mod class_tests;
 
 fn select_target(
     file: &[KeyIdentity<'_>],

@@ -28,8 +28,11 @@ const GZIP_LEVEL: u32 = 6;
 const CORE_JS_STEMS: &[&str] = &[
     "activity",
     "activity-list",
+    "chart",
     "gateway",
     "overview",
+    "server-page",
+    "server-paths",
     "servers",
     "shell",
     "tools",

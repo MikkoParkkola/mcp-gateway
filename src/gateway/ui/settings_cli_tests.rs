@@ -183,6 +183,33 @@ async fn a_cli_key_cannot_save_an_auth_setting() {
     assert_refused(&route, &store, None).await;
 }
 
+/// W1 leg 7 (WRITE.1): the refused auth edit still leaves its one
+/// `admin_action`, saying refused, with no intent id.
+#[tokio::test]
+async fn a_cli_keys_refused_auth_save_is_recorded_as_refused() {
+    let (route, _store) = fixture().await;
+    let fields = json!([set("auth.enabled", &json!(false))]);
+    let (status, body) = save(&route, &fields, Some(CHILD), None).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+    let log = std::fs::read_to_string(route.dir.path().join("audit.jsonl")).expect("the log");
+    let records: Vec<Value> = log
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["event"] == "admin_action")
+        .collect();
+    assert_eq!(records.len(), 1, "W1.7: {records:#?}");
+    assert_eq!(
+        records[0]["save_outcome"], "refused",
+        "W1.7: {}",
+        records[0]
+    );
+    assert!(
+        records[0].get("intent_id").is_none(),
+        "W1.7: {}",
+        records[0]
+    );
+}
+
 #[tokio::test]
 async fn a_cli_keys_session_cannot_save_an_auth_setting() {
     let (route, store) = fixture().await;

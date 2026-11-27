@@ -9,14 +9,15 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use super::super::errors::{
-    WriteRoute, config_path_unavailable, flat_error, incomplete, no_config_file, refused_write,
+    WriteRoute, config_path_unavailable, flat_error, incomplete, no_config_file, no_reload_write,
+    refused_write,
 };
 use super::super::secret_slots;
 use crate::config::Config;
 use crate::config_persistence::keyedit::{SlotId, Template};
 use crate::config_persistence::{NOT_IN_PLACE, edit_text, not_in_place};
 use crate::config_reload::{
-    BackendOp, Expected, IntentKind, ReloadOutcome, Replace, ReplaceError, Replaced,
+    BackendOp, Expected, IntentKind, ReloadOutcome, Replace, ReplaceError, Replaced, StatusChange,
 };
 use crate::gateway::router::AppState;
 
@@ -75,13 +76,7 @@ where
     // Fails closed: a write with no reload to check it would leave the file
     // ahead of the running gateway, unaudited.
     let Some(context) = state.meta_mcp.reload_context() else {
-        return Err(Box::new(
-            flat_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Config reload is not enabled on this gateway",
-            )
-            .into_response(),
-        ));
+        return Err(Box::new(no_reload_write().into_response()));
     };
     // Checked before any lock, so a missing file leaves nothing behind; a
     // file deleted after this check is caught again from the writer's answer.
@@ -145,6 +140,7 @@ where
         compute: Box::new(compute),
         replaced: Replaced::Discard,
         secrets,
+        status_change: StatusChange::Refuse,
     };
     let kind = IntentKind::Backend {
         operation,
@@ -161,11 +157,17 @@ where
         (Err(ReplaceError::Refused(why)), Some(Err((code, message)))) if why == ROUTE_ANSWERED => {
             Err(Box::new(flat_error(code, message).into_response()))
         }
-        (Ok(outcome), Some(Ok(value))) => Ok(Written {
-            value,
-            reload: outcome.reload,
-            secrets: outcome.secrets,
-        }),
+        (Ok(outcome), Some(Ok(value))) => match outcome.reload {
+            crate::config_reload::ReplaceReload::Applied(reload) => Ok(Written {
+                value,
+                reload,
+                secrets: outcome.secrets,
+            }),
+            // A backend write passes `Refuse`; the writer never holds it.
+            crate::config_reload::ReplaceReload::HeldForRestart { .. } => {
+                Err(Box::new(incomplete(BACKEND_WRITE, "held_for_restart")))
+            }
+        },
         (Ok(_), _) => Err(Box::new(incomplete(BACKEND_WRITE, "no_answer"))),
         (Err(e), _) => Err(Box::new(refused_write(BACKEND_WRITE, &e))),
     }

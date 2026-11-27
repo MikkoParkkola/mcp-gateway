@@ -131,6 +131,17 @@ pub(crate) fn booted_floor(registry: &BackendRegistry, path: &Path) -> ConfigFlo
     )
 }
 
+/// [`booted_floor`], paused: its gate admits no config change while the row
+/// holds it. For rows outside the gateway, which cannot name the adapter
+/// trait.
+pub(crate) async fn paused_floor(registry: &BackendRegistry, path: &Path) -> ConfigFloor {
+    use crate::gateway::restart_floor::FloorAdapter as _;
+    let mut floor = booted_floor(registry, path);
+    let deadline = tokio::time::Instant::now() + BOUND;
+    floor.pause(deadline).await.expect("pause");
+    floor
+}
+
 /// A Defaults floor whose fallback search reads the temp `candidates`, passed
 /// through the candidate-path override a row owns.
 pub(crate) fn defaults_floor(registry: &BackendRegistry, candidates: &Candidates) -> ConfigFloor {
@@ -248,6 +259,7 @@ pub(crate) async fn write_bytes(
         compute: Box::new(move |_| Ok(crate::config_persistence::keyedit::Template::plain(bytes))),
         replaced: Replaced::Discard,
         secrets: None,
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     let audit = AuditPosture::of(None, GatewayAuth::Off)
         .audit(IntentKind::Adopt)

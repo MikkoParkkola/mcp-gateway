@@ -180,14 +180,18 @@ mcp-gateway cap import petstore.yaml
 Output:
 
 ```
-Generated 3 capabilities from petstore.yaml
+  ✅ createpets.yaml
+  ✅ listpets.yaml
+  ✅ showpetbyid.yaml
 
-  listpets.yaml
-  createpets.yaml
-  showpetbyid.yaml
-
-Capabilities written to capabilities/
+Imported 3 tools from petstore.yaml into capabilities/. Review them before loading.
 ```
+
+An import never replaces a capability file that is already there. A tool
+whose file name is taken is named on stderr and its file is kept; the other
+tools are still written, and the command exits 1. To refresh an API whose
+document changed, remove its capabilities and import again. The web UI's
+import does the same, checking every capability directory the gateway loads.
 
 ### With Prefix
 
@@ -224,6 +228,7 @@ The directory is created automatically if it does not exist.
 Each generated capability YAML contains:
 
 ```yaml
+# example: not gateway.yaml
 # Auto-generated from OpenAPI spec
 # Get a user by ID
 

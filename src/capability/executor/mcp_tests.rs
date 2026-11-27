@@ -139,6 +139,33 @@ pub(super) async fn call(
     executor.execute_mcp(cap, config, &params, context).await
 }
 
+/// An executor wired as the gateway wires it: its MCP children take the
+/// registry's stop deadline, so a stop of that registry concerns them too.
+#[cfg(unix)]
+pub(super) fn executor_joined_to(registry: &crate::backend::BackendRegistry) -> CapabilityExecutor {
+    CapabilityExecutor::new().with_stop_deadline(registry.stop_deadline())
+}
+
+/// True once no process answers to `pid` (`kill -0` fails), checked every
+/// 100 ms for at most `limit`.
+#[cfg(unix)]
+pub(super) async fn gone_within(pid: &str, limit: Duration) -> bool {
+    let give_up = std::time::Instant::now() + limit;
+    loop {
+        let probe = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .status()
+            .expect("kill runs");
+        if !probe.success() {
+            return true;
+        }
+        if std::time::Instant::now() >= give_up {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
 #[tokio::test]
 async fn an_operation_calls_its_mapped_tool_with_typed_arguments() {
     let executor = CapabilityExecutor::new();
@@ -270,19 +297,44 @@ async fn unloading_stops_the_child_and_its_descendants() {
     assert_eq!(executor.mcp_children.len(), 1);
     executor.stop_unloaded_mcp(&|_| false);
     assert_eq!(executor.mcp_children.len(), 0, "evicted at once");
-    let mut alive = true;
-    for _ in 0..50 {
-        let status = std::process::Command::new("kill")
-            .args(["-0", &pid])
-            .status()
-            .unwrap();
-        if !status.success() {
-            alive = false;
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    assert!(!alive, "grandchild {pid} outlived its MCP child");
+    assert!(
+        gone_within(&pid, Duration::from_secs(5)).await,
+        "grandchild {pid} outlived its MCP child"
+    );
+}
+
+/// The HTTP stop's backend stage spends the deadline the capability children
+/// share, so it has to end a live child the way it ends a registered backend.
+/// The executor outlives the stop here: nothing else can end the child.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_gateway_stop_ends_a_live_capability_mcp_child() {
+    let registry = crate::backend::BackendRegistry::new();
+    let executor = executor_joined_to(&registry);
+    let started = call(
+        &executor,
+        &capability(),
+        json!({"operation": "say", "text": "before the stop"}),
+        &caller("a"),
+    )
+    .await
+    .unwrap();
+    let child = started["pid"]
+        .as_i64()
+        .expect("echo names its pid")
+        .to_string();
+    assert_eq!(executor.mcp_children.len(), 1, "premise: one idle child");
+
+    let stage_ends = tokio::time::Instant::now() + Duration::from_secs(5);
+    registry
+        .stop_all_by(stage_ends, crate::backend::Handover::AtEntry)
+        .await;
+
+    assert!(
+        gone_within(&child, Duration::from_secs(1)).await,
+        "the stop returned with capability child {child} still running"
+    );
+    drop(executor);
 }
 
 #[tokio::test]
@@ -330,50 +382,52 @@ fn ctx_with_generation(generation: u64) -> CapabilityExecutionContext {
     }
 }
 
-/// MIK-7889 (#2777): a reload revokes under the same lock that admits a call,
-/// so it cannot land between the epoch check and the lease. The bump from
-/// another thread must wait for an acquire that is already past its check.
+/// A reload's generation bump never waits for a call that is building its
+/// child: the build runs with the map lock released. The call keeps the
+/// ordering a reload relies on anyway: it reads the generation again under
+/// the lock right before its insert, so having started before the bump, it
+/// is refused there and keeps no child.
 #[test]
-fn a_generation_bump_waits_for_an_acquire_past_its_epoch_check() {
+fn a_generation_bump_during_a_start_refuses_that_call() {
     let executor = std::sync::Arc::new(CapabilityExecutor::new());
     let cap = capability();
-    let config: crate::capability::definition::McpConfig =
-        serde_json::from_value(json!({"command": "x"})).unwrap();
+    let Some(ProcessConfig::Mcp(config)) = cap.providers.process.get("primary") else {
+        panic!("not an mcp provider");
+    };
     let name = cap.name.clone();
-    let mut bumper = None;
-    let started = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let refused = executor.mcp_children.acquire(
         &cap,
-        &config,
+        config,
         "alice",
         (0, Duration::from_secs(1)),
-        |_| true,
+        // The generation this call read before it reached acquire.
+        |current| current == 0,
         || {
             let e = std::sync::Arc::clone(&executor);
             let n = name.clone();
-            let flag = std::sync::Arc::clone(&started);
-            bumper = Some(std::thread::spawn(move || {
-                flag.store(true, Ordering::SeqCst);
-                e.bump_mcp_generation(&n);
-            }));
-            // The bumper is running and about to bump before the check, so
-            // the unchanged generation below is the lock's doing, not a late
-            // thread's.
-            while !started.load(Ordering::SeqCst) {
+            let bumper = std::thread::spawn(move || e.bump_mcp_generation(&n));
+            // With the lock released the bump completes while the build runs.
+            let give_up = std::time::Instant::now() + Duration::from_secs(10);
+            while !bumper.is_finished() {
+                assert!(
+                    std::time::Instant::now() < give_up,
+                    "the reload's bump waited for a call building its child"
+                );
                 std::thread::yield_now();
             }
-            std::thread::sleep(Duration::from_millis(200));
-            assert_eq!(
-                executor.mcp_generation(&name),
-                0,
-                "the reload revoked between the epoch check and the lease"
-            );
-            Err(crate::Error::Config("no child in this test".into()))
+            bumper.join().expect("the bump ends");
+            let lookup = |var: &str| std::env::var_os(var);
+            CapabilityExecutor::start_mcp(&cap, config, &lookup, &[])
         },
     );
-    assert!(refused.is_err());
-    bumper.unwrap().join().unwrap();
+    let stale = |error: &crate::Error| error.to_string().contains("while this call was starting");
+    assert!(
+        refused.as_ref().err().is_some_and(stale),
+        "a call started before the bump was leased a child"
+    );
     assert_eq!(executor.mcp_generation(&cap.name), 1);
+    let kept = executor.mcp_children.len();
+    assert_eq!(kept, 0, "the refused call kept a child");
 }
 
 #[tokio::test]
@@ -613,19 +667,10 @@ async fn reload_stops_an_edited_capabilitys_children_and_keeps_an_unchanged_ones
     #[cfg(unix)]
     {
         let pid = pid.to_string();
-        let mut alive = true;
-        for _ in 0..50 {
-            let status = std::process::Command::new("kill")
-                .args(["-0", &pid])
-                .status()
-                .unwrap();
-            if !status.success() {
-                alive = false;
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        assert!(!alive, "superseded child {pid} still running after 5 s");
+        assert!(
+            gone_within(&pid, Duration::from_secs(5)).await,
+            "superseded child {pid} still running after 5 s"
+        );
     }
     #[cfg(not(unix))]
     let _ = pid;

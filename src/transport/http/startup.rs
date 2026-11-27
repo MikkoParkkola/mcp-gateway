@@ -609,6 +609,7 @@ impl HttpTransport {
             },
             None,
             self.body_budget.get().cloned(),
+            self.max_response_bytes(),
         )
         .await?;
         *self.sse_channel.write() = Some(channel);

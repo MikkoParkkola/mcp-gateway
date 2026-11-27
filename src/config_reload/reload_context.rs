@@ -133,6 +133,9 @@ pub(crate) const RELOAD_REPLAY_OWED: &str =
     "a restart is being prepared; the reload runs when it is decided";
 pub(crate) const RELOAD_RESTARTING: &str = "the gateway is restarting";
 pub(crate) const RELOAD_STOPPING: &str = "the gateway is stopping";
+/// A write the gate refuses while a restart is being prepared: nothing was
+/// written. The one sentence for the library's writes and the web UI's.
+pub(crate) const RESTART_BUSY: &str = "a restart is being prepared; retry";
 
 /// Whether `error` is one of the restart gate's refusal texts.
 #[cfg(feature = "webui")]
@@ -352,11 +355,13 @@ impl ReloadContext {
 
     /// Reload the config file and apply the diff.
     ///
-    /// Returns a human-readable description of what changed.
+    /// Returns a human-readable description of what changed. Refused with the
+    /// gate's text while a restart is being prepared.
     ///
     /// # Errors
     ///
-    /// Returns an error string if the config file cannot be read or parsed.
+    /// The gate's refusal text, or an error string if the config file cannot
+    /// be read or parsed.
     pub async fn reload(&self) -> std::result::Result<String, String> {
         self.reload_outcome().await.map(|outcome| outcome.changes)
     }
@@ -367,7 +372,7 @@ impl ReloadContext {
     ///
     /// # Errors
     ///
-    /// The gate's refusal text, or `reload_outcome`'s error.
+    /// The gate's refusal text, or `reload_outcome_from`'s error.
     pub(crate) async fn manual_reload_outcome(
         &self,
         source: Source,
@@ -396,15 +401,19 @@ impl ReloadContext {
     }
 
     /// Reload the config file and return a structured outcome for callers/UI.
+    /// Refused with the gate's text while a restart is being prepared: it is
+    /// the gated manual reload, run from the file.
     ///
     /// # Errors
     ///
-    /// Returns an error string if the config file cannot be read or parsed.
+    /// The gate's refusal text, or an error string if the config file cannot
+    /// be read or parsed.
     pub async fn reload_outcome(&self) -> std::result::Result<ReloadOutcome, String> {
-        self.reload_outcome_from(Source::File).await
+        self.manual_reload_outcome(Source::File).await
     }
 
-    /// [`Self::reload_outcome`] recording `source` on the history event.
+    /// The shared reload transaction, recording `source` on the history event.
+    /// It asks the gate nothing: every caller already holds an admission.
     pub(crate) async fn reload_outcome_from(
         &self,
         source: crate::config_reload::history::Source,
@@ -514,10 +523,13 @@ impl ReloadContext {
         path: &std::path::Path,
         source: Source,
         slot: &mut crate::config_reload::history::RecordSlot,
+        judged: &mut Option<super::live_config::FirstKeyWait>,
+        applied: &mut bool,
     ) -> std::result::Result<ReloadOutcome, ReloadRefusal> {
         #[cfg(test)]
         super::reload_pause::pause_here(&self.config_path).await;
         let evaluated = self.load_off_worker(path.to_path_buf()).await?;
+        *judged = self.wait_judged_on(&evaluated.config);
         // First: a posture change also changes what the posture forces (signing
         // among it), and the posture is the cause the operator must act on.
         if let Some(refusal) =
@@ -585,10 +597,12 @@ impl ReloadContext {
                     }
                 },
                 text: refusal.text,
+                waiting: Vec::new(),
             });
         }
         // Every view this config compiles to is built before `apply_patch`, so a
         // refused build starts and stops no backend.
+        self.first_key_check(&new_config, &overlay)?;
         let prepared = self.live_config.prepare(new_config, &overlay);
         let generation = Arc::new(prepared.map_err(|reason| nothing_published(&reason))?);
 
@@ -627,6 +641,8 @@ impl ReloadContext {
         self.publish_overlay(overlay);
         // No await between the swap and this spawn (design D-1).
         slot.spawn(&self.live_config, pending);
+        // The patch's own predicate said non-empty, and it is published.
+        *applied = true;
         // Still under `lock_reload`, against the config just published.
         self.report_registered(&patch.registered_change(), &self.live_config.get());
         // `surfaced_tools` applies here too, under the same lock.
@@ -640,6 +656,52 @@ impl ReloadContext {
             &self.live_config,
             env_restart_keys,
         ))
+    }
+}
+
+impl ReloadContext {
+    /// While a first key waits, a refusal of this file keeps the wait as
+    /// judged on the file itself: the keys it holds that the published table
+    /// lacks, and whether a start from it would be refused. `None` when nothing
+    /// waits, or the file holds no such key any more.
+    fn wait_judged_on(&self, file: &Config) -> Option<super::live_config::FirstKeyWait> {
+        self.live_config.waiting_keys()?;
+        let keys = super::first_key::waiting_names(&self.live_config.generation(), file);
+        (!keys.is_empty()).then(|| super::live_config::FirstKeyWait {
+            keys,
+            start_refusal: crate::gateway::next_start_refusal(file),
+        })
+    }
+
+    /// The first-key question on the file a reload read: a file whose one
+    /// fault is a first key is refused as a status change naming its keys;
+    /// one that also fails another check, by that check, as a faulty first key.
+    fn first_key_check(
+        &self,
+        file: &Config,
+        overlay: &EnvOverlay,
+    ) -> std::result::Result<(), ReloadRefusal> {
+        let live = &self.live_config;
+        let answer =
+            super::first_key::waiting_first_key(live.running(), &live.generation(), file, overlay);
+        let (kind, text, waiting) = match answer {
+            super::first_key::Waiting::No => return Ok(()),
+            super::first_key::Waiting::Yes { keys, .. } => (
+                ReloadRefusalKind::StatusChange,
+                super::first_key::held_refusal(&keys),
+                keys,
+            ),
+            super::first_key::Waiting::Faulty { reason, .. } => (
+                ReloadRefusalKind::Faulty,
+                nothing_published(&reason),
+                Vec::new(),
+            ),
+        };
+        Err(ReloadRefusal {
+            kind,
+            text,
+            waiting,
+        })
     }
 }
 

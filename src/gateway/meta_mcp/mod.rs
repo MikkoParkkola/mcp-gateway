@@ -201,6 +201,10 @@ pub struct MetaMcp {
     /// The web UI's open decisions; set by the HTTP server.
     #[cfg(feature = "webui")]
     pub(super) decisions: std::sync::OnceLock<Arc<crate::decisions::Shared>>,
+    /// The gateway's own health history, read by the web UI's health route;
+    /// set by the HTTP server, unset in every fixture that does not attach one.
+    #[cfg(feature = "webui")]
+    pub(super) health_history: std::sync::OnceLock<Arc<crate::health_history::HealthHistory>>,
     /// The client-config discovery cache the web UI's discovery route, the
     /// radar and the decision set share; set by the HTTP server.
     #[cfg(feature = "webui")]

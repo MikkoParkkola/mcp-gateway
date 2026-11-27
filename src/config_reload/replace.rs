@@ -8,191 +8,46 @@
 //! (stored bytes) both write through [`replace_audited`]. It refuses a write
 //! made from a stale view of the file, keeps the original in a private copy
 //! with a journal ([`crate::config_persistence::journal`]) until a reload has
-//! accepted the new bytes, and puts the original back on a refused reload or
-//! a failed write. A crash anywhere is recovered by the next holder of the
-//! config lock.
+//! accepted the new bytes, and puts the original back on a refused reload; a
+//! failed write never replaced the file, so it drops the journal and staged copy. A crash
+//! anywhere is recovered by the next holder of the config lock.
 //!
 //! Lock order, for every holder: the reload lock, then the config sidecar
 //! lock, then (for a save that also writes secrets) the vault lock. Nothing
 //! ranked earlier is taken while a later one is held: the config sidecar
 //! before the vault, never the reverse.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use crate::config::UnreadConfig;
 use crate::config_persistence::journal;
 use crate::config_persistence::lock::{Locked, NotLocked, lock_config, lock_config_deferred};
 use crate::config_persistence::{FileMode, Symlink, write_atomic};
+use crate::config_reload::ConfigWriteError;
+pub(crate) use crate::config_reload::first_key::{ReplaceReload, StatusChange};
 use crate::config_reload::history::Source;
-use crate::config_reload::{ConfigWriteError, ReloadOutcome};
-use crate::secret_store::{
-    NewSecretOwned, PendingSecrets, SaveError, SecretStore, Vault, create_secrets,
-};
-
-use crate::config_persistence::keyedit::Template;
+use crate::secret_store::{PendingSecrets, create_secrets};
 
 use super::ReloadContext;
 pub(crate) use super::replace_refusal::RefusalClass;
 pub(super) use super::replace_refusal::post_write_class;
 #[cfg(test)]
 use crate::gateway::restart_config_floor::seams::{AdmittedPoint, ReloadSource};
-use crate::gateway::restart_config_floor::{AdmissionGuard, AdmitKind, Refusal};
+use crate::gateway::restart_config_floor::{AdmissionGuard, AdmitKind};
 
 // The revision type lives with the config commit primitive, which every
 // build compiles; the replace path names it from there.
 pub(crate) use crate::config_persistence::commit::FileRevision;
 
-/// What the file must hold for the write to go ahead.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
-pub(crate) enum Expected {
-    /// Whatever it holds.
-    Any,
-    /// The bytes the caller's diff or history view was made from.
-    Revision(FileRevision),
-}
-
-/// What happens to the bytes a successful write replaces.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
-pub(crate) enum Replaced {
-    /// Removed once the new bytes are accepted.
-    Discard,
-    /// Kept beside the file as `gateway.yaml.<UTC time>.rejected`.
-    KeepBeside,
-}
-
-/// The new bytes, from the current ones; `Err` refuses the write.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
-/// It runs before any store entry exists: a secret field is a slot in the
-/// template, which the writer fills with its entry's reference afterwards.
-pub(crate) type Compute = Box<dyn FnOnce(&[u8]) -> Result<Template, String> + Send>;
-
-/// Secrets a replacement saves with the file: created in the store under the
-/// config hold, after the revision check and before `compute`, which writes
-/// their references. The writer keeps them when the new bytes stand, deletes
-/// them only when the old file provably stayed, and otherwise leaves them
-/// listed as unused.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and discovery adopt"
-    )
-)]
-pub(crate) struct SecretStep {
-    pub(crate) vault: Vault,
-    pub(crate) store: Arc<dyn SecretStore + Send + Sync>,
-    pub(crate) values: Vec<NewSecretOwned>,
-}
-
-/// One replacement of gateway.yaml.
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
-pub(crate) struct Replace {
-    pub(crate) expected: Expected,
-    pub(crate) compute: Compute,
-    pub(crate) replaced: Replaced,
-    pub(crate) secrets: Option<SecretStep>,
-}
-
-/// A replacement that was written and accepted.
-#[derive(Debug)]
-#[cfg_attr(
-    not(any(test, feature = "webui")),
-    expect(
-        dead_code,
-        reason = "first callers: the web UI settings save and the configuration-history restore"
-    )
-)]
-pub(crate) struct ReplaceOutcome {
-    /// The new revision; `None` when the bytes were already the file's.
-    pub(crate) revision: Option<FileRevision>,
-    /// The kept copy, for [`Replaced::KeepBeside`].
-    pub(crate) kept_beside: Option<PathBuf>,
-    /// The reload that accepted it.
-    pub(crate) reload: ReloadOutcome,
-    /// Each stored secret's field and the reference the written file holds for
-    /// it, in the secret step's order; empty without one. Read from this write
-    /// itself, never from the file afterwards (another writer may follow).
-    pub(crate) secrets: Vec<(String, String)>,
-}
-
-/// Why nothing was applied. Every kind but `RollbackFailed` and
-/// `Unconfirmed` leaves the old file on disk and running; those two leave a
-/// journal that the next holder of the config lock recovers.
-#[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "the error payloads are read by the first callers: the web UI settings save and the configuration-history restore"
-)]
-pub(crate) enum ReplaceError {
-    /// A lock stayed held past the wait; nothing was read.
-    Busy,
-    /// The config gate refused the write before anything was read: a restart
-    /// is being prepared (`Busy`, retry later) or the gateway is going down.
-    Gated(Refusal),
-    /// The file changed since the caller's view; its current revision.
-    Stale { current: FileRevision },
-    /// The compute refused, or produced bytes that are not UTF-8 text. Bytes
-    /// the loader rejects are `ReloadRefused`, after the rollback.
-    Refused(String),
-    /// Auth is on and no audit log is configured: the gateway's own posture
-    /// refuses every config write (`NO_AUDIT_LOG` is its text). A type, so
-    /// a route answers it by what it is, never by matching words.
-    NoAuditLog,
-    /// The audit log refused an intent (the operation's or its recovery's); nothing written.
-    AuditRefused(String),
-    /// gateway.yaml no longer resolves to the file this gateway started on.
-    Unsupported(String),
-    /// Staging the original or the journal failed; nothing was replaced.
-    Stage(String),
-    /// Writing the new bytes failed; the original is back.
-    Write(String),
-    /// The reload refused the new bytes, or the check of them before any
-    /// entry or write did; the original stands.
-    ReloadRefused { class: RefusalClass, reason: String },
-    /// Putting the original back failed; the journal stays `staged`.
-    RollbackFailed { journal: PathBuf, error: String },
-    /// The reload accepted the bytes but that could not be recorded
-    /// durably; nothing is acknowledged.
-    Unconfirmed { journal: PathBuf, error: String },
-    /// Anything else: a lock that cannot be taken at all, an unusable
-    /// journal, an unreadable file, a write task that died.
-    Failed(String),
-    /// The secret store refused the [`SecretStep`]; nothing was written.
-    Secrets(SaveError<std::convert::Infallible>),
-    /// gateway.yaml does not exist; nothing was written.
-    NoConfigFile,
-    /// The read check every loader applies refused gateway.yaml (its type,
-    /// mode, owner or encoding); nothing was written. The text names the
-    /// file and the fix, for the log only.
-    ConfigRefused(String),
-}
+#[path = "replace_request.rs"]
+mod request;
+pub(crate) use request::{Expected, Replace, ReplaceError, ReplaceOutcome, Replaced, SecretStep};
+// Named only by the settings save, which builds where it does.
+#[cfg(any(test, feature = "webui"))]
+pub(crate) use request::Compute;
 
 /// The writer's task, in a task of its own: dropping the caller (a request
 /// handler whose client went away) drops only the wait, never a write
@@ -212,7 +67,7 @@ async fn spawn_locked(
     source: Source,
     wait: Duration,
     receipt: Option<receipt::RevokeCheck>,
-) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
+) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), (ReplaceError, Trace)> {
     // The gate admits before the task exists; the guard lives in the task, so a
     // dead task releases it, and the task moves it into `Entries` before any
     // secret entry is staged.
@@ -220,9 +75,12 @@ async fn spawn_locked(
         .registry
         .config_gate()
         .admit(AdmitKind::Write)
-        .map_err(ReplaceError::Gated)?;
-    tokio::spawn(async move {
-        ctx.replace_locked(replace, audit, source, wait, receipt, admitted)
+        .map_err(|refusal| (ReplaceError::Gated(refusal), Trace::default()))?;
+    // Read after the join, whatever became of the task.
+    let trace = Arc::new(WriteTrace::default());
+    let filled = Arc::clone(&trace);
+    let result = tokio::spawn(async move {
+        ctx.replace_locked(replace, audit, source, wait, receipt, admitted, filled)
             .await
     })
     .await
@@ -230,7 +88,15 @@ async fn spawn_locked(
         Err(ReplaceError::Failed(format!(
             "the config write task failed: {e}"
         )))
-    })
+    });
+    let trace = trace.snapshot();
+    match result {
+        Ok((mut outcome, receipt)) => {
+            outcome.intent_id = trace.intent_id;
+            Ok((outcome, receipt))
+        }
+        Err(error) => Err((error, trace)),
+    }
 }
 
 #[cfg(test)]
@@ -241,18 +107,22 @@ pub(crate) mod order;
 mod audit;
 #[path = "replace_receipt.rs"]
 mod receipt;
+#[path = "replace_trace.rs"]
+mod trace;
+pub(crate) use audit::IntentId;
 #[cfg(feature = "webui")]
 pub(crate) use audit::replace_audited_revoke;
+#[cfg(test)]
+pub(crate) use audit::replace_detached;
 pub(crate) use audit::{Audit, Intent, IntentSink, startup_recovery_intent};
 pub(crate) use audit::{AuditPosture, GatewayAuth};
 #[cfg(feature = "webui")]
 pub(crate) use audit::{BackendOp, NO_AUDIT_LOG};
-#[cfg(test)]
-pub(crate) use audit::{IntentId, replace_detached};
 #[cfg(any(test, feature = "webui"))]
-pub(crate) use audit::{IntentKind, replace_audited};
+pub(crate) use audit::{IntentKind, replace_audited, replace_traced};
 #[cfg(feature = "webui")]
 pub(crate) use receipt::RevokeCheck;
+pub(crate) use trace::{Trace, WriteTrace};
 
 #[path = "replace_entries.rs"]
 mod entries;
@@ -324,6 +194,7 @@ pub(crate) fn settle_for(result: &Result<ReplaceOutcome, ReplaceError>) -> Settl
         // The rollback came back: a failed one is `RollbackFailed`.
         | ReplaceError::Unsupported(_)
         | ReplaceError::Write(_)
+        | ReplaceError::WriterRefused { .. }
         | ReplaceError::ReloadRefused { .. } => Settle::Discard,
         // The file on disk may name them; `Failed` proves nothing either way.
         ReplaceError::RollbackFailed { .. }
@@ -395,6 +266,11 @@ async fn create_entries(
     )
 )]
 impl ReloadContext {
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one write transaction under both locks: its order is the guarantee, so it reads top to bottom in one place"
+    )]
     async fn replace_locked(
         &self,
         replace: Replace,
@@ -403,6 +279,7 @@ impl ReloadContext {
         wait: Duration,
         receipt: Option<receipt::RevokeCheck>,
         admitted: AdmissionGuard,
+        trace: Arc<WriteTrace>,
     ) -> Result<(ReplaceOutcome, Option<receipt::RevokeReceipt>), ReplaceError> {
         let deadline = Instant::now() + wait;
         // The reload lock, then the config sidecar lock: the order every
@@ -449,6 +326,7 @@ impl ReloadContext {
             pending: None,
             renamed: false,
             admitted: Some(admitted),
+            trace,
             #[cfg(test)]
             gate: self.registry.config_gate(),
         };
@@ -463,7 +341,7 @@ impl ReloadContext {
         let fields = step_fields(step.as_ref());
         same_fields(&template, step.as_ref())?;
         fits_when_filled(&template)?;
-        self.validate_template(&target, &template, step.as_ref())
+        self.validate_template(&target, &template, step.as_ref(), replace.status_change)
             .await?;
         // gateway.yaml deleted while the bytes were computed or checked: the
         // missing file, before any intent or entry exists.
@@ -474,7 +352,14 @@ impl ReloadContext {
         // config does not: recorded as an outside change, since no loaded
         // revision is kept to tell (over-reports, never under-reports).
         let unchanged = step.is_none() && template.bytes() == current.as_slice();
-        receipt::record_write_intent(&mut audit, &current, unchanged, recovery_intent_id, &target)?;
+        receipt::record_write_intent(
+            &mut audit,
+            &current,
+            unchanged,
+            recovery_intent_id,
+            &target,
+            &entries.trace,
+        )?;
         let result = match step {
             None => Ok(template.bytes().to_vec()),
             Some(step) => fill_secrets(template, step, deadline, &mut entries).await,
@@ -489,7 +374,7 @@ impl ReloadContext {
                     &locked,
                     &target,
                     &current,
-                    (new, replace.replaced),
+                    (new, replace.replaced, replace.status_change),
                     &mut entries,
                     source,
                 )
@@ -528,7 +413,7 @@ impl ReloadContext {
         locked: &Locked,
         target: &std::path::Path,
         current: &[u8],
-        (new, replaced): (Vec<u8>, Replaced),
+        (new, replaced, status_change): (Vec<u8>, Replaced, StatusChange),
         entries: &mut Entries,
         source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
@@ -558,33 +443,46 @@ impl ReloadContext {
             // one does not leave the runtime stale. Nothing was committed, so
             // a refusal needs no rollback.
             // The principal arrives with its own row (H8).
-            let reload = self
-                .reload_outcome_locked_at(target, source)
-                .await
-                .map_err(|refusal| ReplaceError::ReloadRefused {
-                    class: post_write_class(&refusal),
-                    reason: refusal.text,
-                })?;
+            let (reload, reload_applied) =
+                self.reload_applied_at(target, source)
+                    .await
+                    .map_err(|refusal| ReplaceError::ReloadRefused {
+                        class: post_write_class(&refusal),
+                        reason: refusal.text,
+                    })?;
             #[cfg(test)]
             self.record_write_reload();
             return Ok(ReplaceOutcome {
                 revision: None,
                 kept_beside: None,
-                reload,
+                reload: ReplaceReload::Applied(reload),
                 secrets: Vec::new(),
+                intent_id: None,
+                reload_applied,
             });
         }
-        self.commit(target, current, &new, replaced, entries, source)
-            .await
+        self.commit(
+            target,
+            current,
+            &new,
+            (replaced, status_change),
+            entries,
+            source,
+        )
+        .await
     }
     /// Stage, journal, write, reload; then keep the new bytes or put the
     /// original back.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "stage, journal, write, reload, then keep or roll back: each step's place is the crash guarantee"
+    )]
     async fn commit(
         &self,
         target: &std::path::Path,
         current: &[u8],
         new: &[u8],
-        replaced: Replaced,
+        (replaced, status_change): (Replaced, StatusChange),
         entries: &mut Entries,
         source: Source,
     ) -> Result<ReplaceOutcome, ReplaceError> {
@@ -598,7 +496,11 @@ impl ReloadContext {
             Replaced::KeepBeside => match keep_beside(&original, target) {
                 Ok(kept) => Some(kept),
                 Err(e) => {
-                    return Err(Self::roll_back(target, ReplaceError::Stage(e)));
+                    return Err(Self::roll_back(
+                        target,
+                        ReplaceError::Stage(e),
+                        &entries.trace,
+                    ));
                 }
             },
             Replaced::Discard => None,
@@ -608,30 +510,53 @@ impl ReloadContext {
                 let _ = std::fs::remove_file(kept);
             }
         };
+        let journal_file = journal::journal_path(target);
         if let Err(e) = journal::begin(target, FileRevision::of(current).as_str().to_owned()) {
             unkeep();
             return Err(Self::roll_back(
                 target,
                 ReplaceError::Stage(format!("writing the replace journal failed: {e}")),
+                &entries.trace,
             ));
         }
         // From here the file on disk may name this save's entries: set before
         // the write, so a death inside it keeps them (listed as unused)
         // rather than deleting what the new file may already name. A write
-        // error comes back after a proven rollback and discards.
+        // error leaves the file alone, drops the journal, and discards.
         entries.renamed = true;
+        // From here the new bytes may be on disk.
+        entries.trace.written.store(true, Ordering::SeqCst);
+        // Test seam: an armed `FailWrite` fails the write before it starts,
+        // so the abandon after it leaves the file untouched.
+        #[cfg(test)]
+        let injected =
+            journal::fault::fires(target, |f| matches!(f, journal::fault::Fault::FailWrite))
+                .is_some();
+        #[cfg(not(test))]
+        let injected = false;
         // gateway.yaml is owner-only, as every config write leaves it.
-        if let Err(e) = write_atomic(target, new, FileMode::Private, Symlink::Replace) {
+        let written = if injected {
+            Err(std::io::Error::other("injected: the write fails"))
+        } else {
+            write_atomic(target, new, FileMode::Private, Symlink::Replace)
+        };
+        if let Err(e) = written {
             unkeep();
-            return Err(Self::roll_back(
+            let error = match crate::config_persistence::writer_refusal(&e) {
+                Some((code, text)) => ReplaceError::WriterRefused { code, text },
+                None => ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
+            };
+            return Err(Self::abandon(
                 target,
-                ReplaceError::Write(format!("writing {} failed: {e}", target.display())),
+                [&journal_file, &original],
+                error,
+                &entries.trace,
             ));
         }
         #[cfg(test)]
         order::record(target, "commit");
         // The principal arrives with its own row (H8).
-        let reloaded = self.reload_outcome_locked_at(target, source).await;
+        let reloaded = self.reload_applied_at(target, source).await;
         // The reload reads gateway.yaml through its configured path. If a
         // symlink there moved meanwhile, it loaded some other file: put ours
         // back, and owe a reload so the runtime leaves that other file too.
@@ -645,41 +570,62 @@ impl ReloadContext {
                     "{} was re-pointed during the write; nothing was applied",
                     self.config_path.display()
                 )),
+                &entries.trace,
             ));
         }
-        match reloaded {
-            Ok(reload) => {
+        let (reload, reload_applied) = match reloaded {
+            Ok((reload, applied)) => {
                 #[cfg(test)]
                 self.record_write_reload();
-                if let Err(e) = journal::mark_all_renamed(target) {
-                    return Err(ReplaceError::Unconfirmed {
-                        journal: journal::journal_path(target),
-                        error: e.to_string(),
-                    });
-                }
-                if let Err(e) = journal::finish(target) {
-                    // The new bytes stand and were accepted; the journal says
-                    // `all_renamed`, so the next lock holder only cleans up.
-                    tracing::warn!(error = %e, path = %target.display(), "removing the replace journal failed; the next config write removes it");
-                }
-                Ok(ReplaceOutcome {
-                    revision: Some(FileRevision::of(new)),
-                    kept_beside,
-                    reload,
-                    secrets: Vec::new(),
-                })
+                (ReplaceReload::Applied(reload), applied)
+            }
+            // The operator's option B1 (ADR-024, amended): a first key the
+            // question held is refused by the reload for its status change
+            // alone, and its bytes stay for the next start, which accepts
+            // them. No other caller passes `HoldForRestart`, and no other
+            // refusal reaches this arm.
+            Err(refusal)
+                if status_change == StatusChange::HoldForRestart
+                    && refusal.kind == super::lock_api::ReloadRefusalKind::StatusChange =>
+            {
+                let held = ReplaceReload::HeldForRestart {
+                    refusal: refusal.text,
+                    keys: refusal.waiting,
+                };
+                // Held for the next start: nothing published now.
+                (held, false)
             }
             Err(refusal) => {
                 unkeep();
-                Err(Self::roll_back(
+                return Err(Self::roll_back(
                     target,
                     ReplaceError::ReloadRefused {
                         class: post_write_class(&refusal),
                         reason: refusal.text,
                     },
-                ))
+                    &entries.trace,
+                ));
             }
+        };
+        if let Err(e) = journal::mark_all_renamed(target) {
+            return Err(ReplaceError::Unconfirmed {
+                journal: journal::journal_path(target),
+                error: e.to_string(),
+            });
         }
+        if let Err(e) = journal::finish(target) {
+            // The new bytes stand; the journal says `all_renamed`, so the
+            // next lock holder only cleans up.
+            tracing::warn!(error = %e, path = %target.display(), "removing the replace journal failed; the next config write removes it");
+        }
+        Ok(ReplaceOutcome {
+            revision: Some(FileRevision::of(new)),
+            kept_beside,
+            reload,
+            secrets: Vec::new(),
+            intent_id: None,
+            reload_applied,
+        })
     }
 
     /// The locked target's bytes, once it is still the file this gateway
@@ -718,17 +664,45 @@ impl ReloadContext {
     /// Put the original back, or remove a staged copy no journal names yet
     /// (the same recovery the next lock holder would run), and report
     /// `error`; or `RollbackFailed` when that fails too.
-    fn roll_back(target: &std::path::Path, error: ReplaceError) -> ReplaceError {
+    fn roll_back(
+        target: &std::path::Path,
+        error: ReplaceError,
+        trace: &WriteTrace,
+    ) -> ReplaceError {
         // Test-only: a write that is undone still leaves its mark in the trace.
         #[cfg(test)]
         order::record(target, "rollback");
         match journal::recover(target) {
-            Ok(_) => error,
+            Ok(_) => {
+                // A staging cleanup before the write puts nothing back.
+                if trace.written.load(Ordering::SeqCst) {
+                    trace.restored.store(true, Ordering::SeqCst);
+                }
+                error
+            }
             Err(rollback) => ReplaceError::RollbackFailed {
                 journal: journal::journal_path(target),
                 error: rollback.into_message(),
             },
         }
+    }
+
+    /// Our rename never ran: drop what this save staged, by the names it gave
+    /// them before the write (never re-resolved), and never the file.
+    fn abandon(
+        target: &Path,
+        staged: [&Path; 2],
+        error: ReplaceError,
+        trace: &WriteTrace,
+    ) -> ReplaceError {
+        let Err(e) = journal::finish_exact(target, staged[0], staged[1]) else {
+            // The rename never ran, so the new bytes never reached the
+            // target: the trace stops saying they may be on disk.
+            trace.written.store(false, Ordering::SeqCst);
+            return error;
+        };
+        let (journal, error) = (staged[0].to_path_buf(), e.to_string());
+        ReplaceError::RollbackFailed { journal, error }
     }
 }
 

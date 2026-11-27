@@ -697,8 +697,77 @@ async fn t4r_a_change_between_the_pre_check_and_the_write_refuses_and_stores_not
     assert!(panel.entries().is_empty(), "{:?}", panel.entries());
 }
 
+/// S-ui: a UI write that the shared writer refuses answers a failure whose
+/// error carries the refusal's own text, and gateway.yaml keeps what the
+/// other writer put there.
+#[cfg(unix)]
+#[tokio::test]
+async fn s_ui_a_refused_config_write_answers_with_its_reason() {
+    use crate::config_persistence::writer_seams::{self as seams, Seams};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let panel = Panel::new().await;
+    let other = format!("{START}# another writer\n");
+    let put = other.clone();
+    let fired = AtomicBool::new(false);
+    let _armed = seams::arm(
+        panel.dir.path(),
+        Seams {
+            before_verify: Some(Box::new(move |target, _scratch| {
+                let config = target
+                    .file_name()
+                    .is_some_and(|name| name == "gateway.yaml");
+                if config && !fired.swap(true, Ordering::SeqCst) {
+                    std::fs::rename(target, target.with_extension("moved")).expect("move away");
+                    write_owner_only(target, &put).expect("the other writer");
+                }
+            })),
+            ..Seams::default()
+        },
+    );
+    let (status, body) = panel.update("a", json!({"description": "new"})).await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "S-ui: nothing was written: {body}"
+    );
+    assert_eq!(body["error"], "target-changed", "S-ui: the code: {body}");
+    let message = body["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("target-changed: refused to replace "),
+        "S-ui: the refusal's own sentence: {body}"
+    );
+    assert_eq!(panel.text(), other, "S-ui: the other writer's file stays");
+}
+
+/// XPORT.2 at the route: a PATCH moving an A2A server with its own card path
+/// to another host answers 422 with the gateway.yaml sentence, and the file
+/// stays as it was.
+#[cfg(feature = "a2a")]
+#[tokio::test]
+async fn xport2_the_patch_route_refuses_an_own_card_path_on_another_origin() {
+    let text = "backends:\n  agent:\n    a2a_url: \"https://agent.example\"\n    a2a_agent_card_path: /cards/agent.json\n";
+    let panel = Panel::with(text, Reloads::Accept).await;
+    let (status, body) = panel
+        .update("agent", json!({"url": "https://other.example"}))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+    let marker = crate::gateway::ui::backend_ops::CARD_TO_OTHER_ORIGIN;
+    let sentence = format!(
+        "Backend 'agent' {marker}; change the address and the card path together in \
+         gateway.yaml."
+    );
+    assert_eq!(body["error"], sentence, "{body}");
+    assert_eq!(panel.text(), text);
+}
+
 #[path = "backends_secret_name_tests.rs"]
 mod names;
 
 #[path = "backends_credential_tests.rs"]
 mod credentials;
+
+#[path = "backends_secret_keep_tests.rs"]
+mod keep;
+
+#[path = "backends_header_tests.rs"]
+mod headers;

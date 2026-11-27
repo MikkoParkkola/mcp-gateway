@@ -67,16 +67,16 @@ fn secret<'de, D: Deserializer<'de>>(deserializer: D) -> Result<WipedBytes, D::E
 }
 
 use super::errors::{
-    RESTART_BUSY, config_refusal, flat_error, gate_refusal, no_config_file, no_reload_read,
-    no_reload_write, stale, structured_error,
+    RESTART_BUSY, Retry, config_refusal, config_refusal_read, flat_error, gate_refusal,
+    no_config_file, no_reload_read, no_reload_write, stale, structured_error,
 };
 use super::secret_slots::{self, Unopened};
 use crate::config_persistence::keyedit::{FiniteF64, GiveUp, Scalar};
 use crate::config_reload::ui_fields::{FieldId, Param, PreviewEdit, PreviewValue, ValueKind};
 use crate::config_reload::{
     AuditPosture, BusyReason, FileRevision, GatewayAuth, NO_AUDIT_LOG, Patch, PatchStep,
-    PreviewRefused, RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveValue,
-    SecretTarget, Shown, UiPreview, UiRefused, UiSaved, path_text, ui_diff, ui_save,
+    PreviewRefused, RELOAD_LOCK_WAIT, RefusalClass, ReloadOutcome, SaveEdit, SaveOutcome,
+    SaveValue, SecretTarget, Shown, UiPreview, UiRefused, UiSaved, path_text, ui_diff, ui_save,
 };
 use crate::gateway::auth::{MintingKey, QuotaPrincipal, ResolvedAuthConfig, SessionMintedBy};
 use axum::http::{
@@ -127,9 +127,9 @@ fn identify<S>(body: FieldBody<S>, entry: usize) -> Result<(FieldId, Param, S), 
     ))
 }
 
-fn scalar(id: FieldId, value: &serde_json::Value) -> Result<Scalar, Box<Response>> {
+fn scalar(id: FieldId, value: &serde_json::Value, asked: Asked) -> Result<Scalar, Box<Response>> {
     let Some(kind) = id.spec().kind else {
-        return Err(Box::new(answer(UiRefused::WrongKind(id))));
+        return Err(Box::new(answer(UiRefused::WrongKind(id), asked)));
     };
     let converted = match kind {
         ValueKind::Bool => value.as_bool().map(Scalar::Bool),
@@ -177,7 +177,7 @@ pub(super) async fn settings_diff(
             Err(response) => return *response,
         };
         let value = match value {
-            ValueBody::Set(value) => match scalar(id, &value) {
+            ValueBody::Set(value) => match scalar(id, &value, Asked::Diff) {
                 Ok(value) => PreviewValue::Set(value),
                 Err(response) => return *response,
             },
@@ -195,6 +195,7 @@ pub(super) async fn settings_diff(
                 .iter()
                 .map(|(id, ..)| id.spec().id)
                 .collect::<Vec<_>>(),
+            Asked::Diff,
         ),
     }
 }
@@ -209,6 +210,10 @@ pub(crate) fn caller_is_cli_key(
         || session.is_some_and(|minter| auth.is_cli_key_quota(&minter.quota))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the CLI-key and audit-log refusals must come before the store opens, and the outcome is attached on every exit, writer refusals included: one scope keeps both"
+)]
 pub(super) async fn settings_save(
     State(state): State<Arc<AppState>>,
     #[cfg(test)] store_for_test: Option<Extension<SettingsStoreForTest>>,
@@ -217,101 +222,186 @@ pub(super) async fn settings_save(
     session: Option<Extension<SessionMintedBy>>,
     body: Result<Json<SaveBody>, JsonRejection>,
 ) -> Response {
-    if let Err(refused) = guard.admit() {
-        return refused.into_response();
-    }
-    let Ok(Json(body)) = body else {
-        return invalid_body();
-    };
-    // Refuse the whole edit before opening the store: even a secret stored
-    // ahead of the config write must not outlive a CLI key's approver.
-    if body
-        .fields
-        .iter()
-        .any(|field| field.field.starts_with("auth."))
-        && caller_is_cli_key(
-            generation.auth(),
-            guard
-                .client
-                .as_ref()
-                .and_then(|client| client.quota_principal.as_ref()),
-            session.as_ref().map(|Extension(SessionMintedBy(key))| key),
-        )
-    {
-        return super::guard::Refused::Forbidden.into_response();
-    }
-    let Some(base) = FileRevision::from_text(&body.base_revision) else {
-        return invalid_body();
-    };
-    if body
-        .fields
-        .iter()
-        .any(|f| matches!(f.value, SaveValueBody::Remove(false)))
-    {
-        return invalid_body();
-    }
-    let Some(ctx) = state.meta_mcp.reload_context() else {
-        return no_reload_write().into_response();
-    };
-    let mut edit = SaveEdit::default();
-    for (entry, body) in body.fields.into_iter().enumerate() {
-        let (id, param, value) = match identify(body, entry) {
-            Ok(field) => field,
-            Err(response) => return *response,
-        };
-        let value = match value {
-            SaveValueBody::Set(value) => match scalar(id, &value) {
-                Ok(value) => SaveValue::Set(value),
-                Err(response) => return *response,
-            },
-            SaveValueBody::Remove(_) => SaveValue::Remove,
-            SaveValueBody::Secret(value) => SaveValue::Secret(value),
-        };
-        edit.fields.push((id, param, value));
-    }
-    let fields: Vec<_> = edit.fields.iter().map(|(id, ..)| id.spec().id).collect();
-    let secrets = if edit
-        .fields
-        .iter()
-        .any(|(_, _, value)| matches!(value, SaveValue::Secret(_)))
-    {
-        let dir = ctx
-            .config_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .to_path_buf();
-        let config = ctx.live_config.get();
-        #[cfg(test)]
-        let opened = match store_for_test {
-            Some(Extension(SettingsStoreForTest::OpenRefused(why))) => Err(why),
-            Some(Extension(SettingsStoreForTest::Store(store))) => {
-                secret_slots::open_store(config.secrets.store, dir)
-                    .await
-                    .map(|(_, vault)| (store, vault))
-            }
-            None => secret_slots::open_store(config.secrets.store, dir).await,
-        };
-        #[cfg(not(test))]
-        let opened = secret_slots::open_store(config.secrets.store, dir).await;
-        match secret_target(opened) {
-            Ok(target) => Some(target),
-            Err(response) => return *response,
+    // The writer's word and intent id; any refusal before it reads refused.
+    let mut answered: (SaveOutcome, Option<String>) = (SaveOutcome::Refused, None);
+    let mut response = async {
+        if let Err(refused) = guard.admit() {
+            return refused.into_response();
         }
-    } else {
-        None
-    };
-    let posture = AuditPosture::of(
-        state.transparency_log.clone(),
-        GatewayAuth::of(state.live_config.running().auth.enabled),
-    );
-    let who =
-        super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
-    let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
-    match ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await {
-        Ok(saved) => saved_answer(&saved, &fields, &live, &config_path),
-        Err(refusal) => answer_for(refusal, &fields),
+        let Ok(Json(body)) = body else {
+            return invalid_body();
+        };
+        // Refuse the whole edit before opening the store: even a secret stored
+        // ahead of the config write must not outlive a CLI key's approver.
+        if body
+            .fields
+            .iter()
+            .any(|field| field.field.starts_with("auth."))
+            && caller_is_cli_key(
+                generation.auth(),
+                guard
+                    .client
+                    .as_ref()
+                    .and_then(|client| client.quota_principal.as_ref()),
+                session.as_ref().map(|Extension(SessionMintedBy(key))| key),
+            )
+        {
+            return super::guard::Refused::Forbidden.into_response();
+        }
+        let Some(base) = FileRevision::from_text(&body.base_revision) else {
+            return invalid_body();
+        };
+        if body
+            .fields
+            .iter()
+            .any(|f| matches!(f.value, SaveValueBody::Remove(false)))
+        {
+            return invalid_body();
+        }
+        let Some(ctx) = state.meta_mcp.reload_context() else {
+            return no_reload_write().into_response();
+        };
+        let mut edit = SaveEdit::default();
+        for (entry, body) in body.fields.into_iter().enumerate() {
+            let (id, param, value) = match identify(body, entry) {
+                Ok(field) => field,
+                Err(response) => return *response,
+            };
+            let value = match value {
+                SaveValueBody::Set(value) => match scalar(id, &value, Asked::Save) {
+                    Ok(value) => SaveValue::Set(value),
+                    Err(response) => return *response,
+                },
+                SaveValueBody::Remove(_) => SaveValue::Remove,
+                SaveValueBody::Secret(value) => SaveValue::Secret(value),
+            };
+            edit.fields.push((id, param, value));
+        }
+        let fields: Vec<_> = edit.fields.iter().map(|(id, ..)| id.spec().id).collect();
+        // WRITE.4: turning auth on needs a log the next start can write.
+        // Asked before the store opens, so a refused save opens nothing.
+        if !state.live_config.running().auth.enabled
+            && let Err(unusable) = next_start_log(&state, &ctx, &edit)
+        {
+            return audit_log_required(&unusable);
+        }
+        let secrets = if edit
+            .fields
+            .iter()
+            .any(|(_, _, value)| matches!(value, SaveValue::Secret(_)))
+        {
+            let dir = ctx
+                .config_path
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_path_buf();
+            let config = ctx.live_config.get();
+            #[cfg(test)]
+            let opened = match store_for_test {
+                Some(Extension(SettingsStoreForTest::OpenRefused(why))) => Err(why),
+                Some(Extension(SettingsStoreForTest::Store(store))) => {
+                    secret_slots::open_store(config.secrets.store, dir)
+                        .await
+                        .map(|(_, vault)| (store, vault))
+                }
+                None => secret_slots::open_store(config.secrets.store, dir).await,
+            };
+            #[cfg(not(test))]
+            let opened = secret_slots::open_store(config.secrets.store, dir).await;
+            match secret_target(opened) {
+                Ok(target) => Some(target),
+                Err(response) => return *response,
+            }
+        } else {
+            None
+        };
+        let posture = AuditPosture::of(
+            state.transparency_log.clone(),
+            GatewayAuth::of(state.live_config.running().auth.enabled),
+        );
+        let audited = posture.requires_audit();
+        let who =
+            super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
+        let (config_path, live) = (ctx.config_path.clone(), Arc::clone(&ctx.live_config));
+        let answer = ui_save(ctx, posture, base, edit, secrets, &who, RELOAD_LOCK_WAIT).await;
+        answered = (answer.outcome, answer.intent_id.map(|id| id.0));
+        match answer.result {
+            Ok(saved) => saved_answer(&saved, &fields, &live, &config_path, audited),
+            Err(refusal) => answer_for(refusal, &fields, Asked::Save),
+        }
     }
+    .await;
+    attach_outcome(&mut response, answered.0, answered.1);
+    response
 }
+
+/// The save's outcome word, and its intent's id when it appended one, on
+/// the request's own `admin_action` (WRITE.2): no `intent_id` key at all
+/// when there is no intent.
+fn attach_outcome(response: &mut Response, outcome: SaveOutcome, intent_id: Option<String>) {
+    let mut detail = serde_json::Map::new();
+    detail.insert("save_outcome".into(), outcome.as_str().into());
+    if let Some(id) = intent_id {
+        detail.insert("intent_id".into(), id.into());
+    }
+    response
+        .extensions_mut()
+        .insert(super::admin_audit::AuditDetail(detail));
+}
+
+/// The 409 of a save that would turn auth on with no log the next start can
+/// write; nothing was written.
+pub(super) const AUDIT_LOG_REQUIRED: (&str, &str) = (
+    "AUDIT_LOG_REQUIRED",
+    "auth cannot be turned on until the next start has an audit log it can write",
+);
+
+/// When `edit` turns auth on: the log the published config (what a restart
+/// boots) names, judged by permissions alone.
+fn next_start_log(
+    state: &AppState,
+    ctx: &crate::config_reload::ReloadContext,
+    edit: &SaveEdit,
+) -> Result<(), super::settings_log_check::Unusable> {
+    let turns_on = edit.fields.iter().any(|(id, _, value)| {
+        id.spec().id == "auth.enabled" && matches!(value, SaveValue::Set(Scalar::Bool(true)))
+    });
+    if !turns_on {
+        return Ok(());
+    }
+    let held = state.transparency_log.as_ref().map(|log| log.path());
+    let cwd = std::env::current_dir().unwrap_or_default();
+    super::settings_log_check::usable_log(
+        &ctx.live_config.get(),
+        held.as_deref(),
+        crate::home_dir::home_dir().as_deref(),
+        &cwd,
+        &super::settings_log_check::access,
+    )
+}
+
+fn audit_log_required(unusable: &super::settings_log_check::Unusable) -> Response {
+    use super::settings_log_check::Unusable;
+    let fix = match unusable {
+        Unusable::Off => "enable security.transparency_log with a path".to_owned(),
+        Unusable::NotWritable(path) => format!("{} cannot be written", path.display()),
+    };
+    let message = format!("{}: {fix}", AUDIT_LOG_REQUIRED.1);
+    structured_error(StatusCode::CONFLICT, AUDIT_LOG_REQUIRED.0, message).into_response()
+}
+
+/// A saved answer's notice: its code and sentence. Both can stand on one
+/// save, so they share one `notices` array.
+pub(super) const OUTSIDE_CHANGE_APPLIED: (&str, &str) = (
+    "OUTSIDE_CHANGE_APPLIED",
+    "this save's reload also loaded edits someone made to gateway.yaml outside the UI; see the reload for any that wait for a restart",
+);
+/// The save of a gateway with auth off and no audit log: it goes ahead with
+/// no record, and says so.
+pub(super) const NOT_AUDITED: (&str, &str) = (
+    "NOT_AUDITED",
+    "no audit record was written: this gateway has auth off and no audit log",
+);
 
 /// The answer to a completed save, with the restart keys while one is pending.
 fn saved_answer(
@@ -319,12 +409,21 @@ fn saved_answer(
     fields: &[&str],
     live: &crate::config_reload::LiveConfig,
     config_path: &std::path::Path,
+    audited: bool,
 ) -> Response {
     let pending = saved.reload.restart_required;
+    let notices: Vec<serde_json::Value> = [
+        (saved.outside_change, OUTSIDE_CHANGE_APPLIED),
+        (!audited, NOT_AUDITED),
+    ]
+    .into_iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, (code, message))| json!({"code": code, "message": message}))
+    .collect();
     let mut body = json!({
         "revision": saved.revision.as_str(), "changed": saved.changed,
         "restart_required": restart_fields(fields, &saved.reload),
-        "reload": saved.reload, "comments": "kept",
+        "reload": saved.reload, "comments": "kept", "notices": notices,
     });
     // A restart would boot the published config.
     let refusal = pending
@@ -379,7 +478,15 @@ fn patch_steps(patch: Patch) -> serde_json::Value {
     }).collect::<Vec<_>>())
 }
 
-fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
+/// Which route asked: the diff is a read, so its shared refusals stay 503;
+/// the save is a write, so a refusal that attempted nothing is 409.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Asked {
+    Diff,
+    Save,
+}
+
+fn answer_for(refusal: UiRefused, fields: &[&str], asked: Asked) -> Response {
     let variant = match &refusal {
         UiRefused::WrongKind(_) => "wrong_kind",
         UiRefused::BadValue(..) => "bad_value",
@@ -388,6 +495,7 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         UiRefused::ReloadRefused { .. } => "reload_refused",
         UiRefused::Unsupported(_) => "unsupported",
         UiRefused::NoAuditLog => "no_audit_log",
+        UiRefused::AuditRefused => "audit_refused",
         UiRefused::Unprovable(_) => "unprovable",
         UiRefused::Stale(_) => "stale",
         UiRefused::StaleUnpreviewable(_) => "stale_unpreviewable",
@@ -395,7 +503,8 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         UiRefused::Busy(_) => "busy",
         UiRefused::Down(_) => "down",
         UiRefused::SecretsRefused { .. } => "secrets_refused",
-        UiRefused::Failed(_) => "failed",
+        // A writer refusal keeps the failed write's audit code, as before.
+        UiRefused::WriterRefused | UiRefused::Failed(_) => "failed",
     };
     let class = if let UiRefused::ReloadRefused { class } = &refusal {
         Some(class)
@@ -412,7 +521,7 @@ fn answer_for(refusal: UiRefused, fields: &[&str]) -> Response {
         )
             .into_response();
     }
-    answer(refusal)
+    answer(refusal, asked)
 }
 
 fn bad_value(id: FieldId, reason: &str) -> Response {
@@ -445,19 +554,34 @@ fn bad_value(id: FieldId, reason: &str) -> Response {
     field_error(id, "bad_value", reason)
 }
 
-/// The refusals a client may retry as they are: the design lists Retry-After
-/// for these only; the others need someone to change the config first.
+/// The refusals that stay 5xx and that a client may retry as they are: the
+/// design lists Retry-After for these only. A refusal that attempted nothing
+/// gets its header from `refusal` instead.
 fn retryable(refusal: &UiRefused) -> bool {
     matches!(
         refusal,
-        UiRefused::Busy(_)
-            | UiRefused::StaleUnpreviewable(_)
-            | UiRefused::Preview(PreviewRefused::Recovering)
+        UiRefused::Preview(PreviewRefused::Recovering)
             | UiRefused::SecretsRefused { timeout: true }
             | UiRefused::ReloadRefused {
                 class: RefusalClass::ShuttingDown
             }
     )
+}
+
+/// The class of a settings refusal that attempted nothing (409), and whether
+/// to retry; `None` keeps the arm's answer. `Busy`, `StaleUnpreviewable`,
+/// `NoAuditLog` and `WriterRefused` come from a save only.
+fn save_class(refusal: &UiRefused, asked: Asked) -> Option<Retry> {
+    match (refusal, asked) {
+        (UiRefused::Busy(_) | UiRefused::StaleUnpreviewable(_), _)
+        | (UiRefused::Preview(PreviewRefused::Recovering), Asked::Save) => Some(Retry::Now),
+        (UiRefused::NoAuditLog | UiRefused::WriterRefused, _)
+        | (
+            UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)),
+            Asked::Save,
+        ) => Some(Retry::No),
+        _ => None,
+    }
 }
 
 /// The core's parameter reasons are fixed texts from the field table; any
@@ -477,8 +601,35 @@ fn bad_param_reason(reason: &str) -> &'static str {
     }
 }
 
-fn answer(refusal: UiRefused) -> Response {
+/// A reload refusal's answer, by the class of what refused it.
+fn reload_refused(class: RefusalClass) -> Response {
+    let error = |status, code, text| structured_error(status, code, text).into_response();
+    match class {
+        RefusalClass::Posture => error(
+            StatusCode::CONFLICT,
+            "posture_refused",
+            "the change was refused by the gateway's network posture",
+        ),
+        RefusalClass::Invalid => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
+        // The first-key question's own sentence names no value: shown.
+        RefusalClass::KeyList(refusal) => error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid",
+            refusal.sentence(),
+        ),
+        RefusalClass::ShuttingDown => error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "shutting_down",
+            "the gateway is shutting down; retry",
+        ),
+        RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
+        RefusalClass::RestartPending { waiting } => super::errors::restart_pending(waiting.names()),
+    }
+}
+
+fn answer(refusal: UiRefused, asked: Asked) -> Response {
     let retryable = retryable(&refusal);
+    let class = save_class(&refusal, asked);
     let error = |status, code, text| structured_error(status, code, text).into_response();
     let response = match refusal {
         UiRefused::WrongKind(id) => field_error(
@@ -489,32 +640,23 @@ fn answer(refusal: UiRefused) -> Response {
         UiRefused::BadValue(id, reason) => bad_value(id, &reason),
         UiRefused::BadParam(id, reason) => field_error(id, "bad_param", bad_param_reason(&reason)),
         UiRefused::Invalid(_) => error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED),
-        UiRefused::ReloadRefused { class } => match class {
-            RefusalClass::Posture => error(
-                StatusCode::CONFLICT,
-                "posture_refused",
-                "the change was refused by the gateway's network posture",
-            ),
-            RefusalClass::Invalid => {
-                error(StatusCode::UNPROCESSABLE_ENTITY, "invalid", LOADER_REFUSED)
-            }
-            RefusalClass::ShuttingDown => error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "shutting_down",
-                "the gateway is shutting down; retry",
-            ),
-            RefusalClass::Internal => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
-        },
+        UiRefused::ReloadRefused { class } => reload_refused(class),
         UiRefused::Unsupported(_) => error(
             StatusCode::CONFLICT,
             "unsupported",
             "the edit cannot be followed in gateway.yaml",
         ),
-        UiRefused::NoAuditLog => error(
+        // No log is the posture (nothing started, 409); a refused append was
+        // started (503). One body for both.
+        UiRefused::NoAuditLog => error(StatusCode::CONFLICT, "audit_log_required", NO_AUDIT_LOG),
+        UiRefused::AuditRefused => error(
             StatusCode::SERVICE_UNAVAILABLE,
             "audit_log_required",
             NO_AUDIT_LOG,
         ),
+        // The writer refused before the target changed: the failed write's
+        // body, unchanged, at the refusal's 409.
+        UiRefused::WriterRefused => error(StatusCode::CONFLICT, "failed", FAILED),
         UiRefused::Unprovable(patch) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"error": "not_in_place", "patch": patch_steps(patch)})),
@@ -526,19 +668,26 @@ fn answer(refusal: UiRefused) -> Response {
             (status, Json(body)).into_response()
         }
         UiRefused::StaleUnpreviewable(_) => error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::CONFLICT,
             "stale",
             "gateway.yaml changed and could not be previewed; retry",
         ),
+        // A read (the diff) cannot answer now (503); a save attempted
+        // nothing (409, through `save_class`).
         UiRefused::Preview(PreviewRefused::Recovering) => flat_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            match asked {
+                Asked::Save => StatusCode::CONFLICT,
+                Asked::Diff => StatusCode::SERVICE_UNAVAILABLE,
+            },
             "the config write is recovering; retry",
         )
         .into_response(),
         UiRefused::Preview(PreviewRefused::NoConfigFile) => no_config_file().into_response(),
-        UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => {
-            config_refusal().into_response()
-        }
+        UiRefused::Preview(PreviewRefused::Untrusted(_) | PreviewRefused::Unread(_)) => match asked
+        {
+            Asked::Save => config_refusal().into_response(),
+            Asked::Diff => config_refusal_read().into_response(),
+        },
         // Refused before anything was attempted: a 4xx (a 5xx means the outcome is
         // not confirmed). Still retryable, so it keeps its Retry-After.
         UiRefused::Busy(reason) => flat_error(
@@ -562,7 +711,8 @@ fn answer(refusal: UiRefused) -> Response {
         .into_response(),
         UiRefused::Failed(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "failed", FAILED),
     };
-    if retryable { retry(response) } else { response }
+    let response = if retryable { retry(response) } else { response };
+    super::errors::classed(class, response)
 }
 
 fn restart_fields(fields: &[&str], reload: &ReloadOutcome) -> Vec<String> {
@@ -623,6 +773,10 @@ mod cli_tests;
 #[cfg(test)]
 #[path = "settings_floor_tests.rs"]
 mod floor_tests;
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "settings_log_check_tests.rs"]
+mod log_check_tests;
 #[cfg(tp3)]
 #[cfg(test)]
 #[path = "restart_advice_route_tests.rs"]

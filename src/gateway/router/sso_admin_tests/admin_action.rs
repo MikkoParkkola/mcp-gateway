@@ -66,6 +66,8 @@ async fn audited(policy: AuditFailurePolicy, exposed: &[String]) -> Audited {
     state.meta_mcp = Arc::new(meta);
     state.transparency_log = Some(Arc::clone(&log));
     state.control_plane_store = Some(Arc::new(InMemoryControlPlaneStore::new()));
+    // The import preview refuses a gateway with no capability directory.
+    state.capability_dirs = vec![dir.path().to_string_lossy().into_owned()];
     Audited {
         gw,
         log,
@@ -180,6 +182,10 @@ fn assert_ui_record(record: &Value, route: &str, status: u16, outcome: &str, cod
     assert_eq!(record["method"], "POST", "{record}");
     assert_eq!(record["http_status"], status, "{record}");
 }
+
+/// The refusals a write meets before it attempts anything (409).
+const NO_RELOAD: &str = "Config reload is not enabled on this gateway";
+const NO_PATH: &str = "Config file path not available; cannot persist changes";
 
 fn assert_alice(record: &Value) {
     assert_eq!(record["who"]["authority"], ISS_A, "{record}");
@@ -317,10 +323,11 @@ async fn ui_admin_error_is_error() {
     let (status, body) = fx
         .send(ui("POST", "/ui/api/reload", &fx.alice(), &json!({})))
         .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], NO_RELOAD, "{body}");
     let records = fx.admin_actions();
     assert_eq!(records.len(), 1, "{records:#?}");
-    assert_ui_record(&records[0], "/ui/api/reload", 503, "error", Some(-32603));
+    assert_ui_record(&records[0], "/ui/api/reload", 409, "error", Some(-32603));
 }
 
 /// E1-T12b (control): reads write nothing.
@@ -358,17 +365,14 @@ async fn ui_delete_writes_admin_action() {
     let fx = audited(AuditFailurePolicy::FailClosed, &[]).await;
     let uri = "/ui/api/backends/alpha";
     let (status, body) = fx.send(ui("DELETE", uri, &fx.alice(), &json!({}))).await;
-    assert_eq!(
-        status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "no config path: {body}"
-    );
+    assert_eq!(status, StatusCode::CONFLICT, "no config path: {body}");
+    assert_eq!(body["error"], NO_PATH, "{body}");
     let records = fx.admin_actions();
     assert_eq!(records.len(), 1, "{records:#?}");
     assert_record(&records[0], "admin_ui", "error", Some(-32603));
     assert_eq!(records[0]["route"], "/ui/api/backends/{name}");
     assert_eq!(records[0]["method"], "DELETE");
-    assert_eq!(records[0]["http_status"], 503);
+    assert_eq!(records[0]["http_status"], 409);
 }
 
 /// A backend edit (`PATCH`) is recorded whether it fails (`error`) or is
@@ -380,17 +384,14 @@ async fn ui_patch_writes_admin_action() {
     let uri = "/ui/api/backends/alpha";
     let body = json!({"url": format!("wss://{BODY_CANARY}.example/mcp")});
     let (status, answer) = fx.send(ui("PATCH", uri, &fx.alice(), &body)).await;
-    assert_eq!(
-        status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "no config path: {answer}"
-    );
+    assert_eq!(status, StatusCode::CONFLICT, "no config path: {answer}");
+    assert_eq!(answer["error"], NO_PATH, "{answer}");
     let (status, answer) = fx.send(ui("PATCH", uri, STANDARD_KEY, &body)).await;
     assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
     let records = fx.admin_actions();
     assert_eq!(records.len(), 2, "{records:#?}");
     for (record, outcome, code, status) in [
-        (&records[0], "error", -32603, 503),
+        (&records[0], "error", -32603, 409),
         (&records[1], "denied", -32600, 403),
     ] {
         assert_record(record, "admin_ui", outcome, Some(code));

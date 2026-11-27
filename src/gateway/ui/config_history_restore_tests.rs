@@ -151,7 +151,8 @@ async fn r6_a_refused_intent_append_refuses_the_restore_with_the_file_untouched(
         (StatusCode::INTERNAL_SERVER_ERROR, json!(NOT_WRITTEN))
     );
     let steps = rig.steps();
-    assert!(steps.is_empty(), "the writer went on: {steps:?}");
+    // Only the traced writer's first step: the refused append stops it.
+    assert_eq!(steps, ["traced"], "the writer went on");
     assert_eq!(rig.bytes(), before);
     assert!(rig.rejected().is_empty());
     assert_eq!(rig.store.events().len(), events);
@@ -162,7 +163,7 @@ async fn r7_auth_on_without_an_audit_log_refuses_the_restore() {
     let (rig, old) = two_versions(Audit::Unlogged).await;
     let before = rig.bytes();
     let (status, body) = rig.restore(&old, Caller::Root).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], json!("audit_log_required"));
     assert_eq!(body["message"], json!(crate::config_reload::NO_AUDIT_LOG));
     assert_eq!(rig.bytes(), before);
@@ -182,7 +183,7 @@ async fn r8_a_held_config_lock_makes_the_restore_busy_until_it_is_released() {
     let (status, body) = rig.restore(&old, Caller::Root).await;
     assert_eq!(
         (status, body["error"].clone()),
-        (StatusCode::SERVICE_UNAVAILABLE, json!(BUSY))
+        (StatusCode::CONFLICT, json!(BUSY))
     );
     assert_eq!(rig.bytes(), before);
     drop(held);
@@ -198,7 +199,7 @@ async fn r8b_a_held_reload_lock_makes_the_restore_busy_until_it_is_released() {
     let (status, body) = rig.restore(&old, Caller::Root).await;
     assert_eq!(
         (status, body["error"].clone()),
-        (StatusCode::SERVICE_UNAVAILABLE, json!(BUSY))
+        (StatusCode::CONFLICT, json!(BUSY))
     );
     assert_eq!(rig.bytes(), before);
     drop(held);

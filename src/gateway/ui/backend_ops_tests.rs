@@ -707,3 +707,6 @@ fn b3i_a_resolvable_reference_is_added_and_kept_as_written() {
     // Checked, never substituted: the config keeps the reference text.
     assert_eq!(backend.env["API_KEY"], reference);
 }
+
+#[path = "backend_ops_transport_tests.rs"]
+mod transport;

@@ -163,9 +163,9 @@ fn every_test_binary_spawn_goes_through_test_binary() {
             "under_umask_022",
         ),
     ];
-    const PRODUCTION: [(&str, &str); 4] = [
-        ("src/preview_sandbox/mod.rs", "start"),
-        ("src/preview_sandbox/mod.rs", "start_fetching"),
+    const PRODUCTION: [(&str, &str); 3] = [
+        // The sandbox's helper is the gateway's own binary, found in one place.
+        ("src/preview_sandbox/mod.rs", "gateway"),
         ("src/gateway/server/window_saver.rs", "start_window_saver"),
         // Reads the running file for the restart notice's start command; spawns nothing.
         ("src/gateway/ui/restart_confirm.rs", "restart_advice"),

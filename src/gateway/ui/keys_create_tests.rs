@@ -73,6 +73,7 @@ fn p1_a_full_body_writes_the_entry_and_answers_the_secret_once() {
         "previous_expires_at": null,
         "rate_limit": 7,
         "live": true,
+        "addressable": true,
     });
     let mut entry = listed["keys"][1].clone();
     let last_used = entry.as_object_mut().and_then(|e| e.remove("last_used"));
@@ -262,19 +263,25 @@ fn uses_of<'a>(code: &'a str, name: &str) -> Vec<&'a str> {
 }
 
 /// Every use of the generator's binding: the binding, the digest call and the
-/// 201 body (`created` takes it as `once`). An alias, a clone or a log line
-/// adds a line here and fails the pin.
-const SECRET_USES: [&str; 4] = [
+/// 201 body (`created` takes it as `once`), plus the kept key's 201 (`held`,
+/// the same shape with its own call). An alias, a clone or a log line adds a
+/// line here and fails the pin.
+const SECRET_USES: [&str; 6] = [
     "Json(json!({\"name\": name, \"secret\": once, \"revision\": revision.as_str()})),",
+    "\"secret\": once,",
     "let secret = crate::random_secret::random_secret(\"mcpgw_\");",
     "let digest = crate::config::api_key_digest_spec(secret.as_bytes());",
     "}) if landed(&state, &name, &digest) => created(&name, &secret, &revision),",
+    "}) => held(&name, &secret, &revision),",
 ];
 
-/// `created` holds the secret as `once`: its signature and the body only.
-const ONCE_USES: [&str; 2] = [
+/// `created` and `held` hold the secret as `once`: each one's signature and
+/// body only.
+const ONCE_USES: [&str; 4] = [
     "fn created(name: &str, once: &str, revision: &FileRevision) -> Response {",
     "Json(json!({\"name\": name, \"secret\": once, \"revision\": revision.as_str()})),",
+    "fn held(name: &str, once: &str, revision: &FileRevision) -> Response {",
+    "\"secret\": once,",
 ];
 
 /// The generator seam and the pre-write hook exist only under cfg(test).

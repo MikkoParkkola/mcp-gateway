@@ -42,6 +42,21 @@ pub(crate) fn local_day<Z: TimeZone>(zone: &Z, unix_secs: u64) -> LocalDay {
     }
 }
 
+/// When daily limits next reset after `now`: the next local midnight in
+/// `zone`, or the next UTC midnight while a legacy UTC day is still open.
+/// Only daily spend limits reset, so it exists with cost governance alone.
+#[cfg(feature = "cost-governance")]
+#[cfg_attr(not(feature = "webui"), allow(dead_code))]
+pub(crate) fn next_reset<Z: TimeZone>(zone: &Z, now: u64, legacy_utc: bool) -> u64 {
+    if legacy_utc {
+        (now / 86_400).saturating_add(1).saturating_mul(86_400)
+    } else {
+        // The day's own end: a day is 23 or 25 hours across a DST change, so
+        // its start plus 86 400 would miss the midnight by an hour.
+        local_day(zone, now).end
+    }
+}
+
 /// 9999-12-31T23:59:59Z. Every offset keeps a date this late, or a few days
 /// either side of it, inside chrono's range, so no conversion can overflow.
 const MAX_SECS: i64 = 253_402_300_799;

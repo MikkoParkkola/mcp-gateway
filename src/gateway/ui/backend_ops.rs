@@ -20,6 +20,10 @@ use crate::{
     registry::server_registry,
 };
 
+#[path = "backend_ops_transport.rs"]
+mod transport_merge;
+use transport_merge::merged_transport;
+
 // ── Public data types ─────────────────────────────────────────────────────────
 
 /// Structured summary of a single backend, safe to serialise as JSON.
@@ -94,7 +98,11 @@ pub struct BackendUpdate {
     pub env: Option<HashMap<String, String>>,
     /// Enable or disable the backend.
     pub enabled: Option<bool>,
-    /// Replace the transport (overrides existing when `Some`).
+    /// A new command or address: of the stored transport's kind, only that
+    /// value is taken and any folder, protocol version, HTTP mode or card path
+    /// it carries is ignored; an HTTP address on an A2A server keeps it A2A.
+    /// Another kind replaces the transport whole. An A2A address on another
+    /// origin is refused while the stored card path is not the default one.
     pub transport: Option<TransportConfig>,
     /// Stop this backend when it has been idle this long, or clear the setting.
     ///
@@ -197,6 +205,10 @@ pub(crate) const LITERAL_IN_VALUE: &str = "holds literal text a template would w
 /// The phrase every credential-in-a-command-or-URL refusal carries, so the
 /// CLI can answer it as a usage error (exit 2).
 pub(crate) const CREDENTIAL_IN_ARGV: &str = "would write a credential into gateway.yaml as text";
+
+/// The phrase the refusal of an A2A address on another origin carries (a 422).
+pub(crate) const CARD_TO_OTHER_ORIGIN: &str =
+    "has its own agent card path, which this address would send to another origin";
 
 /// Each credential the saved field would carry as text, as `(code, field)`,
 /// never a value: `command` when given (it takes precedence), else `url`.
@@ -348,7 +360,8 @@ pub fn remove_backend(config: &mut Config, name: &str) -> Result<(), String> {
 ///
 /// `Err(String)` when no backend with `name` exists, or when a secret
 /// reference in the updated backend does not resolve (the message then
-/// carries [`UNRESOLVED_SECRETS`]).
+/// carries [`UNRESOLVED_SECRETS`]), or when it would move an A2A server with
+/// its own card path to another origin ([`CARD_TO_OTHER_ORIGIN`]).
 pub fn update_backend(
     config: &mut Config,
     name: &str,
@@ -372,7 +385,15 @@ pub fn update_backend(
         backend.enabled = enabled;
     }
     if let Some(transport) = update.transport {
-        backend.transport = transport;
+        let merged = merged_transport(backend.transport.clone(), transport);
+        #[cfg(feature = "a2a")]
+        if transport_merge::card_leaves_origin(&backend.transport, &merged) {
+            return Err(format!(
+                "Backend '{name}' {CARD_TO_OTHER_ORIGIN}; change the address and the card \
+                 path together in gateway.yaml."
+            ));
+        }
+        backend.transport = merged;
     }
     if let Some(idle) = update.stop_when_idle_for {
         // Refuse rather than silently drop. The panel is a place operators trust

@@ -200,6 +200,7 @@ async fn failing_secret_save(
         compute: Box::new(move |_| Ok(template)),
         replaced: Replaced::Discard,
         secrets: Some(step),
+        status_change: crate::config_reload::StatusChange::Refuse,
     };
     let audit = AuditPosture::of(None, GatewayAuth::Off)
         .audit(IntentKind::Adopt)
@@ -395,4 +396,225 @@ async fn p3_watcher_reload_queued_behind_outside_reload_lock() {
     })
     .await;
     ticking.await.expect("tick joined");
+}
+
+/// How a row closes the gate before it calls a public reload.
+#[derive(Clone, Copy, Debug)]
+enum Shut {
+    Paused,
+    /// Paused, then checkpointed: the floor holds both locks.
+    Certified,
+    Restarting,
+    Stopping,
+}
+
+/// The floor that closed `booted`'s gate `how`; the row keeps it alive.
+async fn shut(booted: &Booted, how: Shut) -> ConfigFloor {
+    let mut floor = booted.floor();
+    match how {
+        Shut::Paused => floor.pause(deadline()).await.expect("pause"),
+        Shut::Certified => {
+            floor.pause(deadline()).await.expect("pause");
+            floor.checkpoint(deadline()).await.expect("certified");
+        }
+        Shut::Restarting => floor.commit(),
+        Shut::Stopping => floor.release_for_stop(),
+    }
+    floor
+}
+
+/// The two public reload entries of the library.
+#[derive(Clone, Copy, Debug)]
+enum Entry {
+    ReloadOutcome,
+    Reload,
+}
+
+/// One public reload, bounded so a reload that waits on a lock fails the row.
+async fn public_reload(booted: &Booted, entry: Entry) -> Result<String, String> {
+    let ctx = &booted.ctx;
+    let call = async {
+        match entry {
+            Entry::ReloadOutcome => ctx.reload_outcome().await.map(|o| o.changes),
+            Entry::Reload => ctx.reload().await,
+        }
+    };
+    tokio::time::timeout(BOUND, call)
+        .await
+        .unwrap_or_else(|_| panic!("never answered: {entry:?}"))
+}
+
+/// API.4: the public reload entries ask the restart gate. Paused, restarting
+/// and stopping each answer the gate's text and leave the running config; with
+/// the gate open the same call reloads the edit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_public_reload_is_refused_while_the_gate_is_paused() {
+    use crate::config_reload::{RELOAD_REPLAY_OWED, RELOAD_RESTARTING, RELOAD_STOPPING};
+    let closed = [
+        (Shut::Paused, RELOAD_REPLAY_OWED),
+        (Shut::Restarting, RELOAD_RESTARTING),
+        (Shut::Stopping, RELOAD_STOPPING),
+    ];
+    for entry in [Entry::ReloadOutcome, Entry::Reload] {
+        for (how, text) in closed {
+            let row = format!("API.4 {entry:?} {how:?}");
+            let booted = edited_booted("api4");
+            let _floor = shut(&booted, how).await;
+            let got = public_reload(&booted, entry).await;
+            assert_eq!(got, Err(text.to_owned()), "{row}: the gate's text");
+            assert_eq!(
+                booted.running_environment(),
+                None,
+                "{row}: running config kept"
+            );
+        }
+        let row = format!("API.4 {entry:?} open");
+        let booted = edited_booted("api4");
+        let got = public_reload(&booted, entry).await;
+        assert!(got.is_ok(), "{row}: reloads: {got:?}");
+        let running = booted.running_environment();
+        assert_eq!(
+            running.as_deref(),
+            Some("api4"),
+            "{row}: the edit is running"
+        );
+    }
+}
+
+/// The two public write entries of the library.
+#[derive(Clone, Copy, Debug)]
+enum Write {
+    Replace,
+    Mutate,
+}
+
+/// One public write of `environment: written`, bounded like a reload.
+async fn public_write(booted: &Booted, entry: Write) -> Result<(), String> {
+    let (ctx, path) = (&booted.ctx, &booted.cfg.path);
+    let call = async {
+        let done = match entry {
+            Write::Replace => {
+                let mut config = crate::config::Config::load(Some(path.as_path())).expect("loads");
+                config.environment = Some("written".to_owned());
+                ctx.write_and_reload_outcome(path, &config).await.map(drop)
+            }
+            Write::Mutate => ctx
+                .mutate_and_reload_outcome(path, |config: &mut crate::config::Config| {
+                    config.environment = Some("written".to_owned());
+                    Ok::<(), ()>(())
+                })
+                .await
+                .map(drop),
+        };
+        done.map_err(|error| match error {
+            crate::config_reload::ConfigWriteError::Failed(text) => text,
+            busy @ crate::config_reload::ConfigWriteError::Busy => format!("{busy}"),
+        })
+    };
+    tokio::time::timeout(BOUND, call)
+        .await
+        .unwrap_or_else(|_| panic!("never answered: {entry:?}"))
+}
+
+/// API.4, the write entries (sidecar 1): they ask the gate before any lock.
+/// Closed, each answers its fixed text with the file and the running config
+/// as they were; open, each writes and the written value is running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_public_write_is_refused_while_the_gate_is_closed() {
+    use crate::config_reload::{RELOAD_RESTARTING, RELOAD_STOPPING};
+    let closed = [
+        (Shut::Paused, "a restart is being prepared; retry"),
+        (Shut::Certified, "a restart is being prepared; retry"),
+        (Shut::Restarting, RELOAD_RESTARTING),
+        (Shut::Stopping, RELOAD_STOPPING),
+    ];
+    for entry in [Write::Replace, Write::Mutate] {
+        for (how, text) in closed {
+            let row = format!("write {entry:?} {how:?}");
+            let booted = Booted::new(BASE);
+            let _floor = shut(&booted, how).await;
+            let got = public_write(&booted, entry).await;
+            assert_eq!(got, Err(text.to_owned()), "{row}: the fixed text");
+            assert_eq!(booted.cfg.bytes(), BASE.as_bytes(), "{row}: file kept");
+            assert_eq!(booted.running_environment(), None, "{row}: running kept");
+        }
+        let row = format!("write {entry:?} open");
+        let booted = Booted::new(BASE);
+        let got = public_write(&booted, entry).await;
+        assert_eq!(got, Ok(()), "{row}: writes");
+        let running = booted.running_environment();
+        assert_eq!(
+            running.as_deref(),
+            Some("written"),
+            "{row}: the write is running"
+        );
+    }
+}
+
+/// The write entries hold their admission until the reload is done: admitted
+/// before any lock, a write parked on a reload lock an outside holder keeps
+/// holds the checkpoint Pending. Kills a permit dropped at once (`let _ =`):
+/// the in-flight count reads zero.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_admitted_write_holds_the_checkpoint() {
+    use crate::config::Config;
+    for entry in [Write::Replace, Write::Mutate] {
+        let row = format!("held {entry:?}");
+        let booted = Booted::new(BASE);
+        let outside = booted.registry.reload_lock_handle().lock_owned().await;
+        let (ctx, path) = (Arc::clone(&booted.ctx), booted.cfg.path.clone());
+        let mut writing: futures::future::BoxFuture<'static, _> = Box::pin(async move {
+            match entry {
+                Write::Replace => {
+                    let mut config = Config::load(Some(path.as_path())).expect("loads");
+                    config.environment = Some("held".to_owned());
+                    ctx.write_and_reload_outcome(&path, &config).await.map(drop)
+                }
+                Write::Mutate => ctx
+                    .mutate_and_reload_outcome(&path, |config: &mut Config| {
+                        config.environment = Some("held".to_owned());
+                        Ok::<(), ()>(())
+                    })
+                    .await
+                    .map(drop),
+            }
+        });
+        // Polled here until it parks on the held reload lock: past its
+        // admission, so a permit dropped at once is dropped by now.
+        let parked = futures::poll!(&mut writing).is_pending();
+        assert!(parked, "{row}: the write parked on the reload lock");
+        let writing = tokio::spawn(writing);
+        p3_case(&row, &booted, AdmitKind::Write, Probe::Busy, || {
+            drop(outside);
+        })
+        .await;
+        let landed = writing.await.expect("the write task joined");
+        assert!(landed.is_ok(), "{row}: the write landed: {landed:?}");
+    }
+}
+
+/// The watcher reloads on its own admission. A pause that lands after that
+/// admission must not refuse its reload, as asking the gate a second time
+/// would; the tick finishes within 5 s and the edit is running.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_watcher_tick_still_reloads_once_admitted() {
+    const ROW: &str = "watcher admitted";
+    let booted = edited_booted("w9535");
+    // Plays the OS delivering the notify event for the outside edit.
+    booted.gate.record_file_event();
+    let hold = hold_at(&booted.gate, AdmittedPoint::WatcherAfterAdmission);
+    let watcher = super::support::WatcherFixture::new(&booted);
+    let ticking = tokio::spawn(async move { tick(&watcher).await });
+    hold.wait_reached(ROW, "the watcher after admission");
+    let mut floor = booted.floor();
+    floor.pause(deadline()).await.expect("pause");
+    hold.release();
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(5), ticking).await;
+    assert!(matches!(joined, Ok(Ok(()))), "{ROW}: tick done in 5 s");
+    let running = booted.running_environment();
+    assert_eq!(
+        running.as_deref(),
+        Some("w9535"),
+        "{ROW}: the edit is running"
+    );
 }

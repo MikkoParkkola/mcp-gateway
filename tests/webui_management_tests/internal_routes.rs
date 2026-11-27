@@ -258,7 +258,7 @@ fn mounted(path: &str) -> bool {
 }
 
 /// Bodies from `src/gateway/ui/control_plane_mutation_tests.rs` (grant-1, pol-1).
-/// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends.rs:48, :67).
+/// `AddBackendRequest` / `UpdateBackendRequest` (src/gateway/ui/backends/requests.rs:13, :45).
 const ADD_BACKEND: &str = r#"{"name":"probe","url":"http://127.0.0.1:9/probe"}"#;
 const UPDATE_BACKEND: &str = r#"{"description":"probe"}"#;
 /// An unconfirmed preview: the admin gets a 202 and a token, and nothing starts.
@@ -393,7 +393,7 @@ const ROWS: &[Row] = &[
         Method::POST,
         "/ui/api/reload",
         Payload::None,
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // src/gateway/ui/session.rs:123 (dashboard_link)
     row(
@@ -411,36 +411,13 @@ const ROWS: &[Row] = &[
         Payload::None,
         [401, 401, 401, 200],
     ),
-    // src/gateway/ui/activity/access.rs (resolve: no credential 401, a key
-    // with no Activity role 403); mod.rs (admit: no transparency log 404)
-    row(
-        "/ui/api/activity",
-        Method::GET,
-        "/ui/api/activity",
-        Payload::None,
-        [401, 401, 403, 404],
-    ),
-    row(
-        "/ui/api/activity/export",
-        Method::GET,
-        "/ui/api/activity/export",
-        Payload::None,
-        [401, 401, 403, 404],
-    ),
-    row(
-        "/ui/api/activity/{id}",
-        Method::GET,
-        "/ui/api/activity/1-0123456789abcdef",
-        Payload::None,
-        [401, 401, 403, 404],
-    ),
-    // src/gateway/ui/backends.rs:184 (add_backend; no config path in the fixture)
+    // src/gateway/ui/backends.rs:132 (add_backend; no config path in the fixture)
     row(
         "/ui/api/backends",
         Method::POST,
         "/ui/api/backends",
         Payload::Json(ADD_BACKEND),
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // backends.rs:388 (update_backend)
     row(
@@ -448,7 +425,7 @@ const ROWS: &[Row] = &[
         Method::PATCH,
         "/ui/api/backends/docs",
         Payload::Json(UPDATE_BACKEND),
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // backends.rs:273 (remove_backend)
     row(
@@ -456,7 +433,7 @@ const ROWS: &[Row] = &[
         Method::DELETE,
         "/ui/api/backends/docs",
         Payload::None,
-        [401, 403, 403, 503],
+        [401, 403, 403, 409],
     ),
     // backends.rs:337 (revive_backend)
     row(
@@ -676,7 +653,8 @@ const ROWS: &[Row] = &[
     ),
 ];
 
-const GROUPS: [&[Row]; 5] = [
+const GROUPS: [&[Row]; 6] = [
+    activity::ROWS,
     control_plane::ROWS,
     gateway_rows::ROWS,
     pending::ROWS,
@@ -793,6 +771,8 @@ fn every_doc_internal_route_has_rows_and_no_other() {
     );
 }
 
+#[path = "internal_routes_activity.rs"]
+mod activity;
 #[path = "internal_routes_capabilities.rs"]
 mod capabilities;
 #[path = "internal_routes_control_plane_tests.rs"]

@@ -16,6 +16,8 @@ on:
       - 'ui-tests/**'
       - 'scripts/dev/rehash_ui_assets.py'
       - 'scripts/dev/test_rehash_ui_assets.py'
+      - 'scripts/dev/merge_ui_line.py'
+      - 'scripts/dev/test_merge_ui_line.py'
       - '.github/workflows/ui-tests.yml'
   push:
     branches: [main, docs/ranking-1-release-line]
@@ -24,6 +26,8 @@ on:
       - 'ui-tests/**'
       - 'scripts/dev/rehash_ui_assets.py'
       - 'scripts/dev/test_rehash_ui_assets.py'
+      - 'scripts/dev/merge_ui_line.py'
+      - 'scripts/dev/test_merge_ui_line.py'
       - '.github/workflows/ui-tests.yml'
 
 permissions:
@@ -53,6 +57,11 @@ jobs:
       - name: Check the asset rehash script hashes in import order
         working-directory: .
         run: python3 -I scripts/dev/test_rehash_ui_assets.py
+      # Two UI branches collide on the hashed files; the merge script re-derives them, and refuses rather than
+      # half-merge. Its rows build throwaway git repos, so they need only git and python.
+      - name: Check the UI branch merge script on fixture repos
+        working-directory: .
+        run: python3 -I scripts/dev/test_merge_ui_line.py
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24

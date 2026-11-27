@@ -1,0 +1,3 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/keys.rs	addressable	name_refusal	1	no-record	the key list asks the shared name rule only to mark an entry addressable true or false; it refuses nothing and answers no tool call
+src/gateway/ui/keys_create.rs	create_key	name_refusal	1	no-record	the admin key create refuses a name its own routes could not address (. or .., or a control character) with 422 before any write; an admin route answer, never a tool call's

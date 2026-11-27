@@ -1,0 +1,2 @@
+# file	function	kind	count	class	reason
+src/capability/openapi/generated.rs	write_to_file	open-create	1	no-secret	generated capability YAML, created only if absent; public

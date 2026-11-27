@@ -3,7 +3,9 @@
 //! The health history through a real start: `Gateway::run` saves health.json
 //! and counters.json before it serves, records a clean stop at shutdown, and
 //! starts and serves even when neither file can be written. A file that does
-//! not decode is moved aside, never overwritten.
+//! not decode is moved aside, never overwritten. Every start here also reads
+//! `GET /ui/api/gateway/health` as the admin: 200 proves the start attached
+//! its history to the handler the route reads.
 
 use std::time::Duration;
 
@@ -52,6 +54,19 @@ async fn run_once(tasks: &std::path::Path, data: &std::path::Path, at_bound: imp
         .await
         .expect("answered");
     assert_eq!(response.status(), 200, "the gateway serves");
+    // The health read answers from the history the start attached to its
+    // handler (run.rs); without that attach it answers 503.
+    let health = reqwest::Client::new()
+        .get(format!("http://127.0.0.1:{port}/ui/api/gateway/health"))
+        .bearer_auth(TOKEN)
+        .send()
+        .await
+        .expect("answered");
+    assert_eq!(
+        health.status(),
+        200,
+        "the start attaches its health history"
+    );
     trigger.send(()).expect("run holds the trigger");
     let ended = tokio::time::timeout(Duration::from_secs(30), server)
         .await

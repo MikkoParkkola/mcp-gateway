@@ -22,6 +22,8 @@ mod json;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use super::{CliExit, fail};
+
 use mcp_gateway::skills::{
     ImportedSkill, SkillRegistry, default_agent_paths, install_bundles, parse_skill_dir,
     parse_skill_file, renderer::render_bundles,
@@ -41,21 +43,14 @@ pub async fn run_skills_generate(
     // (MIK-8044, `super::capability_dirs`).
     let dirs = match super::capability_dirs::resolve(capabilities, config) {
         Ok(dirs) => dirs,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return e.exit(),
     };
     let mut caps = match super::capability_dirs::load(&dirs).await {
         Ok(c) => c.all().to_vec(),
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return e.exit(),
     };
     if caps.is_empty() && matches!(dirs, super::capability_dirs::CapabilityDirs::Configured(_)) {
-        eprintln!("{}.", super::capability_dirs::NONE_FOUND);
-        return ExitCode::FAILURE;
+        return super::capability_dirs::none_found_failure();
     }
 
     // Apply optional filters
@@ -68,8 +63,11 @@ pub async fn run_skills_generate(
     }
 
     if caps.is_empty() {
-        eprintln!("No capabilities matched the given filters.");
-        return ExitCode::FAILURE;
+        return fail(
+            CliExit::LocalFailure,
+            "No capabilities matched the given filters",
+            "Run 'mcp-gateway tool list' to see the tools, then adjust --server or --category.",
+        );
     }
 
     let bundles = render_bundles(&caps);
@@ -107,10 +105,11 @@ pub async fn run_skills_generate(
             println!("\nDone. {} bundle(s) generated.", results.len());
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Error: Failed to install skill bundles: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &format!("Failed to install skill bundles: {e}"),
+            &format!("Check that you can write {}.", out_dir.display()),
+        ),
     }
 }
 
@@ -124,23 +123,26 @@ pub async fn run_skills_import(source: String, registry_path: Option<PathBuf>) -
     let skill = match load_skill_from_source(&source).await {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &e,
+                &format!(
+                    "Check that {source} is a SKILL.md file, a folder holding one, or an http(s) URL."
+                ),
+            );
         }
     };
 
     let mut registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: Failed to load registry '{}': {e}", path.display());
-            return ExitCode::FAILURE;
+            return registry_unreadable(&path, &e);
         }
     };
 
     let replaced = registry.insert(skill.clone());
     if let Err(e) = registry.save(&path) {
-        eprintln!("Error: Failed to save registry '{}': {e}", path.display());
-        return ExitCode::FAILURE;
+        return registry_unsaved(&path, &e);
     }
 
     if replaced {
@@ -174,8 +176,7 @@ pub fn run_skills_list(
     let registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: Failed to load registry '{}': {e}", path.display());
-            return ExitCode::FAILURE;
+            return registry_unreadable(&path, &e);
         }
     };
 
@@ -206,8 +207,7 @@ pub fn run_skills_search(
     let registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: Failed to load registry '{}': {e}", path.display());
-            return ExitCode::FAILURE;
+            return registry_unreadable(&path, &e);
         }
     };
 
@@ -238,16 +238,12 @@ pub fn run_skills_show(
     let registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: Failed to load registry '{}': {e}", path.display());
-            return ExitCode::FAILURE;
+            return registry_unreadable(&path, &e);
         }
     };
 
     let Some(skill) = registry.get(name) else {
-        eprintln!(
-            "Error: skill '{name}' not found. Run `mcp-gateway skills list` to see all skills."
-        );
-        return ExitCode::FAILURE;
+        return skill_not_found(name);
     };
     if render == crate::cli::output::Render::Json {
         return crate::cli::output::print_document(json::show(skill));
@@ -302,25 +298,52 @@ pub fn run_skills_remove(name: &str, registry_path: Option<PathBuf>) -> ExitCode
     let mut registry = match SkillRegistry::load(&path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("Error: Failed to load registry '{}': {e}", path.display());
-            return ExitCode::FAILURE;
+            return registry_unreadable(&path, &e);
         }
     };
 
     if registry.remove(name).is_none() {
-        eprintln!("Error: skill '{name}' not found.");
-        return ExitCode::FAILURE;
+        return skill_not_found(name);
     }
 
     if let Err(e) = registry.save(&path) {
-        eprintln!("Error: Failed to save registry '{}': {e}", path.display());
-        return ExitCode::FAILURE;
+        return registry_unsaved(&path, &e);
     }
     println!("Removed '{name}' from {}", path.display());
     ExitCode::SUCCESS
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+
+/// The registry at `path` could not be read: the remedy names it.
+fn registry_unreadable(path: &Path, error: &impl std::fmt::Display) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!("Failed to load registry '{}': {error}", path.display()),
+        &format!(
+            "Fix or remove {}, or pass --registry naming another.",
+            path.display()
+        ),
+    )
+}
+
+/// The registry at `path` could not be saved.
+fn registry_unsaved(path: &Path, error: &impl std::fmt::Display) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!("Failed to save registry '{}': {error}", path.display()),
+        &format!("Check that you can write {}.", path.display()),
+    )
+}
+
+/// No skill called `name` in the registry.
+fn skill_not_found(name: &str) -> ExitCode {
+    fail(
+        CliExit::LocalFailure,
+        &format!("skill '{name}' not found"),
+        "Run 'mcp-gateway skills list' to see all skills.",
+    )
+}
 
 fn resolve_registry_path(path: Option<PathBuf>) -> PathBuf {
     path.unwrap_or_else(SkillRegistry::default_path)

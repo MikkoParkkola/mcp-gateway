@@ -47,7 +47,7 @@ fn a_duplicate_name_is_refused_without_removal() {
 
 /// A file that does not load (here: a duplicate name) has no A12 revision,
 /// so no revoke can take the write path: the shared answer every config
-/// writing route gives (503, "gateway.yaml could not be loaded"), nothing
+/// writing route gives (409, "gateway.yaml could not be loaded"), nothing
 /// written.
 #[test]
 fn an_unloadable_file_takes_no_revoke() {
@@ -59,12 +59,7 @@ fn an_unloadable_file_takes_no_revoke() {
         "premise: no revision for an unloadable file"
     );
     let sent = delete(&fx, "target", Call::new(&json!({"revision": "any"})), None);
-    assert_eq!(
-        sent.status,
-        StatusCode::SERVICE_UNAVAILABLE,
-        "{}",
-        sent.body
-    );
+    assert_eq!(sent.status, StatusCode::CONFLICT, "{}", sent.body);
     assert_eq!(
         sent.json(),
         json!({"error": "gateway.yaml could not be loaded"})

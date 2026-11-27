@@ -14,6 +14,7 @@ fn decides(error: &Error) -> bool {
         Error::Forbidden { .. } => true,
         Error::Config(_)
         | Error::ResponseFirewallRefused
+        | Error::ResponseTooLarge { .. }
         | Error::AuditUnavailable
         | Error::ConfigValidation(_)
         | Error::ConfigWatcher(_)
@@ -61,6 +62,7 @@ fn every_variant() -> Vec<Error> {
             message: s(),
         },
         Error::ResponseFirewallRefused,
+        Error::ResponseTooLarge { limit: 1 },
         Error::AuditUnavailable,
         Error::ConfigValidation(s()),
         Error::ConfigWatcher(s()),

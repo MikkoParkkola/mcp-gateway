@@ -369,7 +369,7 @@ fn admintok_1_existing_config_refusal_preserves_all_files_and_store_bytes() {
     let before = output_files(root.path());
     let out = failed_init(root.path(), &path, true);
     let expected = format!(
-        "Error: {} already exists. Remove it first or choose a different path with --output.\n",
+        "error: {} already exists.\nRemove it first or choose a different path with --output.\n",
         path.display()
     );
     assert!(
@@ -399,7 +399,7 @@ fn admintok_1_sample_create_failure_removes_owned_files_and_entry_preserving_com
     std::fs::write(&competitor, b"competing bytes").expect("competitor");
     let path = root.path().join("gateway.yaml");
     let out = failed_init(root.path(), &path, true);
-    let error = format!("Error: {}: {collision}", blocked.display());
+    let error = format!("error: {}: {collision}", blocked.display());
     assert!(
         String::from_utf8_lossy(&out.stderr)
             .lines()
@@ -448,7 +448,7 @@ fn admintok_1_chosen_store_create_failure_leaves_no_config_samples_or_literal_fa
     no_token_leaks(root.path(), &out, None);
 }
 
-const STORE_FAILURE: &str = "Error: init store failed; inspect unused entries with doctor \
+const STORE_FAILURE: &str = "error: init store failed; inspect unused entries with doctor \
                             and remove any orphan before retrying";
 
 /// R5 / A2: a handled store-probe failure prints the helper's entire message.
@@ -460,7 +460,12 @@ fn admintok_1_handled_failure_reports_whole_helper_message_without_write_wrapper
     let path = root.path().join("gateway.yaml");
     let out = failed_init(root.path(), &path, false);
     assert!(
-        out.stderr == format!("{STORE_FAILURE}\n").as_bytes(),
+        out.stderr
+            == format!(
+                "{STORE_FAILURE}\nCheck that the folder of {} exists and that you can write to it.\n",
+                path.display()
+            )
+            .as_bytes(),
         "whole helper message"
     );
     assert!(!String::from_utf8_lossy(&out.stderr).contains("Failed to write"));

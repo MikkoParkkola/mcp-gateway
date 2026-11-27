@@ -274,6 +274,19 @@ impl MetaMcp {
         self.decisions.get()
     }
 
+    /// Attach the health history the server records into. Called once by the
+    /// HTTP server; a second call is ignored.
+    pub(crate) fn set_health_history(&self, history: Arc<crate::health_history::HealthHistory>) {
+        let _ = self.health_history.set(history);
+    }
+
+    /// The health history, when the server attached one: a handle on this
+    /// gateway, not a process-wide one, so a test that builds a router without
+    /// one gets the route's 503 whatever else ran in the process.
+    pub(crate) fn health_history(&self) -> Option<&Arc<crate::health_history::HealthHistory>> {
+        self.health_history.get()
+    }
+
     /// Every live grant row, copied: what the decision set closes against.
     pub(crate) fn grant_rows(&self) -> Vec<crate::identity_grants::IdentityGrant> {
         self.identity_grants.read().values().cloned().collect()

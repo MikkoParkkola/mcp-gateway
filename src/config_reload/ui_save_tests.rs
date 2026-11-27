@@ -140,6 +140,7 @@ impl Gw {
             WAIT,
         )
         .await
+        .result
     }
 }
 
@@ -541,7 +542,15 @@ fn every_writer_result_maps_to_one_refusal() {
         (
             ReplaceError::AuditRefused("a".into()),
             None,
-            Mapped::Refusal(UiRefused::NoAuditLog),
+            Mapped::Refusal(UiRefused::AuditRefused),
+        ),
+        (
+            ReplaceError::WriterRefused {
+                code: "target-changed",
+                text: "w".into(),
+            },
+            None,
+            Mapped::Refusal(UiRefused::WriterRefused),
         ),
         (
             ReplaceError::Secrets(SaveError::Refused(StoreError::Unavailable("u".into()))),
@@ -636,3 +645,7 @@ fn k7_store_timeout_stays_timeout() {
         super::Mapped::Refusal(UiRefused::SecretsRefused { timeout: true })
     ));
 }
+
+/// The save's write trace and outcome word.
+#[path = "ui_save_outcome_tests.rs"]
+mod outcome;

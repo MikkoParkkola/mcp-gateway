@@ -540,3 +540,14 @@ async fn read_card_file_refuses_deep_unread_field() {
         .expect_err("10k-deep card must be refused");
     assert!(err.contains("nesting deeper than 128"), "got: {err}");
 }
+
+/// A `--format json` report that cannot be serialised exits 1, no longer 0 with the error printed. Only the code is
+/// pinned here: the two lines come from `fail`, whose shape its own rows pin.
+#[test]
+fn a_json_report_that_cannot_be_serialised_exits_1() {
+    // serde_json refuses a map key that is not a string.
+    let unprintable = std::collections::BTreeMap::from([((1_u8, 2_u8), 3_u8)]);
+    assert_eq!(super::output::print_json(&unprintable), ExitCode::from(1));
+    let printable = std::collections::BTreeMap::from([("a", 1_u8)]);
+    assert_eq!(super::output::print_json(&printable), ExitCode::SUCCESS);
+}

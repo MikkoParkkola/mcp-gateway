@@ -15,12 +15,11 @@
 use crate::gateway::routes;
 use std::sync::Arc;
 
-use axum::extract::{Path as AxumPath, Query, State};
+use axum::extract::{Path as AxumPath, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, patch, post};
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use super::admin_audit::attach_selection;
@@ -28,9 +27,9 @@ use super::guard::Guard;
 use super::refusals::WriteTicket;
 use super::{
     backend_ops::{
-        BackendUpdate, LITERAL_IN_VALUE, UNRESOLVED_SECRETS, add_backend as add_backend_config,
-        remove_backend as remove_backend_config, resolve_backend,
-        update_backend as update_backend_config,
+        BackendUpdate, CARD_TO_OTHER_ORIGIN, LITERAL_IN_VALUE, UNRESOLVED_SECRETS,
+        add_backend as add_backend_config, remove_backend as remove_backend_config,
+        resolve_backend, update_backend as update_backend_config,
     },
     errors::{config_path_unavailable, flat_error},
 };
@@ -38,10 +37,12 @@ use crate::config::TransportConfig;
 use crate::config_reload::BackendOp;
 use crate::config_reload::refusals::RefusalKind;
 use crate::gateway::router::AppState;
+#[cfg(test)]
 use crate::registry::server_registry;
 
 // ── Request / response types ────────────────────────────────────────────────
 
+pub(super) mod add_checks;
 mod requests;
 mod update_refusals;
 pub use requests::{AddBackendRequest, UpdateBackendRequest};
@@ -52,82 +53,9 @@ mod signin_flow;
 mod slotting;
 mod write;
 use write::write_backend;
-
-/// Query parameters for `GET /ui/api/registry/search`.
-#[derive(Debug, Deserialize)]
-pub struct SearchQuery {
-    /// Keyword to match against name, description, and category.
-    pub q: Option<String>,
-}
-
-/// JSON representation of a registry entry (serialisable).
-#[derive(Debug, Serialize)]
-pub struct RegistryEntryJson {
-    /// Short identifier (e.g. `"tavily"`).
-    pub name: &'static str,
-    /// Human-readable description.
-    pub description: &'static str,
-    /// Launch command (e.g. `"npx -y tavily-mcp@0.2.22"`).
-    pub command: &'static str,
-    /// Environment variables that must be set for this server.
-    pub required_env: &'static [&'static str],
-    /// Environment variables that are optional.
-    pub optional_env: &'static [&'static str],
-    /// Transport type: `"stdio"` or `"http"`.
-    pub transport: &'static str,
-    /// Functional category (e.g. `"search"`, `"database"`).
-    pub category: &'static str,
-    /// Project homepage URL.
-    pub homepage: &'static str,
-    /// What the user supplies: `none`, `env: A, B`, `oauth`, or `header: NAME (VAR)`.
-    pub login: String,
-    /// True when the server needs an account, key or login.
-    pub needs_login: bool,
-    /// True for the starter set `mcp-gateway init` writes enabled.
-    pub default_enabled: bool,
-    /// Why `add` writes it disabled, when its reach is arbitrary.
-    pub reach_reason: Option<&'static str>,
-    /// What it needs beyond its command (arguments, a running service).
-    pub setup: Option<&'static str>,
-}
-
-impl From<&'static server_registry::ServerCatalogEntry> for RegistryEntryJson {
-    fn from(e: &'static server_registry::ServerCatalogEntry) -> Self {
-        let transport = match e.transport {
-            server_registry::CatalogTransport::Stdio => "stdio",
-            server_registry::CatalogTransport::Http { .. } => "http",
-        };
-        Self {
-            name: e.name,
-            description: e.description,
-            command: e.command,
-            required_env: e.required_env,
-            optional_env: e.optional_env,
-            transport,
-            category: e.category,
-            homepage: e.homepage,
-            login: match e.auth {
-                server_registry::Auth::None => "none".to_string(),
-                server_registry::Auth::EnvVars => format!("env: {}", e.required_env.join(", ")),
-                server_registry::Auth::OAuth => "oauth".to_string(),
-                server_registry::Auth::Header { name, .. } => {
-                    format!("header: {name} ({})", e.required_env.join(", "))
-                }
-            },
-            needs_login: e.needs_login(),
-            default_enabled: e.default_enabled(),
-            reach_reason: match e.reach {
-                server_registry::Reach::Arbitrary { reason } => Some(reason),
-                server_registry::Reach::Bounded => None,
-            },
-            setup: match e.setup {
-                server_registry::Setup::Ready => None,
-                server_registry::Setup::NeedsArgs { hint }
-                | server_registry::Setup::NeedsService { hint } => Some(hint),
-            },
-        }
-    }
-}
+mod registry;
+pub use registry::{RegistryEntryJson, SearchQuery};
+use registry::{list_registry, search_registry};
 
 // ── Router builder ───────────────────────────────────────────────────────────
 
@@ -171,26 +99,12 @@ async fn add_backend(
         return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
     }
 
-    if let Some(list) = &req.allowed_tools
-        && let Err(refused) = crate::config::check_backend_allowed_tools(&req.name, list)
-    {
-        return flat_error(StatusCode::UNPROCESSABLE_ENTITY, refused.to_string()).into_response();
-    }
-
-    // A credential in the saved command or URL is refused by field before
-    // anything is resolved (it would land in gateway.yaml as text).
-    if let Some(answer) = update_refusals::credential_answer(
-        &state,
-        RefusalKind::Add,
-        &req.name,
-        req.command.as_deref(),
-        req.url.as_deref(),
-    ) {
+    if let Some(answer) = add_checks::add_answer(&state, &req) {
         return answer;
     }
     // Resolve the whole backend: transport, description, and for a registry
     // entry its login, env templates and default state.
-    let resolved = match resolve_backend(
+    let mut resolved = match resolve_backend(
         req.registry.as_deref().unwrap_or(&req.name),
         req.command.as_deref(),
         req.url.as_deref(),
@@ -202,6 +116,15 @@ async fn add_backend(
             return flat_error(StatusCode::UNPROCESSABLE_ENTITY, msg).into_response();
         }
     };
+    add_checks::put_headers(
+        &mut resolved.backend,
+        req.headers,
+        req.allow_cleartext_credentials,
+    );
+    let cleartext_override = resolved.backend.allow_cleartext_credentials;
+    if let Some(answer) = add_checks::cleartext_answer(&state, &req.name, &resolved.backend) {
+        return answer;
+    }
 
     // The shared value rule: a refused value is answered by field and code,
     // and each literal goes to the secret store (gateway.yaml holds its
@@ -274,9 +197,8 @@ async fn add_backend(
         })),
     )
         .into_response();
-    if selected.is_some() {
-        attach_selection(&mut response, &req.name, None, selected.as_deref());
-    }
+    let selection = selected.as_deref();
+    add_checks::attach_add_detail(&mut response, &req.name, selection, cleartext_override);
     response
 }
 
@@ -448,6 +370,7 @@ async fn update_backend(
     let updated = name.clone();
     let ticket = WriteTicket::new(&state);
     let in_lock = ticket.clone();
+    let stored = slotting::stored_env_keys(slotted.as_ref());
     let mutation = write_backend(
         &state,
         BackendOp::Update,
@@ -457,6 +380,14 @@ async fn update_backend(
         move |config| {
             if !config.backends.contains_key(&name) {
                 return Err((StatusCode::NOT_FOUND, format!("Backend '{name}' not found")));
+            }
+            // A slot that became a secret reference since the read above
+            // never gets a literal written over it as typed.
+            if let Some(raced) = env
+                .as_ref()
+                .and_then(|env| slotting::now_held(config, &name, env, &stored))
+            {
+                return Err((StatusCode::CONFLICT, raced));
             }
 
             let transport = requested_transport(command, url);
@@ -556,55 +487,18 @@ fn add_refusal(name: &str, message: String) -> (StatusCode, String) {
 }
 
 /// An update that `update_backend` refused: 404 for a missing backend, 422
-/// for a secret reference that does not resolve (ADR-028), else 400.
+/// for a secret reference that does not resolve (ADR-028) or an A2A card path
+/// the new address would send to another origin, else 400.
 fn update_refusal_status(message: &str) -> StatusCode {
     // The marker first: an unresolved `env:` names a missing env file in its
     // hint, which says "not found".
-    if message.contains(UNRESOLVED_SECRETS) {
+    if message.contains(UNRESOLVED_SECRETS) || message.contains(CARD_TO_OTHER_ORIGIN) {
         StatusCode::UNPROCESSABLE_ENTITY
     } else if message.contains("not found") {
         StatusCode::NOT_FOUND
     } else {
         StatusCode::BAD_REQUEST
     }
-}
-
-/// `GET /ui/api/registry` — list all built-in registry entries as JSON.
-async fn list_registry(guard: Guard) -> impl IntoResponse {
-    if let Err(refused) = guard.admit() {
-        return refused.into_response();
-    }
-
-    let entries: Vec<RegistryEntryJson> = server_registry::all()
-        .iter()
-        .map(RegistryEntryJson::from)
-        .collect();
-
-    Json(json!({"entries": entries, "total": entries.len()})).into_response()
-}
-
-/// `GET /ui/api/registry/search?q=` — search registry by keyword.
-///
-/// Matches against name, description, and category (case-insensitive).
-async fn search_registry(guard: Guard, Query(params): Query<SearchQuery>) -> impl IntoResponse {
-    if let Err(refused) = guard.admit() {
-        return refused.into_response();
-    }
-
-    let q = params.q.as_deref().unwrap_or("").trim().to_string();
-    let entries: Vec<RegistryEntryJson> = if q.is_empty() {
-        server_registry::all()
-            .iter()
-            .map(RegistryEntryJson::from)
-            .collect()
-    } else {
-        server_registry::search(&q)
-            .into_iter()
-            .map(RegistryEntryJson::from)
-            .collect()
-    };
-
-    Json(json!({"entries": entries, "total": entries.len(), "query": q})).into_response()
 }
 
 // ── Private helpers ───────────────────────────────────────────────────────────
@@ -660,6 +554,17 @@ mod tests {
         assert_eq!(
             update_refusal_status("stop when idle refused"),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    /// XPORT.2: the refusal of an A2A address on another origin is a 422.
+    #[test]
+    fn xport2_an_own_card_path_on_another_origin_is_422() {
+        let marker = crate::gateway::ui::backend_ops::CARD_TO_OTHER_ORIGIN;
+        let message = format!("Backend 'x' {marker}; edit gateway.yaml.");
+        assert_eq!(
+            update_refusal_status(&message),
+            StatusCode::UNPROCESSABLE_ENTITY
         );
     }
 

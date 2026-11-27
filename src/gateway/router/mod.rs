@@ -238,6 +238,10 @@ mod task_lifecycle_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod activity_secret_tests;
+
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod activity_counts_route_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "metrics"))]
 mod backend_origin_count_tests;
@@ -263,6 +267,9 @@ mod f13_fetch_on_miss_tests;
 mod f13_text_a_tests;
 #[cfg(all(test, feature = "firewall"))]
 mod firewall_publish_fixture;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod gateway_health_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod gateway_status_tests;
@@ -324,6 +331,12 @@ mod metrics_scrape_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod mik8154_lease_rows_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod overview_decisions_tests;
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod overview_needs_you_tests;
 #[cfg(tp1)]
 #[cfg(all(test, feature = "webui"))]
 mod overview_sources_tests;
@@ -522,6 +535,9 @@ mod reload_status_tests;
 pub(super) mod route_matrix_driver_tests;
 #[cfg(all(test, feature = "firewall"))]
 pub(super) mod route_matrix_x14_nonce_tests;
+#[cfg(tp1)]
+#[cfg(test)]
+mod server_name_route_tests;
 /// MIK-8504: the provisional-session cap refuses before anything runs.
 /// MIK-8533: past the POST cap a sessionless legacy call is served without a session.
 #[cfg(tp1)]
@@ -530,6 +546,10 @@ mod session_capacity_degrade_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod session_capacity_tests;
+/// A settings save's outcome and intent id on its one admin record.
+#[cfg(tp1)]
+#[cfg(all(test, feature = "webui"))]
+mod settings_save_audit_tests;
 #[cfg(tp1)]
 #[cfg(test)]
 mod slot_quota_direct_tests;
