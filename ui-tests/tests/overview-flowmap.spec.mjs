@@ -268,6 +268,11 @@ async function liveMap(page, body) {
   return live;
 }
 const fire = (page, name = 'gateway-status') => page.evaluate((e) => dispatchEvent(new CustomEvent(e)), name);
+/** A status event, then the paused clock runs on until the overview has been read `n` times. */
+async function readAgain(page, live, n) {
+  await fire(page);
+  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(n);
+}
 const probe = (page) => map(page).locator('li.ov-row').evaluateAll((ls) => ls.forEach((l) => { l.dataset.probe = l.querySelector('.ov-row-name').textContent; }));
 const probes = (rows) => rows.evaluateAll((ls) => ls.map((l) => l.dataset.probe ?? ''));
 
@@ -378,8 +383,7 @@ test('L2b a read answered after the map left changes nothing', async ({ page }) 
   const held = await liveMap(page, SMALL);
   let release;
   held.hold = new Promise((r) => { release = r; });
-  await fire(page);
-  await expect.poll(async () => { await page.clock.runFor(300); return held.reads; }).toBe(2);
+  await readAgain(page, held, 2);
   await page.evaluate(() => document.querySelector('#content [data-panel="flow-map"]').remove());
   release();
   await page.clock.runFor(2500);
@@ -391,14 +395,12 @@ test('L2b a read answered after the map left changes nothing', async ({ page }) 
 test('L3 a failed re-read says so under the map, and the next good one clears it', async ({ page }) => {
   const live = await liveMap(page, SMALL);
   live.status = 500;
-  await fire(page);
-  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(2);
+  await readAgain(page, live, 2);
   await expect(map(page).locator('.ov-map-stale')).toHaveText('Not updated since 14:00');
   await expect(map(page).locator('.ov-map-stale')).toBeVisible();
   await expect(callsOf(agentRows(page))).toHaveText(['120', '80', '40']);
   live.status = 0;
-  await fire(page);
-  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(3);
+  await readAgain(page, live, 3);
   await expect(map(page).locator('.ov-map-stale')).toBeHidden();
 });
 
@@ -408,8 +410,7 @@ test('S1b two servers with one served name stay two rows across an update', asyn
   const live = await liveMap(page, body(2, 1));
   await serverRows(page).evaluateAll((ls) => ls.forEach((l, i) => { l.dataset.probe = String(i); }));
   live.body = body(5, 4);
-  await fire(page);
-  await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(2);
+  await readAgain(page, live, 2);
   await expect(callsOf(serverRows(page))).toHaveText(['5', '4']);
   expect(await probes(serverRows(page))).toEqual(['0', '1']);
 });
@@ -426,8 +427,7 @@ test('R1 nothing moves with reduced motion, and at most three dots pulse at once
   });
   still.body = blocked(5, (i) => (i === 0 ? 2 : 0));
   still.body.edges.rows[1].calls = 1;
-  await fire(page);
-  await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(2);
+  await readAgain(page, still, 2);
   await expect(map(page).locator('.ov-dot:visible')).toHaveCount(1);
   // The rule itself, read from the computed style: motion events alone can miss a pulse or a line.
   expect(await map(page).evaluate((card) => ({
@@ -441,16 +441,14 @@ test('R1 nothing moves with reduced motion, and at most three dots pulse at once
   // later still leave at most three pulsing.
   await page.emulateMedia({ reducedMotion: 'no-preference' });
   still.body = blocked(6, (i) => (i < 5 ? 1 : 0));
-  await fire(page);
-  await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(3);
+  await readAgain(page, still, 3);
   await expect(map(page).locator('.ov-dot:visible')).toHaveCount(5);
   const pulsing = () => map(page).locator('.ov-pulse').count();
   expect(await pulsing()).toBeLessThanOrEqual(3);
   expect(await map(page).locator('.ov-pulse').first().evaluate((d) => getComputedStyle(d, '::before').animationIterationCount)).not.toBe('infinite');
   await page.clock.runFor(1000);
   still.body = blocked(9, () => 1);
-  await fire(page);
-  await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(4);
+  await readAgain(page, still, 4);
   expect(await pulsing()).toBeLessThanOrEqual(3);
 });
 
@@ -484,4 +482,51 @@ test('A2 Tab reaches every row link and dot of the map, in page order', async ({
   expect(links.length).toBeGreaterThan(5);
   await map(page).locator('h2').evaluate((e) => { e.tabIndex = -1; e.focus(); });
   expect(await tabStops(page, links.length)).toEqual(links);
+});
+
+test('G1 on a wide screen the dot sits on its line, halfway from the caller to the hub', async ({ page }) => {
+  await showMap(page, WITH_DOT, 1440);
+  const off = await map(page).locator('.ov-map').evaluate((box) => {
+    const rows = [...box.querySelectorAll('ol.ov-agents > li')];
+    const i = rows.findIndex((li) => li.querySelector('.ov-dot:not(.ov-dot-off)'));
+    const m = box.getBoundingClientRect();
+    const d = rows[i].querySelector('.ov-dot').getBoundingClientRect();
+    const y = ((i + 0.5) / rows.length) * 100;
+    // The curve's middle: x halfway between the callers' edge (37.5) and the hub (50), y halfway to 50.
+    return { x: d.left + d.width / 2 - (m.left + m.width * 0.4375), y: d.top + d.height / 2 - (m.top + (m.height * (y + 50)) / 200) };
+  });
+  expect(Math.abs(off.x), 'across').toBeLessThanOrEqual(2);
+  expect(Math.abs(off.y), 'down').toBeLessThanOrEqual(2);
+});
+
+test('G2 no line is wider than 8 px, the callers fold row included', async ({ page }) => {
+  await showMap(page, big());
+  const widths = await map(page).locator('svg.ov-lines path[data-side="agents"]').evaluateAll((ps) => ps.map((p) => Number(p.getAttribute('stroke-width'))));
+  expect(widths).toHaveLength(6);
+  expect(Math.max(...widths)).toBe(8);
+  expect(Math.min(...widths)).toBeGreaterThanOrEqual(1);
+});
+
+test('G3 a caller that arrives with blocked calls pulses', async ({ page }) => {
+  const live = await liveMap(page, SMALL);
+  live.body = flowBody({ edges: [...SMALL.edges.rows, edge('key:new', 'github', 200, 3)], servers: SMALL.servers.rows });
+  await readAgain(page, live, 2);
+  await expect(names(agentRows(page)).first()).toHaveText('new');
+  await expect(agentRows(page).first().locator('.ov-dot')).toHaveClass(/ov-pulse/);
+});
+
+test('G4 a focused row keeps focus when an update moves it', async ({ page }) => {
+  const live = await liveMap(page, SMALL);
+  await agentRows(page).nth(2).locator('a.ov-row-go').focus();
+  live.body = flowBody({ edges: [...SMALL.edges.rows.filter((e) => e.caller !== 'session:s1'), edge('session:s1', 'linear', 500)], servers: SMALL.servers.rows });
+  await readAgain(page, live, 2);
+  await expect(names(agentRows(page)).first()).toHaveText('s1');
+  await expect(agentRows(page).first().locator('a.ov-row-go')).toBeFocused();
+});
+
+test('G5 on a narrow screen with a mouse the dot, shown as words, is still a 24 px target', async ({ page }) => {
+  await showMap(page, WITH_DOT, 390);
+  const box = await map(page).locator('a.ov-dot:visible').boundingBox();
+  expect(box.height).toBeGreaterThanOrEqual(24);
+  expect(box.width).toBeGreaterThanOrEqual(24);
 });
