@@ -21,9 +21,11 @@ fn hub_at(dir: &std::path::Path, audit: &std::path::Path) -> Arc<EventsHub> {
     let config = crate::config::EventsConfig::default();
     let hub = EventsHub::open(&config, dir).expect("hub");
     hub.register_source(Arc::new(Probe::default()));
-    let mut log = crate::security::TransparencyLogConfig::default();
-    log.enabled = true;
-    log.path = audit.to_string_lossy().into_owned();
+    let log = crate::security::TransparencyLogConfig {
+        enabled: true,
+        path: audit.to_string_lossy().into_owned(),
+        ..Default::default()
+    };
     let log = crate::security::TransparencyLogger::open(Arc::new(log)).expect("audit log");
     let _ = hub.runtime.services.set(Arc::new(Services {
         audit: Some(Arc::new(log)),
