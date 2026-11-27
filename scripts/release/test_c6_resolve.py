@@ -834,6 +834,42 @@ class DeclaredAssertions(unittest.TestCase):
         self.repo.declare("src/checks.rs:6 .unwrap_err(); [stmt:494445d2]")
         self.refused("statement at src/checks.rs:6 does not reach its declared line (it ends at line 3)")
 
+    # -- #5461 review: three stale or ambiguous cells the resolver accepted ----------------------
+    # Digests are sha256 of the hand-collapsed statement.
+
+    OPERATOR_LED = ("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    let total = make(a, c)\n        + other()\n            .unwrap_err();\n}\n")
+
+    def test_an_operator_led_site_digests_its_whole_statement(self) -> None:
+        # The head changed (`make(a, b)` -> `make(a, c)`) after a digest of the `+` line onward
+        # alone (sha256("+ other() .unwrap_err();")) was recorded: the head must count.
+        self.killer(self.OPERATOR_LED)
+        self.repo.declare("src/checks.rs:4 + other() [stmt:300d72c8]")
+        self.refused("declared assertion src/checks.rs:4 statement digest is 9bbb306c, recorded 300d72c8")
+
+    def test_an_operator_led_site_resolves_with_the_whole_statements_digest(self) -> None:
+        self.killer(self.OPERATOR_LED)
+        self.repo.declare("src/checks.rs:4 + other() [stmt:9bbb306c]")
+        self.accepted()
+
+    def test_a_deref_statement_after_a_finished_one_starts_on_its_own_line(self) -> None:
+        # `*` is an operator character, but the line before ends in `;`: the statement is its own.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    let a = make();\n    *slot = a;\n}\n")
+        self.repo.declare("src/checks.rs:4 *slot = a; [stmt:d55b59f8]")
+        self.accepted()
+
+    def test_a_duplicate_after_another_statement_on_one_line_counts(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    setup(); assert!(ok());\n    assert!(ok());\n}\n")
+        self.repo.declare("src/checks.rs:4 assert!(ok()); [stmt:404cc513]")
+        self.refused("statement at src/checks.rs:4 occurs 2 times in guard_admits_only_its_host")
+
+    def test_a_line_inside_a_nested_fn_is_not_the_killers(self) -> None:
+        # Without [via F], the innermost fn holding the line must be the killer itself.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    fn inner() {\n        assert!(ok());\n    }\n    setup();\n}\n")
+        self.repo.declare("src/checks.rs:4 assert!(ok()); [stmt:404cc513]")
+        self.refused("declared assertion src/checks.rs:4 is in inner, not guard_admits_only_its_host")
+
     # -- [via F]: the panic is reported inside a helper the killer calls ---------------------
 
     HELP = "fn check(x: u8) {\n    assert!(ok(x));\n}\nfn other(x: u8) {\n    assert!( ok(x + 1) );\n}\n"
