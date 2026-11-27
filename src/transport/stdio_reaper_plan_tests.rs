@@ -339,3 +339,22 @@ fn a_handover_plans_only_what_its_snapshot_left() {
     let untouched = super::ending_after_snapshot(budget, Duration::ZERO, true, None);
     assert_eq!(untouched.waits(), Duration::from_secs(3));
 }
+
+/// Code review r3 (T2): a stop fixes its budget once, gives the snapshot that
+/// budget as its limit, and plans only what the timed snapshot left. A 30 ms
+/// snapshot under 3 s past the kill reserve leaves waits of at most 2.97 s,
+/// and more than 2 s. Red if the snapshot's time is not taken off (3 s).
+#[test]
+fn a_stop_plans_its_budget_less_its_timed_snapshot() {
+    let budget = KILL_RESERVE + Duration::from_secs(3);
+    let mut given = None;
+    let slow = |limit: Duration| {
+        given = Some(limit);
+        std::thread::sleep(Duration::from_millis(30));
+    };
+    let ending = super::ending_around_snapshot(budget, slow, || true, None);
+    assert_eq!(given, Some(budget), "the snapshot's limit");
+    let waits = ending.waits();
+    assert!(waits <= Duration::from_millis(2970), "planned {waits:?}");
+    assert!(waits > Duration::from_secs(2), "planned {waits:?}");
+}

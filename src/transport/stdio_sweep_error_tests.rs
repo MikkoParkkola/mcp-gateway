@@ -468,6 +468,30 @@ fn a_snapshot_with_less_than_a_slice_left_reads_once() {
         fake.reads, 1,
         "a cut reading was retried past the stop's budget"
     );
+    // Code review r3 (T3): the first reading always has one whole slice, so
+    // a stop with less left overspends, by at most that one slice.
+    assert!(
+        fake.clock > ms(3),
+        "premise: the slice outran the 3 ms left"
+    );
+    assert!(fake.clock <= SNAPSHOT_SLICE, "spent {:?}", fake.clock);
+}
+
+/// Code review r3 (both seats): a cut reading's finds are kept. The cut
+/// reading saw 81 and 82; the complete reading after it sees 81 only (82
+/// is absent, never named gone). Red if a later reading replaces what an
+/// earlier slice collected (82 lost).
+#[test]
+fn what_a_cut_reading_found_survives_the_next_reading() {
+    let mut fake = Fake::new(&[(80, 1), (81, 80)]);
+    fake.cut_reads = 1;
+    fake.cut_rows = vec![(id(81), 80), (id(82), 81)];
+    let mut sweep = Sweep::new(id(80), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 2, "premise: one cut reading, one complete");
+    for pid in [81, 82] {
+        assert!(sweep.members.contains_key(&id(pid)), "member {pid} lost");
+    }
 }
 
 /// Option 4 (c): readings that keep being cut stop at `SNAPSHOT_SLICES` (4); the

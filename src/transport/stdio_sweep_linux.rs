@@ -513,13 +513,17 @@ impl LinuxTable {
                 }
             };
             exited &= children.is_empty();
+            let mut batch: Vec<Identity> = Vec::new();
+            let mut stopped_early = false;
             for child in children {
                 if self.expired(until) {
-                    return false;
+                    stopped_early = true;
+                    break;
                 }
-                self.judge_child(pid, child, listing, queue, seen);
+                batch.extend(self.judge_child(pid, child, listing, seen));
             }
-            if self.expired(until) {
+            dir.adopt_held(who, batch, listing, queue, seen);
+            if stopped_early || self.expired(until) {
                 return false;
             }
             // (i) Stopped at both reads: a task that cannot fork or reap.
@@ -553,16 +557,16 @@ impl LinuxTable {
         true
     }
 
-    /// One child listed in `pid`'s children file, judged under (ii) and, if it
-    /// is still `pid`'s child, added to the reading once.
+    /// One child listed in `pid`'s children file, judged under (ii): its
+    /// identity when it is still `pid`'s child and not yet seen, for the
+    /// caller to adopt only once `pid` is confirmed held (`Pinned::adopt_held`).
     fn judge_child(
         &mut self,
         pid: u32,
         child: u32,
         listing: &mut Listing,
-        queue: &mut Vec<Identity>,
-        seen: &mut std::collections::HashSet<u32>,
-    ) {
+        seen: &std::collections::HashSet<u32>,
+    ) -> Option<Identity> {
         // (ii) Every listed child, stat'ed after the whole file was
         // read: a removal mid-read (the kernel then skips a sibling)
         // shows as gone, a reused pid or a reparent as another parent.
@@ -580,13 +584,10 @@ impl LinuxTable {
                 // Added only once: a child turned away under another
                 // parent is still taken here, under its real one.
                 if !already {
-                    let id = Identity {
+                    return Some(Identity {
                         pid: child,
                         start: stat.start,
-                    };
-                    seen.insert(child);
-                    listing.rows.push((id, stat.ppid));
-                    queue.push(id);
+                    });
                 }
             }
             Lookup::Found(_) | Lookup::Gone => listing.settled = false,
@@ -598,13 +599,15 @@ impl LinuxTable {
                 }
             }
         }
+        None
     }
 
     /// Rule (iii)'s second read of `pid`'s task directory: `Some(true)` only
     /// when it reads and names no tid the first read missed. An entry that
     /// fails to read also leaves the reading incomplete. `None` when `until`
-    /// passed during it (checked per entry: a thread-heavy process must not
-    /// run the read past the slice); the caller cuts the reading short.
+    /// passed during it (checked per entry of the listing, which
+    /// [`Pinned::list`] reads whole first: that one directory read can still
+    /// run past `until`); the caller cuts the reading short.
     fn task_set_held(
         &mut self,
         dir: &Pinned,

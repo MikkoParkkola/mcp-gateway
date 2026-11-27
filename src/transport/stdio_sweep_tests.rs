@@ -106,6 +106,8 @@ struct Fake {
     /// This many readings come back cut: no rows, incomplete, and the clock
     /// moved to their `until` (a host stall past the slice).
     cut_reads: u32,
+    /// What a cut reading returns: what it found before the stall.
+    cut_rows: Vec<(Identity, u32)>,
 }
 
 impl Fake {
@@ -149,6 +151,7 @@ impl Fake {
             appear_at_read: None,
             idles: Vec::new(),
             cut_reads: 0,
+            cut_rows: Vec::new(),
         }
     }
 
@@ -261,7 +264,7 @@ impl ProcessTable for Fake {
             self.cut_reads -= 1;
             self.clock = self.clock.max(until);
             return Listing {
-                rows: Vec::new(),
+                rows: self.cut_rows.clone(),
                 complete: false,
                 unreadable: Vec::new(),
                 gone: Vec::new(),

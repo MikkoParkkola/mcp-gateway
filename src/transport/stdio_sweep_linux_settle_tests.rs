@@ -505,3 +505,32 @@ fn the_task_directory_re_read_stops_where_until_passes() {
     assert!(!cut_off.complete, "cut inside the re-read, yet complete");
     assert!(!cut_off.settled, "cut inside the re-read, yet settled");
 }
+
+/// Code review r3 (T1, both seats): S's children file names K; before K's
+/// stat (read 4, after S seed 1, S task 2, S children 3) S is reaped (its
+/// `stat` leaves the pinned directory) and both pids return as a new pair,
+/// so K's path now holds a newcomer whose parent pid is S's. S is read
+/// again through its pinned directory after that stat, finds S gone, and
+/// the newcomer is never adopted; the reading unsettles. Red if the batch
+/// is adopted without that check (mutant M16).
+#[test]
+fn a_child_stat_read_after_its_parent_was_reaped_adopts_nothing() {
+    let tree = s_and_k('T');
+    let (s, k) = (fake(1), fake(2));
+    assert!(pids(&read_from_s(&tree)).contains(&k), "premise: K adopted");
+    tree.write("newcomer/stat", &stat_line(k, s, 'T', 2));
+    let mut reused = LinuxTable::with_root(tree.path());
+    let at = |rel: &str| tree.path().join(rel);
+    reused.move_after_read = Some((
+        3,
+        vec![
+            (at(&format!("{s}/stat")), at("reaped-stat")),
+            (at(&k.to_string()), at("old-k")),
+            (at("newcomer"), at(&k.to_string())),
+        ],
+    ));
+    let listing = reused.read(&[who(s, 1)], &[], Duration::MAX);
+    assert_eq!(reused.moved, 3, "the reuse did not happen before K's stat");
+    assert_eq!(pids(&listing), vec![s], "the newcomer was adopted");
+    assert!(!listing.settled, "a reaped parent left it settled");
+}

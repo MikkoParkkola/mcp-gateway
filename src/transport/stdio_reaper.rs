@@ -84,7 +84,7 @@ mod plan;
 #[cfg(test)]
 use plan::DEFAULT_STOP_BUDGET;
 pub(super) use plan::graceful_ending;
-use plan::{ending_after_snapshot, stop_budget};
+use plan::{ending_around_snapshot, stop_budget};
 
 /// The fixed origin [`StopDeadline`] counts from.
 static STOP_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
@@ -451,12 +451,10 @@ impl super::StdioTransport {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
         // `budget` was fixed before the snapshot: plan only what it leaves.
-        let began = Instant::now();
-        self.snapshot_descendants(budget);
-        let ending = ending_after_snapshot(
+        let ending = ending_around_snapshot(
             budget,
-            began.elapsed(),
-            self.close_stdin_now(),
+            |limit| self.snapshot_descendants(limit),
+            || self.close_stdin_now(),
             self.stop_deadline.get().map(AsRef::as_ref),
         );
         {
@@ -578,21 +576,26 @@ impl super::StdioTransport {
         self.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
-        self.snapshot_descendants(stop_budget());
-        let stdin_closed = self.close_stdin_now();
+        let snapshot = |limit| self.snapshot_descendants(limit);
+        let close_stdin = || self.close_stdin_now();
+        let ending = match kind {
+            StopKind::Graceful => ending_around_snapshot(
+                stop_budget(),
+                snapshot,
+                close_stdin,
+                self.stop_deadline.get().map(AsRef::as_ref),
+            ),
+            StopKind::Dead => {
+                snapshot(stop_budget());
+                close_stdin();
+                Ending::Now
+            }
+        };
         // The per-start stdin token first, then the tree to the reaper,
         // waited for (bounded) with any reap a retire started earlier. No
         // await comes before the handover, so a cancelled close cannot leave
         // the tree unended.
         self.shutdown.lock().cancel();
-        let ending = match kind {
-            StopKind::Graceful => graceful_ending(
-                stop_budget(),
-                stdin_closed,
-                self.stop_deadline.get().map(AsRef::as_ref),
-            ),
-            StopKind::Dead => Ending::Now,
-        };
         self.end_tree_with(ending).await;
         super::tree::clear_writer(&self.writer).await;
     }

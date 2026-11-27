@@ -290,8 +290,9 @@ impl Sweep {
     /// last slice the snapshot keeps what it found; `incomplete_reads` counts
     /// every short reading and the sweep's report warns. A retry also needs a
     /// whole slice of `limit` (the time the stop has left) still unspent, so
-    /// a late stop with a small budget reads once and never spends more on
-    /// the snapshot than it has.
+    /// a late stop with a small budget reads once. That first reading always
+    /// has its whole slice: a stop with less than a slice left overspends,
+    /// by at most that slice (and the one read in flight when it ends).
     pub(super) fn snapshot_within(&mut self, table: &mut dyn ProcessTable, limit: Duration) {
         let began = table.now();
         for _ in 0..SNAPSHOT_SLICES {
