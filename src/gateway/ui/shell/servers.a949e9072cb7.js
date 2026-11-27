@@ -9,9 +9,9 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.23eb92bf6df3.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.b052b8d989a6.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.8abcae2314bd.js';
+import { leave, withTip, statusTab as serverStatus, actionsTab as serverActions, settingsTab as serverSettings } from '/ui/assets/server-page.dad59b8abf85.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -88,15 +88,6 @@ function stateCell(badge, words) {
 function memberBadge(state) {
   const row = SERVER_STATES[state];
   return el('span', { class: `lb ${row.tone} plain` }, el('span', { class: 'glyph', 'aria-hidden': 'true' }, row.glyph), ' ', MEMBER_WORD[state]);
-}
-
-// The tooltip module loads after the screen has drawn and never holds it up; if it
-// fails, the headings stand without their (i). Each caller names its id literally.
-let tipModule = null;
-function withTip(node, make) {
-  (tipModule ??= import('/ui/assets/tooltip.7d5614b14a79.js'))
-    .then((mod) => node.append(' ', make(mod.tip)), () => {});
-  return node;
 }
 
 /** The column headings; `tips` adds the Tools explanation (the Answering table only, so one per page). */
@@ -341,8 +332,9 @@ function statusTab(body, ctx) {
 
 /**
  * Each tab first drops a listener a server page left. With an object it draws
- * that server's tab; without one, Status is the list and Actions is not built.
+ * that server's tab; without one, Status is the list and Actions and Settings are not built.
  */
+const notBuilt = (body, ctx) => body.append(ctx.state('not-built'));
 const tab = (onServer, onList) => (body, ctx) => {
   leave();
   return ctx.object === null ? onList(body, ctx) : onServer(body, ctx);
@@ -352,8 +344,8 @@ register('servers', {
   title: 'Servers',
   tabs: {
     status: tab(serverStatus, statusTab),
-    actions: tab(serverActions, (body, ctx) => body.append(ctx.state('not-built'))),
-    settings: null,
+    actions: tab(serverActions, notBuilt),
+    settings: tab(serverSettings, notBuilt),
   },
   entries: [],
 });

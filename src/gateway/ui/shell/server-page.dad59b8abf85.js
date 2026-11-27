@@ -1,12 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// One server's own page: its Status and Actions tabs. The Servers module calls
+// One server's own page: its Status, Actions and Settings tabs. The Servers module calls
 // these when the address names a server; nothing here registers a page. Every
 // path that carries the server's name comes from server-paths, and every served
 // value goes in as text.
-import { el, go, serverBadge, serverBanner, state } from '/ui/assets/shell.23eb92bf6df3.js';
-import { serverPath, backendApi, activityHref } from '/ui/assets/server-paths.15a075bb0cb1.js';
+import { el, go, serverBadge, serverBanner, state } from '/ui/assets/shell.b052b8d989a6.js';
+import { serverPath, keyPath, backendApi, activityHref } from '/ui/assets/server-paths.15a075bb0cb1.js';
 
 /** States whose `reason` is always one of the gateway's own sentences; never a refused server's. */
 const SAYS_REASON = new Set(['needs_sign_in', 'unhealthy', 'slow']);
@@ -286,4 +286,174 @@ export async function actionsTab(body, ctx) {
   cards.push(card('Remove', 'Take it out of the gateway and its config file.', remove));
   const audit = el('p', { class: 'sp-audit t3' }, 'Actions on this page are recorded in Activity under your name.');
   body.append(el('div', { class: 'sp' }, ...cards, audit));
+}
+
+// The tooltip module loads after the screen has drawn and never holds it up; if it
+// fails, the headings stand without their (i). Each caller names its id literally.
+let tipModule = null;
+export function withTip(node, make) {
+  (tipModule ??= import('/ui/assets/tooltip.74a1006768d8.js'))
+    .then((mod) => node.append(' ', make(mod.tip)), () => {});
+  return node;
+}
+
+/** A secret record's kind in words: the record contract has exactly these two kinds. */
+const KIND_WORDS = { env: 'Environment variable', headers: 'Header' };
+const RECORD_MEMBERS = 'field,kind,reference,server';
+
+/** Exactly the four members, all strings, and a known kind; any other record is left out. */
+const inContract = (r) => r !== null && typeof r === 'object' && !Array.isArray(r)
+  && Object.keys(r).sort().join() === RECORD_MEMBERS
+  && Object.values(r).every((v) => typeof v === 'string') && Object.hasOwn(KIND_WORDS, r.kind);
+
+/**
+ * What a key reaches of this server (sidecar 2, first rule that holds): none when
+ * `backends` does not reach it; none when its allowlist is a list and empty;
+ * restrictions when either tool list has entries; else all of its tools.
+ */
+function reachWords(k, name) {
+  if (reaching([k], name).length === 0) return 'None';
+  if (Array.isArray(k.allowed_tools) && k.allowed_tools.length === 0) return 'None: its allowlist is empty';
+  const listed = (v) => Array.isArray(v) && v.length > 0;
+  return listed(k.allowed_tools) || listed(k.denied_tools) ? 'Tool restrictions apply' : 'All of its tools';
+}
+
+/** Connection: the transport from the status entry (no read serves the address). */
+const connection = (s) => el('section', { class: 'sp-card sp-connection' }, el('h2', {}, 'Connection'),
+  el('dl', { class: 'sp-facts' },
+    withTip(el('dt', {}, 'Transport'), (tip) => tip('servers.settings.transport')),
+    el('dd', {}, typeof s.transport === 'string' && s.transport ? s.transport : 'not known')));
+
+/** Who can use it: every key of the read, a link to its page, and what it reaches here. */
+function whoCanUse(name, keys) {
+  const section = el('section', { class: 'sp-card' }, withTip(el('h2', {}, 'Who can use it'), (tip) => tip('servers.settings.who-can-use-it')));
+  if (!keys) {
+    section.append(el('p', { class: 'sp-keys-unread' }, 'The keys could not be read.'));
+    return section;
+  }
+  const rows = keys.filter((k) => k && typeof k.name === 'string').map((k) => el('li', {},
+    el('a', { class: 'lnk', href: keyPath(k.name) }, k.name), ' ',
+    el('span', { class: 'sp-reach' }, reachWords(k, name)),
+    ...(k.live === false ? [' ', el('span', { class: 'sp-live t3' }, 'Not live')] : [])));
+  section.append(el('ul', { class: 'sp-who' }, ...rows), el('p', { class: 'sp-help t3' }, "A key's reach is changed on its own page."));
+  return section;
+}
+
+let formIds = 0;
+
+/** Said whenever the page cannot tell that a new value was stored; never "replaced". */
+const NOT_CONFIRMED = 'The gateway did not confirm that the new value was stored. Check gateway.yaml before trying again.';
+
+/**
+ * One secret line. An `env` slot has Replace: a password field in place whose
+ * Save sends `PATCH {env: {<field>: <value>}}` and nothing else. Only an answer
+ * whose `secrets_stored` names `env.<field>` is called replaced; a refusal keeps
+ * the form and what was typed. The field is removed on every way out, so the
+ * typed value never outlives the form.
+ */
+function secretLine(r, server, ctx) {
+  const li = el('li', {}, el('span', { class: 'sp-field' }, r.field), ' ', el('span', { class: 'sp-kind t3' }, KIND_WORDS[r.kind]), ' ', el('code', {}, r.reference));
+  if (r.kind !== 'env') {
+    li.append(' ', el('span', { class: 'sp-note t3' }, 'Changed in gateway.yaml: the page cannot replace a header.'));
+    return li;
+  }
+  const replace = el('button', { type: 'button', class: 'btn', 'aria-label': `Replace ${r.field}` }, 'Replace');
+  li.append(' ', replace);
+  const outcome = (cls, text) => {
+    li.querySelector(':scope > .sp-done, :scope > .sp-error')?.remove();
+    if (text) {
+      li.append(el('p', { class: cls }, text));
+      ctx.announce(text);
+    }
+  };
+  replace.addEventListener('click', () => {
+    outcome(null, null);
+    const id = `sp-secret-${(formIds += 1)}`;
+    const input = el('input', { type: 'password', id, autocomplete: 'new-password', spellcheck: 'false' });
+    const save = el('button', { type: 'submit', class: 'btn primary', disabled: '' }, 'Save');
+    const cancel = el('button', { type: 'button', class: 'btn' }, 'Cancel');
+    const form = el('form', { class: 'sp-replace' }, el('label', { for: id }, r.field), input, el('p', { class: 'acts' }, save, cancel));
+    const close = () => {
+      input.value = '';
+      form.remove();
+      replace.hidden = false;
+      replace.focus();
+    };
+    input.addEventListener('input', () => { save.disabled = input.value === ''; });
+    cancel.addEventListener('click', close);
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      if (input.value !== '') send(form, input, save, cancel, close);
+    });
+    replace.hidden = true;
+    li.append(form);
+    input.focus();
+  });
+
+  async function send(form, input, save, cancel, close) {
+    save.disabled = true;
+    cancel.disabled = true;
+    form.querySelector('.sp-error')?.remove();
+    let answer;
+    try {
+      answer = await ctx.api(backendApi(server), {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: input.value } }),
+      });
+    } catch (err) {
+      if (!form.isConnected) return; // left the page: the form and its value are already gone
+      const why = err?.serverMessage ?? (!err?.status || err.unreadable
+        // No answer, or one that would not parse: the value may have been stored.
+        ? NOT_CONFIRMED
+        : `The gateway refused the new value (HTTP ${err.status}).`);
+      form.append(el('p', { class: 'sp-error' }, why));
+      ctx.announce(why);
+      save.disabled = false;
+      cancel.disabled = false;
+      return;
+    }
+    if (!form.isConnected) return;
+    close();
+    const stored = Array.isArray(answer?.secrets_stored) && answer.secrets_stored.some((e) => e?.field === `env.${r.field}`);
+    // Without the slot in secrets_stored the page never says replaced (a second line of defence behind the route).
+    if (stored) outcome('sp-done', `${r.field} was replaced.`);
+    else outcome('sp-error', NOT_CONFIRMED);
+  }
+  return li;
+}
+
+/**
+ * Secrets: the records of `secret_reference_records` whose `server` equals this
+ * server's name, whole, in the served order. The flat map is never read; outside
+ * the record contract a record is left out, and an answer without the list says
+ * the secrets could not be read.
+ */
+function secrets(name, config, ctx) {
+  const section = el('section', { class: 'sp-card' }, el('h2', {}, 'Secrets'));
+  const records = config?.secret_reference_records;
+  if (!Array.isArray(records)) {
+    section.append(el('p', { class: 'sp-unread' }, 'The secrets could not be read.'));
+    return section;
+  }
+  const mine = records.filter((r) => inContract(r) && r.server === name);
+  section.append(el('ul', { class: 'sp-secrets' }, ...mine.map((r) => secretLine(r, name, ctx))),
+    el('p', { class: 'sp-only t3' }, 'Only secrets held as references are listed; a value written into gateway.yaml as text is not.'));
+  return section;
+}
+
+/**
+ * Servers › <name> › Settings: Connection, Secrets with Replace, Who can use it.
+ * The config and keys reads start only once the status read has found the server.
+ */
+export async function settingsTab(body, ctx) {
+  const mine = {};
+  owner = mine;
+  const live = () => owner === mine && body.isConnected;
+  const found = await findServer(body, ctx, live);
+  if (!found) return;
+  const [config, keys] = await Promise.all([
+    ctx.api('/ui/api/config').catch(() => null),
+    ctx.api('/ui/api/keys').then((b) => (Array.isArray(b?.keys) ? b.keys : null), () => null),
+  ]);
+  if (!live()) return; // answered after the user moved on: write nothing
+  body.append(el('div', { class: 'sp' }, connection(found), secrets(found.name, config, ctx), whoCanUse(found.name, keys)));
 }
