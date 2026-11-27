@@ -420,7 +420,8 @@ fn finish(save: &Save<'_>, file: File, filled: io::Result<()>, bytes: &[u8]) -> 
     let renamed = filled.and_then(|()| super::super::rename_with_retry(save.scratch, save.target));
     drop(file);
     if let Err(e) = renamed {
-        return Err(super::drop_scratch(save.scratch, e));
+        let e = super::drop_scratch(save.scratch, e);
+        return Err(e);
     }
     #[cfg(test)]
     if let Some(staged) = staged {
