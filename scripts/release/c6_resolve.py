@@ -893,7 +893,21 @@ def _statement(src: list[str], blanked: list[str], line: int,
         j, c = _statement_start(src, blanked, line - 1, col)
     else:
         j, c = line - 1, col
-    depth, parts = 0, []
+    text, last, stop = _forward(src, blanked, j, c)
+    # A plain line that a `,` or an earlier line's `)`/`]` ends sits inside a call or list: its
+    # statement is the enclosing one, when the scan back crosses that opener.
+    if at is None and (j, c) == (line - 1, col) and stop in (",", ")", "]"):
+        enclosing = _statement_start(src, blanked, line - 1, col, inside=True)
+        if enclosing is not None:
+            j, c = enclosing
+            text, last, _ = _forward(src, blanked, j, c)
+    return (j, c), text, last
+
+
+def _forward(src: list[str], blanked: list[str], j: int, c: int) -> tuple[str, int, str]:
+    """The statement text from (line index `j`, column `c`), the index of its last line, and
+    the character that ended it at depth 0 (`;`, `,` or a closer), or "" at a line end."""
+    depth, parts, stop = 0, [], ""
     for k in range(j, len(blanked)):
         text = blanked[k]
         start = c if k == j else 0
@@ -904,11 +918,11 @@ def _statement(src: list[str], blanked: list[str], line: int,
                 depth += 1
             elif ch in ")]}":
                 if depth == 0:
-                    end, done = i, True
+                    end, done, stop = i, True, ch
                     break
                 depth -= 1
             elif ch in ";," and depth == 0:
-                end, done = i + 1, True
+                end, done, stop = i + 1, True, ch
                 break
         parts.append(src[k][start:end])
         # A line end at depth 0 ends the statement unless the statement visibly goes on. A later
@@ -917,7 +931,7 @@ def _statement(src: list[str], blanked: list[str], line: int,
         # so a scan started on a blank line stays empty and cannot double-count the next statement.
         if done or (depth == 0 and (k == j or text.strip()) and not _continues(src, blanked, k)):
             break
-    return (j, c), _collapse(" ".join(parts)), k
+    return _collapse(" ".join(parts)), k, stop
 
 
 # A line ending in one of these, or a next code line opening with one (or with `.` or `?`),
@@ -935,7 +949,7 @@ def _later_starts(text: str) -> list[int]:
         if ch in "([{":
             depth += 1
         elif ch in ")]}":
-            depth -= 1
+            depth = max(depth - 1, 0)  # a closer of an earlier line returns to this line's level
         elif ch == ";" and depth == 0 and text[i + 1:].strip():
             starts.append(len(text) - len(text[i + 1:].lstrip()))
     return starts
@@ -955,7 +969,8 @@ def _continues(src: list[str], blanked: list[str], k: int) -> bool:
     return False
 
 
-def _statement_start(src: list[str], blanked: list[str], k: int, col: int) -> tuple[int, int]:
+def _statement_start(src: list[str], blanked: list[str], k: int, col: int,
+                     inside: bool = False) -> tuple[int, int] | None:
     """Where the statement holding position (line index `k`, column `col`) starts: the first
     non-blank source character after the nearest boundary before it (see `_statement`). While
     the scan has crossed only `.`-lines, a `}` at depth 0 closes the chain's block receiver
@@ -968,16 +983,22 @@ def _statement_start(src: list[str], blanked: list[str], k: int, col: int) -> tu
             if ch in ")]" or (ch == "}" and (depth or receiver)):
                 depth += 1
             elif ch in "([":
+                if not depth:
+                    inside = False  # the enclosing call or list's opener: its `,`s now end
                 depth -= 1 if depth else 0
             elif ch == "{" and depth:
                 depth -= 1
+            elif ch == "," and not depth and inside:
+                pass
             elif ch in ";,{}" and not depth:
-                return _first_code(src, j, c + 1)
+                # `inside` still set: the line is in a block or match arm, not a call or list.
+                return None if inside else _first_code(src, j, c + 1)
             c -= 1
-        receiver = receiver and src[j].lstrip().startswith(".")
+        lead = blanked[j].lstrip()[:1]
+        receiver = receiver and bool(lead) and lead in _CONTINUATION_LEAD
         j -= 1
         c = len(blanked[j]) - 1 if j >= 0 else -1
-    return _first_code(src, 0, 0)
+    return None if inside else _first_code(src, 0, 0)
 
 
 def _first_code(src: list[str], j: int, c: int) -> tuple[int, int]:
