@@ -26,17 +26,25 @@ test('harness smoke: try a tool', async ({ page, gw }) => {
   const tideCalls = async () => (await gw.stubLog('tide')).split('\n')
     .filter((l) => l.includes('"tools/call"') && l.includes('tide_table')).length;
   const before = await tideCalls();
-  // The stub's tools carry no read-only hint, so the shell treats them as able to change things and asks first
-  // ("Run tide_table? tide_table can change things."): Run opens that confirm, and its own Run sends the call.
-  await page.getByRole('button', { name: 'Run tide_table' }).click();
-  const [response] = await Promise.all([
+  // Each step below follows the shell's own spec, ui-tests/tests/tools-try.spec.mjs (cited by line). The stub's tools
+  // carry no read-only hint, so the shell treats tide_table as able to change things (a write: W1, W2).
+  const panel = page.locator('section.tools-try'); // :22
+  const run = panel.getByRole('button', { name: 'Run tide_table', exact: true }); // :23
+  const ask = page.getByRole('dialog', { name: 'Run tide_table?' }); // :40
+  await run.click(); // W1 :806: a write's Run asks first and sends nothing
+  await expect(ask).toBeVisible(); // :44
+  await expect(ask.getByRole('listitem')).toHaveText(['tide_table can change things.']); // :45
+  expect(await tideCalls(), 'Run sent the call before the confirm').toBe(before);
+  const [response] = await Promise.all([ // W2 :828: the confirm's own Run sends it, with confirm_write true (:829)
     page.waitForResponse((r) => r.url().endsWith('/ui/api/tools/call') && r.request().method() === 'POST'),
-    page.getByRole('dialog').getByRole('button', { name: 'Run tide_table' }).click(),
+    ask.getByRole('button', { name: 'Run tide_table', exact: true }).click(), // :41
   ]);
-  expect(response.status()).toBe(200);
+  expect(response.status()).toBe(200); // a 409 re-ask (W3 :843-874) would come only for a send without confirm_write
   const traceId = (await response.json()).receipt;
   expect(traceId, 'the call answer carries its receipt').toBeTruthy();
-  await expect(page.locator('.tools-try-answer')).toContainText('tide-answered');
+  await expect(ask).toHaveCount(0); // W2 :831: the confirm closes
+  await expect(panel).toContainText('Answered in'); // W2 :832 (tools.js "Answered in ${latency} ms")
+  await expect(panel).toContainText('tide-answered'); // W2 :833: the answer is drawn in the panel
 
   // Outside the browser, 1: the gateway's Activity holds THIS call (by its trace id), answered.
   const rows = (await (await gw.api('/ui/api/activity?server=tide')).json()).rows;
