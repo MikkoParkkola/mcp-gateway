@@ -83,7 +83,7 @@ fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
             });
             if let Ok(line) = serde_json::to_string(&output) {
                 emit_line(&line);
-                ExitCode::from(0)
+                ExitCode::SUCCESS
             } else {
                 fail(
                     CliExit::LocalFailure,

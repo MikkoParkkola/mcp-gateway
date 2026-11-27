@@ -74,7 +74,7 @@ fn run_audit_verify(
     if !signed {
         match mcp_gateway::security::transparency_log::log_contains_signed_entry(log_path) {
             Ok(true) => {
-                return refuse_unsigned_log(log_path);
+                return unsigned_log_refused(log_path);
             }
             Ok(false) => {}
             Err(e) => {
@@ -94,7 +94,7 @@ fn run_audit_verify(
         // this pass are covered only here. A chain that failed is reported
         // as a failure below, with this note added.
         Ok(result) if !signed && result.signed_entry_seen && result.ok => {
-            refuse_unsigned_log(log_path)
+            unsigned_log_refused(log_path)
         }
         Ok(result) if result.ok => {
             if render == Render::Json {
@@ -272,7 +272,7 @@ fn log_unreadable(log_path: &std::path::Path, error: &impl std::fmt::Display) ->
 
 /// A log with signed entries and no shared secret configured: refused, since a hash-only pass would accept a
 /// forged signature.
-fn refuse_unsigned_log(log_path: &std::path::Path) -> ExitCode {
+fn unsigned_log_refused(log_path: &std::path::Path) -> ExitCode {
     fail(
         CliExit::LocalFailure,
         &format!(
