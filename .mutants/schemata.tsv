@@ -1,0 +1,28 @@
+head_sha	3298b5d39fbed6dbf5009473c2be624be0349af9
+#mutant N6
+cli_local_errors	guards::wrong_invocations_exit_two	tests/cli_local_errors/guards.rs:34
+#mutant N7
+cli_local_errors	guards::wrong_invocations_exit_two	tests/cli_local_errors/guards.rs:34
+#mutant N8
+cli_local_errors	guards::wrong_invocations_exit_two	tests/cli_local_errors/guards.rs:34
+#mutant N9
+cli_local_errors	guards::wrong_invocations_exit_two	tests/cli_local_errors/guards.rs:34
+#mutant N10
+cli_local_errors	guards::wrong_invocations_exit_two	tests/cli_local_errors/guards.rs:34
+#mutant N11
+cli_local_errors	guards::wrong_invocations_exit_two	tests/cli_local_errors/guards.rs:34
+#mutant N15
+cli_local_errors	guards::exits_that_were_two_stay_two	tests/cli_local_errors/guards.rs:34
+cli_gateway_and_secrets	auth_key_refuses_a_value_that_is_not_a_reference	tests/cli_gateway_and_secrets.rs:237
+#mutant N20
+cli_json_forms_verify	audit_verify_export_missing_file_is_a_verdict	tests/cli_json_forms_verify.rs:705
+#mutant N21
+mik_8398_provenance_cli	verify_without_a_result_needs_its_flag	tests/mik_8398_provenance_cli.rs:225
+#mutant N22
+cli_local_errors	local_errors_are_two_lines	tests/cli_local_errors.rs:552
+#mutant N23
+cli_local_errors	local_errors_are_two_lines	tests/cli_local_errors.rs:552
+#mutant N27
+mcp_gateway	cli::command_classes::raw_exit_scan_tests::allowed_places_are_exact	src/cli/raw_exit_scan_tests.rs:431
+#mutant N29
+cli_local_errors	guards::tool_invoke_bad_stdin_and_pairs_stay_one	tests/cli_local_errors/guards.rs:34
