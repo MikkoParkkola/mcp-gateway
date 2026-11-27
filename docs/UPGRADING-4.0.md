@@ -1636,8 +1636,9 @@ exit at startup, before it listens, with:
 
     refusing to start: audit log <path> is being written by another gateway process (its lease <path>.lock is held); run one gateway per log path
 
-With no audit log on, a shared `tasks.store_dir` refuses the second process instead, with the
-task store's own message.
+With no audit log on, a second HTTP gateway on a shared `tasks.store_dir` is refused instead,
+with `task store at '<dir>' could not be opened: task store unavailable`; a second stdio gateway
+keeps serving without tasks (item 111).
 
 A relative `transparency_log.path` is opened against each process's working directory, so a
 second process started from another directory gets its own invocation log, and the shared
