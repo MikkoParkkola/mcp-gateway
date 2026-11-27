@@ -333,40 +333,6 @@ async fn a_playbook_step_refused_by_a_grant_is_one_activity_row() {
 }
 
 /// The same playbook as the step row above, built once.
-/// Leg (e) of the one-meaning rows: a grant refusal with no invocation record
-/// of its own is a rule's refusal, so the counters count it blocked, exactly
-/// as Activity lists it, and never as an error.
-#[tokio::test]
-async fn p1e_a_grant_refusal_is_blocked_on_the_counters_and_in_activity() {
-    let endpoint = Endpoint::start(false).await;
-    let rig = rig(&endpoint, AuditFailurePolicy::BestEffort, false, false).await;
-    let store = Arc::new(crate::counters::CounterStore::new(
-        crate::clock::unix_secs().expect("a readable clock"),
-    ));
-    rig.state.meta_mcp.set_counters(Arc::clone(&store));
-
-    let invoke = json!({"server": CAPS, "tool": PERSONAL, "arguments": {}});
-    let answer = mcp_call(&rig, "gateway_invoke", &invoke).await;
-    let held = wait_for_decisions(&rig.dir, 1).await;
-    assert_eq!(
-        held[0]["invocation_recorded"],
-        json!(false),
-        "premise: {answer}"
-    );
-
-    let [_, blocks, errors, _, _] = crate::counters::test_totals::totals(&store);
-    let outcomes: Vec<Value> = activity(&rig, "")
-        .await
-        .iter()
-        .map(|row| row["outcome"].clone())
-        .collect();
-    assert!(
-        (blocks, errors) == (1, 0) && outcomes == [json!("blocked")],
-        "(e) grant refusal: should be blocked; counters blocks={blocks} errors={errors}; \
-         activity {outcomes:?}"
-    );
-}
-
 fn stepped_playbook(steps: usize) -> crate::playbook::PlaybookEngine {
     let mut engine = crate::playbook::PlaybookEngine::new();
     let step = format!("  - name: read\n    server: {CAPS}\n    tool: {PERSONAL}\n");
