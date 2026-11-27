@@ -179,7 +179,7 @@ const paramsOf = (href) => [...new URL(href, 'http://x').searchParams];
 
 test('D1 a dot only on callers with blocked calls, linking to their calls by account', async ({ page }) => {
   await showMap(page, flowBody({ edges: [edge('key:a1', 's', 30, 0), edge('key:b2', 's', 20, 3), edge('key:c3', 's', 10, 0)], servers: [srv('s')] }));
-  await expect(map(page).locator('a.ov-dot')).toHaveCount(1);
+  await expect(map(page).locator('a.ov-dot:visible')).toHaveCount(1);
   const dot = dotOf(page, 'b2');
   await expect(dot).toHaveAccessibleName('3 blocked');
   await expect(dot).toHaveAttribute('href', '/ui/activity/status?key=b2');
@@ -305,7 +305,7 @@ test('L1 a status event re-reads once and updates the rows in place', async ({ p
   live.body = flowBody({ edges: [edge('key:alice', 'github', 10, 0), edge('oidc:bob', 'github', 80)], servers: SMALL.servers.rows });
   await fire(page);
   await page.clock.runFor(1100);
-  await expect(map(page).locator('.ov-dot')).toHaveCount(0);
+  await expect(map(page).locator('.ov-dot:visible')).toHaveCount(0);
 });
 
 test('L1c steady events do not put the read off for ever', async ({ page }) => {
@@ -416,7 +416,7 @@ test('R1 nothing moves with reduced motion, and at most three dots pulse at once
   still.body.edges.rows[1].calls = 1;
   await fire(page);
   await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(2);
-  await expect(map(page).locator('.ov-dot')).toHaveCount(1);
+  await expect(map(page).locator('.ov-dot:visible')).toHaveCount(1);
   await page.clock.runFor(500);
   expect(await page.evaluate(() => ({ moved: window.__moved, running: document.getAnimations().length }))).toEqual({ moved: 0, running: 0 });
 
@@ -426,10 +426,10 @@ test('R1 nothing moves with reduced motion, and at most three dots pulse at once
   still.body = blocked(6, (i) => (i < 5 ? 1 : 0));
   await fire(page);
   await expect.poll(async () => { await page.clock.runFor(300); return still.reads; }).toBe(3);
-  await expect(map(page).locator('.ov-dot')).toHaveCount(5);
+  await expect(map(page).locator('.ov-dot:visible')).toHaveCount(5);
   const pulsing = () => map(page).locator('.ov-pulse').count();
   expect(await pulsing()).toBeLessThanOrEqual(3);
-  expect(await map(page).locator('.ov-pulse').first().evaluate((d) => getComputedStyle(d).animationIterationCount)).not.toBe('infinite');
+  expect(await map(page).locator('.ov-pulse').first().evaluate((d) => getComputedStyle(d, '::before').animationIterationCount)).not.toBe('infinite');
   await page.clock.runFor(1000);
   still.body = blocked(9, () => 1);
   await fire(page);
@@ -463,7 +463,7 @@ test('Z1 a long server name at 200% text is cut, kept whole in its title, and ov
 
 test('A2 Tab reaches every row link and dot of the map, in page order', async ({ page }) => {
   await showMap(page, WITH_DOT);
-  const links = await map(page).locator('a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+  const links = await map(page).locator('a:visible').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
   expect(links.length).toBeGreaterThan(5);
   await map(page).locator('h2').evaluate((e) => { e.tabIndex = -1; e.focus(); });
   expect(await tabStops(page, links.length)).toEqual(links);

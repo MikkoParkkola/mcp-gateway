@@ -545,26 +545,28 @@ function svgPath(side) {
 }
 
 /**
- * A caller's gold dot when it has blocked calls: a link to its calls when it has an account, text when
- * not; none at zero. A new dot pulses once while fewer than three do.
+ * A caller's gold dot: a link to its calls when it has an account, text when not. Each caller row keeps
+ * one dot for its whole life and shows it only while the caller has blocked calls, so a dot that comes
+ * or goes changes a class, not the row's layout. A dot that comes pulses once while fewer than three do.
  */
 function fillDot(nodes, row, y, mid, drawLines) {
-  const want = row.blocks > 0 ? (row.account && !row.fold ? 'a' : 'span') : null;
-  if (nodes.dot && (!want || nodes.dot.localName !== want)) {
-    nodes.dot.remove();
-    nodes.dot = null;
-    nodes.dw = {};
-  }
-  if (!want) return;
+  const on = row.blocks > 0;
   if (!nodes.dot) {
-    nodes.dot = want === 'a' ? viaGo(h('a', { class: 'ov-dot', href: callsOfCaller(row.account) })) : h('span', { class: 'ov-dot' });
-    const map = nodes.li.closest('.ov-map');
+    const linked = row.account && !row.fold;
+    nodes.dot = linked ? viaGo(h('a', { class: 'ov-dot ov-dot-off', href: callsOfCaller(row.account) })) : h('span', { class: 'ov-dot ov-dot-off' });
+    nodes.li.append(nodes.dot);
+  }
+  if (nodes.dotOn !== on) {
+    nodes.dotOn = on;
+    nodes.dot.classList.toggle('ov-dot-off', !on);
+    const map = on ? nodes.li.closest('.ov-map') : null;
     if (map && map.querySelectorAll('.ov-pulse').length < 3) {
       nodes.dot.classList.add('ov-pulse');
       nodes.dot.addEventListener('animationend', () => nodes.dot?.classList.remove('ov-pulse'), { once: true });
     }
-    nodes.li.append(nodes.dot);
   }
+  if (!on) return;
+  const want = nodes.dot.localName;
   const dw = nodes.dw ?? (nodes.dw = {});
   const put = (name, v, write) => { if (dw[name] !== v) { write(v); dw[name] = v; } };
   if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
