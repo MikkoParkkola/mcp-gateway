@@ -1,25 +1,26 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2026 Mikko Parkkola
 # SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-"""The macOS legs build and run the lib test parts (design: two legs, no handoff).
+"""The macOS legs build and run the lib test parts (design: three legs, no handoff).
 
 Static checks on every workflow and on scripts/ci/shard_tests.py, read as data:
 
-- T1: the runner's PARTS["macos"] maps `lib-b` and `int-lib` to lib test parts that are exactly 1..N
+- T1: the runner's PARTS["macos"] maps `lib-b`, `lib-c` and `int-lib` to lib test parts that are exactly 1..N
   (N from scripts/dev/test-parts-build.rs), each in one leg; the solo lane (lib-b alone) takes 1..N.
 - T2: every lib step of a macOS job runs `shard_tests.py run-prebuilt-parts macos <leg> --build <dir>`,
   naming no part; no macOS step runs `cargo test --lib`, `export-lib`, `wait-lib` or `run macos lib-a`;
   SHARDS["macos"] holds no unsplit `--lib` selection.
 - T3: the union job `macos-lib-union` ("macOS lib union") needs macos-shards, runs under `!cancelled()`
-  and macos-shards' own guard with no train skip, and runs exactly the expect and lib_union steps,
-  nothing able to turn their failure green; macos-check needs it.
+  and macos-shards' own guard with no train skip, and runs exactly the expect, lib_union and
+  `check_needs.py macos-shards` gates, in that order, nothing able to turn their failure green; macos-check needs it.
 - T4: each macOS leg uploads its part lists under `if: !cancelled()` with `overwrite: true`; the union
   job downloads every leg's lists, one folder per leg, so a part listed by two legs stays visible (lib_union.py reads
   pK/list.txt at any depth: a lone matching artifact is unpacked without its folder).
-- T5: limits: the job 180, lib-b's lib step 150, int's suite 110 and part step 50.
+- T5: limits: the job 180, lib-b's and lib-c's lib steps 150 each, int's suite 110 and part step 50.
 - T6: the handoff is gone: no `rehearse_macos_lib_fallback` input, no MACOS_LIB_REHEARSE_FALLBACK,
   no `macos-lib-tests` artifact, no macOS PREBUILT entry.
 - T7: each leg's lib floor is its parts' recorded macOS counts minus 2%, rounded down.
+- T8: the root-row setup steps run on every matrix part leg (lib-b || lib-c, exactly) and before the first part step.
 
   test_macos_parts.py              check the tree (exit 1 with every problem)
   test_macos_parts.py --self-test  every rule on a fixture of the good layout, and one mutant per switch
@@ -42,8 +43,13 @@ LIB_STEP = re.compile(r'^python3 scripts/ci/shard_tests\.py run-prebuilt-parts m
 FORBIDDEN = ("cargo test --lib", "shard_tests.py export-lib", "shard_tests.py wait-lib", "shard_tests.py run macos lib-a")
 EXPECT = "scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect aarch64-apple-darwin"
 UNION = "python3 scripts/ci/lib_union.py"
-LIMITS = {"job": 180, "lib-b": 150, "int-suite": 110, "int-lib": 50}
+# The union's third gate: every leg's own result, so a red, skipped or cancelled leg fails it with complete lists.
+NEEDS_GATE = "python3 scripts/ci/check_needs.py macos-shards"
+NEEDS_ENV = "${{ toJSON(needs) }}"
+LIMITS = {"job": 180, "lib-b": 150, "lib-c": 150, "int-suite": 110, "int-lib": 50}
 LISTS = "macos-lib-lists-"
+# The steps that let a part's root rows run (local users, a reachable parts folder): on every part leg.
+SETUP = ("Local users for the writer's root rows", "mcpg-c can reach the part binaries")
 
 
 def load(name: str, path: Path):
@@ -75,8 +81,8 @@ def parts_problems(st, n: int) -> list[str]:
     parts = getattr(st, "PARTS", {}).get("macos")
     if not parts:
         return ["T1: the runner's PARTS has no macOS legs mapped to lib test parts"]
-    if set(parts) != {"lib-b", "int-lib"}:
-        out.append(f"T1: PARTS['macos'] maps {sorted(parts)}, want lib-b and int-lib")
+    if set(parts) != {"lib-b", "lib-c", "int-lib"}:
+        out.append(f"T1: PARTS['macos'] maps {sorted(parts)}, want lib-b, lib-c and int-lib")
     taken = sorted(p for ps in parts.values() for p in ps)
     if taken != list(range(1, n + 1)):
         out.append(f"T1: the macOS legs take parts {taken}, want exactly 1..{n}, each once")
@@ -140,11 +146,18 @@ def union_problems(jobs: dict) -> list[str]:
     if UNION_JOB not in ([check_needs] if isinstance(check_needs, str) else check_needs):
         out.append(f"T3: {CHECK_JOB} does not need {UNION_JOB}")
     steps = union.get("steps") or []
-    gates = [i for i, s in enumerate(steps) if EXPECT in str(s.get("run", "")) or UNION in str(s.get("run", ""))]
+    kinds = {EXPECT: "expect", UNION: "union", "scripts/ci/check_needs.py": "needs"}
+    gates = [i for i, s in enumerate(steps) if any(k in str(s.get("run", "")) for k in kinds)]
     expects = [s for s in steps if str(s.get("run", "")).strip().startswith(EXPECT + " ")]
     unions = [s for s in steps if str(s.get("run", "")).strip().startswith(UNION + " ")]
-    if len(expects) != 1 or len(unions) != 1 or len(gates) != 2:
-        out.append(f"T3: {UNION_JOB} must run exactly one `{EXPECT} <dir>` and one `{UNION} <lists> <dir>`")
+    needs_steps = [s for s in steps if str(s.get("run", "")).strip() == NEEDS_GATE]
+    if len(expects) != 1 or len(unions) != 1 or len(needs_steps) != 1 or len(gates) != 3:
+        out.append(f"T3: {UNION_JOB} must run exactly one `{EXPECT} <dir>`, one `{UNION} <lists> <dir>` and one `{NEEDS_GATE}`")
+    order = [next(v for k, v in kinds.items() if k in str(steps[i].get("run", ""))) for i in gates]
+    if len(gates) == 3 and order != ["expect", "union", "needs"]:
+        out.append(f"T3: {UNION_JOB}'s gates run in the order {order}, want expect, union, needs")
+    if needs_steps and (needs_steps[0].get("env") or {}).get("NEEDS") != NEEDS_ENV:
+        out.append(f"T3: {UNION_JOB}'s needs gate does not read NEEDS from {NEEDS_ENV}")
     for i in gates:
         s, r = steps[i], str(steps[i].get("run", ""))
         if s.get("continue-on-error") or "if" in s or "||" in r or re.search(r";\s*true\b", r) or "\n" in r.strip():
@@ -174,41 +187,67 @@ def leg_steps_problems(jobs: dict) -> list[str]:
     for s in shard.get("steps", []):
         r = str(s.get("run", ""))
         if LIB_STEP.match(r.strip()):
-            leg = LIB_STEP.match(r.strip()).group(1)
-            by_name["lib-b" if leg == "lib-b" else "int-lib"] = s.get("timeout-minutes")
+            by_name[LIB_STEP.match(r.strip()).group(1)] = s.get("timeout-minutes")
         elif "shard_tests.py run macos ${{ matrix.shard }}" in r:
             by_name["int-suite"] = s.get("timeout-minutes")
-    for key in ("lib-b", "int-suite", "int-lib"):
+    for key in ("lib-b", "lib-c", "int-suite", "int-lib"):
         if by_name.get(key) != LIMITS[key]:
             out.append(f"T5: {key}'s step limit is {by_name.get(key)}, want {LIMITS[key]}")
     return out
 
 
+def setup_problems(jobs: dict, st) -> list[str]:
+    """T8: each root-row setup step runs on exactly the matrix part legs (an OR of their pins, nothing else), and
+    before the first part step: the part that lists root rows can sit in any of them."""
+    out = []
+    steps = (jobs.get(SHARD_JOB) or {}).get("steps", [])
+    legs = [leg for leg in getattr(st, "PARTS", {}).get("macos", {}) if leg != "int-lib"]
+    want = " || ".join(f"matrix.shard == '{leg}'" for leg in legs)
+    first = next((i for i, s in enumerate(steps) if LIB_STEP.match(str(s.get("run", "")).strip())), len(steps))
+    for name in SETUP:
+        found = [i for i, s in enumerate(steps) if s.get("name") == name]
+        if len(found) != 1:
+            out.append(f"T8: {SHARD_JOB} must have exactly one step {name!r}")
+            continue
+        guard = " ".join(bare_guard(steps[found[0]]).split())
+        if guard != want:
+            out.append(f"T8: {name!r} runs on `{guard}`, want `{want}`")
+        if found[0] > first:
+            out.append(f"T8: {name!r} comes after the first part step")
+    return out
+
+
 def problems(wfs: dict[str, dict], st, n: int) -> list[str]:
     jobs = (wfs.get("ci.yml") or {}).get("jobs") or {}
-    return (parts_problems(st, n) + steps_problems(wfs, st) + union_problems(jobs) + leg_steps_problems(jobs))
+    return (parts_problems(st, n) + steps_problems(wfs, st) + union_problems(jobs) + leg_steps_problems(jobs)
+            + setup_problems(jobs, st))
 
 
 GUARD = "github.event_name != 'pull_request'"
 
 
 def fixture():
-    """The good layout: the design's two legs, the union job, the runner's tables."""
+    """The good layout: the design's three legs, the union job, the runner's tables."""
     import types
 
     def leg_parts(os_kind, leg, solo=False):
         return range(1, 6) if solo and leg == "lib-b" else st.PARTS[os_kind][leg]
     st = types.SimpleNamespace(
-        PARTS={"macos": {"lib-b": (1, 2, 3, 4), "int-lib": (5,)}},
+        PARTS={"macos": {"lib-b": (1, 3), "lib-c": (2, 4), "int-lib": (5,)}},
         MACOS_PART_COUNTS={"run": "1", 1: 100, 2: 100, 3: 100, 4: 100, 5: 100},
-        SHARDS={"macos": {"lib-b": [("parts", ["--lib"], [], 392)],
+        SHARDS={"macos": {"lib-b": [("parts", ["--lib"], [], 196)],
+                          "lib-c": [("parts", ["--lib"], [], 196)],
                           "int": [("suite", ["--bins", "--test", "*"], [], 1600), ("doc", ["--doc"], [], 55)],
                           "int-lib": [("parts", ["--lib"], [], 98)]}},
         PREBUILT={}, leg_parts=leg_parts)
     lib = 'python3 scripts/ci/shard_tests.py run-prebuilt-parts macos {} --build "$RUNNER_TEMP/parts"'
+    pin = "matrix.shard == 'lib-b' || matrix.shard == 'lib-c'"
     jobs = {
         SHARD_JOB: {"runs-on": "macos-latest", "if": "${{ " + GUARD + " }}", "timeout-minutes": 180, "steps": [
+            {"name": SETUP[0], "if": pin, "uses": "./.github/actions/access-rows-setup"},
+            {"name": SETUP[1], "if": pin, "run": "true"},
             {"name": "lib-b", "if": "matrix.shard == 'lib-b'", "timeout-minutes": 150, "run": lib.format("lib-b")},
+            {"name": "lib-c", "if": "matrix.shard == 'lib-c'", "timeout-minutes": 150, "run": lib.format("lib-c")},
             {"name": "suite", "if": "matrix.shard == 'int'", "timeout-minutes": 110,
              "run": "python3 scripts/ci/shard_tests.py run macos ${{ matrix.shard }}"},
             {"name": "part 5", "if": "matrix.shard == 'int'", "timeout-minutes": 50, "run": lib.format("int-lib")},
@@ -219,7 +258,8 @@ def fixture():
                     "if": "${{ !cancelled() && " + GUARD + " }}", "steps": [
             {"uses": "actions/download-artifact@x", "with": {"pattern": LISTS + "*", "path": "lists"}},
             {"name": "expect", "run": EXPECT + ' "$RUNNER_TEMP/expected"'},
-            {"name": "union", "run": UNION + ' "$RUNNER_TEMP/lists" "$RUNNER_TEMP/expected"'}]},
+            {"name": "union", "run": UNION + ' "$RUNNER_TEMP/lists" "$RUNNER_TEMP/expected"'},
+            {"name": "needs", "env": {"NEEDS": NEEDS_ENV}, "run": NEEDS_GATE}]},
     }
     return {"ci.yml": {"on": {"workflow_dispatch": {"inputs": {}}}, "jobs": jobs}}, st
 
@@ -242,7 +282,7 @@ def mutants():
         ("T1", "a part in two legs", lambda w, s: s.PARTS["macos"].update({"int-lib": (4, 5)})),
         ("T1", "a part in no leg", lambda w, s: s.PARTS["macos"].update({"int-lib": ()})),
         ("T1", "N raised to 6 with no leg taking part 6", lambda w, s: 6),
-        ("T1", "solo lib-b taking 1-4", lambda w, s: setattr(s, "leg_parts", lambda o, l, solo=False: s.PARTS[o][l])),
+        ("T1", "solo lib-b taking only its own train parts", lambda w, s: setattr(s, "leg_parts", lambda o, l, solo=False: s.PARTS[o][l])),
         ("T2", "cargo test --lib on a leg", lambda w, s: add_run(w, "cargo test --lib --all-features")),
         ("T2", "export-lib on a leg", lambda w, s: add_run(w, 'python3 scripts/ci/shard_tests.py export-lib "$X"')),
         ("T2", "wait-lib on a leg", lambda w, s: add_run(w, "python3 scripts/ci/shard_tests.py wait-lib a b")),
@@ -262,7 +302,7 @@ def mutants():
             {"run": 'python3 scripts/dev/test_parts.py expect x86_64-unknown-linux-gnu "$RUNNER_TEMP/expected"'})),
         ("T3", "a step after the gate", lambda w, s: j(w)[UNION_JOB]["steps"].append({"run": "exit 0"})),
     ]
-    for gate in ("expect", "union"):
+    for gate in ("expect", "union", "needs"):
         rows += [
             ("T3", f"continue-on-error on {gate}", lambda w, s, g=gate: step(w, UNION_JOB, g).update({"continue-on-error": True})),
             ("T3", f"|| true on {gate}", lambda w, s, g=gate: step(w, UNION_JOB, g).update({"run": step(w, UNION_JOB, g)["run"] + " || true"})),
@@ -284,8 +324,27 @@ def mutants():
         ("T6", "the binary artifact back", lambda w, s: j(w)[SHARD_JOB]["steps"].append(
             {"uses": "actions/upload-artifact@x", "with": {"name": "macos-lib-tests"}})),
         ("T6", "a macOS PREBUILT entry back", lambda w, s: s.PREBUILT.update({"macos": {"lib-a": "lib-b"}})),
-        ("T7", "a floor lowered by one", lambda w, s: s.SHARDS["macos"].update({"lib-b": [("parts", ["--lib"], [], 391)]})),
+        ("T7", "a floor lowered by one", lambda w, s: s.SHARDS["macos"].update({"lib-b": [("parts", ["--lib"], [], 195)]})),
         ("T7", "the counts' run id missing", lambda w, s: s.MACOS_PART_COUNTS.pop("run")),
+        ("T1", "lib-c dropped from PARTS", lambda w, s: s.PARTS["macos"].pop("lib-c")),
+        ("T3", "the needs gate removed", lambda w, s: j(w)[UNION_JOB]["steps"].pop()),
+        ("T3", "the needs gate without its NEEDS env", lambda w, s: step(w, UNION_JOB, "needs").pop("env")),
+        ("T3", "the needs gate judging another job", lambda w, s: step(w, UNION_JOB, "needs").update(
+            {"run": "python3 scripts/ci/check_needs.py macos-lib-union"})),
+        ("T3", "the needs gate before the union gate", lambda w, s: j(w)[UNION_JOB]["steps"].insert(
+            2, j(w)[UNION_JOB]["steps"].pop())),
+        ("T3", "a multi-line needs gate", lambda w, s: step(w, UNION_JOB, "needs").update(
+            {"run": NEEDS_GATE + "\nexit 0"})),
+        ("T5", "lib-c's lib step at 165, int-lib's right", lambda w, s: step(w, SHARD_JOB, "lib-c").update({"timeout-minutes": 165})),
+        ("T8", "setup pinned to lib-b only", lambda w, s: step(w, SHARD_JOB, SETUP[0]).update({"if": "matrix.shard == 'lib-b'"})),
+        ("T8", "setup pinned to lib-c only", lambda w, s: step(w, SHARD_JOB, SETUP[1]).update({"if": "matrix.shard == 'lib-c'"})),
+        ("T8", "OR turned into AND", lambda w, s: step(w, SHARD_JOB, SETUP[0]).update(
+            {"if": "matrix.shard == 'lib-b' && matrix.shard == 'lib-c'"})),
+        ("T8", "a pin to a leg that is not a matrix leg", lambda w, s: step(w, SHARD_JOB, SETUP[1]).update(
+            {"if": "matrix.shard == 'lib-b' || matrix.shard == 'lib-x'"})),
+        ("T8", "setup after the first part step", lambda w, s: j(w)[SHARD_JOB]["steps"].insert(
+            3, j(w)[SHARD_JOB]["steps"].pop(0))),
+        ("T8", "a setup step missing", lambda w, s: j(w)[SHARD_JOB]["steps"].pop(1)),
     ]
     return rows
 

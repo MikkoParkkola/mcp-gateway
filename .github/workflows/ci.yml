@@ -883,19 +883,20 @@ jobs:
     runs-on: macos-latest
     # Each leg builds lib test parts, never the whole lib test binary (it
     # swapped this 3-core, 7 GB runner: 19 to 86 min of build): lib-b builds
-    # and runs parts 1-4 one at a time, int runs its suite and then builds and
+    # and runs parts 1 and 3, lib-c parts 2 and 4, int runs its suite and then builds and
     # runs part 5. The step limits below plus a 10-min reserve stay under this
     # job limit (scripts/ci/test_macos_parts.py).
     timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
-        # Two jobs: about two macOS runners serve trains. Which parts each
+        # Three jobs: GitHub runs up to 5 macOS jobs at once for this account,
+        # and trains plus pull requests peaked at 3 (measured 2026-11-27). Which parts each
         # leg builds comes from scripts/ci/shard_tests.py's PARTS alone.
         # A lane PR labelled os-sensitive runs lib-b alone, and that job builds
         # and runs every part: these runners serve every train
         # (test_os_label_routing.py).
-        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","int"]') }}
+        shard: ${{ fromJSON(contains(github.event.pull_request.labels.*.name, 'os-sensitive') && !(startsWith(github.head_ref, 'train/') && github.event.pull_request.head.repo.full_name == github.repository) && '["lib-b"]' || '["lib-b","lib-c","int"]') }}
     permissions:
       contents: read
     env:
@@ -939,7 +940,7 @@ jobs:
               sleep 30
             done
           ) &
-      # lib-b: parts 1-4, each built, run and deleted before the next (the solo
+      # lib-b: parts 1 and 3, lib-c: parts 2 and 4, each built, run and deleted before the next (the solo
       # lane: every part). The runner holds each part to its list less the OS
       # skips.
       # The part holding the writer's root rows runs them again under sudo
@@ -948,11 +949,11 @@ jobs:
       # $RUNNER_TEMP/parts, outside the workspace path the composite opens.
       - name: Local users for the writer's root rows
         timeout-minutes: 2
-        if: matrix.shard == 'lib-b'
+        if: matrix.shard == 'lib-b' || matrix.shard == 'lib-c'
         uses: ./.github/actions/access-rows-setup
       - name: mcpg-c can reach the part binaries
         timeout-minutes: 1
-        if: matrix.shard == 'lib-b'
+        if: matrix.shard == 'lib-b' || matrix.shard == 'lib-c'
         run: |
           set -euo pipefail
           p="$RUNNER_TEMP/parts"
@@ -979,6 +980,10 @@ jobs:
         if: matrix.shard == 'lib-b'
         timeout-minutes: 150
         run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos lib-b --build "$RUNNER_TEMP/parts"
+      - name: Lib test parts 2 and 4, built and run one at a time
+        if: matrix.shard == 'lib-c'
+        timeout-minutes: 150
+        run: python3 scripts/ci/shard_tests.py run-prebuilt-parts macos lib-c --build "$RUNNER_TEMP/parts"
       - name: Shard suite
         if: matrix.shard == 'int'
         timeout-minutes: 110
@@ -1072,6 +1077,12 @@ jobs:
         run: scripts/gate-env/.venv/bin/python scripts/dev/test_parts.py expect aarch64-apple-darwin "$RUNNER_TEMP/expected"
       - name: Each part lists exactly the tests the source puts in it
         run: python3 scripts/ci/lib_union.py "$RUNNER_TEMP/lists" "$RUNNER_TEMP/expected"
+      # Complete lists from a leg whose tests went red (or a skipped or
+      # cancelled leg) must not pass: only an exact success of every leg does.
+      - name: Every macOS leg succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 scripts/ci/check_needs.py macos-shards
 
   # Gated like its shards: on a pull request that is not a train it is
   # skipped, never red, and no required check needs it. On a train it runs
