@@ -165,6 +165,17 @@ impl DispatchNotes {
     pub(crate) const fn response_refused(&self) -> bool {
         self.response_refused
     }
+
+    /// The response firewall refused this call's answer: the refusing check
+    /// is the firewall, naming no rule (the answer's rule never reaches a
+    /// record), unless an earlier check already refused.
+    fn refused_by_answer_scan(&mut self) {
+        self.response_refused = true;
+        self.decision.refused(
+            crate::security::decision_record::DecisionKind::Firewall,
+            None,
+        );
+    }
 }
 
 #[path = "audit_decision.rs"]
@@ -227,7 +238,7 @@ fn note(f: impl FnOnce(&mut DispatchNotes)) {
 /// call's own notes (the direct route scans inside them) and in the open
 /// audit owner (the meta route scans after they ended).
 pub(crate) fn note_response_refused() {
-    note(|notes| notes.response_refused = true);
+    note(DispatchNotes::refused_by_answer_scan);
     super::audit_owner::answer_refused();
 }
 
@@ -715,6 +726,7 @@ impl MetaMcp {
             answered = AuditOutcome::from_result(&refusal);
             denial = crate::security::security_metrics::meta_denial(&refusal);
             (firewall, response_hash, delivered) = (true, None, None);
+            notes.refused_by_answer_scan();
         }
         let reading = (verdict == AnswerVerdict::Delivered && succeeded)
             .then_some(reading)

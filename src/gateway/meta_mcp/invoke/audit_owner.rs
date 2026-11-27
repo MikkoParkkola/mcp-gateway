@@ -8,6 +8,9 @@
 use std::cell::{Cell, RefCell};
 use std::future::Future;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use tokio::sync::Notify;
 
 use super::audit::{AnswerVerdict, InvocationRecord};
 use crate::gateway::meta_mcp::MetaMcp;
@@ -48,21 +51,60 @@ impl Drop for Owner {
 }
 
 /// Write `pending` off the request: it was dropped, so nothing awaits it.
+/// The write is one of the gateway's audit jobs, which shutdown waits for.
 fn hand_off(meta: Arc<MetaMcp>, pending: Vec<InvocationRecord>, verdict: AnswerVerdict) {
-    let Ok(runtime) = tokio::runtime::Handle::try_current() else {
-        tracing::error!(
-            records = pending.len(),
-            "invocation records dropped with no runtime to write them"
-        );
-        return;
-    };
-    runtime.spawn(async move {
+    let jobs = Arc::clone(&meta.audit_jobs);
+    jobs.spawn(async move {
         for record in pending {
             if let Err(error) = meta.write_record(record, verdict, None).await {
                 tracing::error!(%error, "invocation record of a dropped request not written");
             }
         }
     });
+}
+
+/// The gateway's audit jobs: record writes handed off a request that no
+/// longer awaits them (D2.5). Graceful shutdown waits for them after the
+/// listener's drain, within its grace bound, and reports any still open.
+#[derive(Debug, Default)]
+pub(crate) struct AuditJobs {
+    open: AtomicUsize,
+    idle: Notify,
+}
+
+/// Ends one job when dropped, so a job that panics still ends.
+struct JobEnd(Arc<AuditJobs>);
+
+impl Drop for JobEnd {
+    fn drop(&mut self) {
+        if self.0.open.fetch_sub(1, Ordering::AcqRel) == 1 {
+            self.0.idle.notify_waiters();
+        }
+    }
+}
+
+impl AuditJobs {
+    /// Run `job` on the runtime as one of these jobs. With no runtime (a
+    /// drop during runtime teardown) the job cannot run and is reported.
+    pub(crate) fn spawn(self: Arc<Self>, job: impl Future<Output = ()> + Send + 'static) {
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            tracing::error!("an audit job was handed off with no runtime to run it");
+            return;
+        };
+        self.open.fetch_add(1, Ordering::AcqRel);
+        let end = JobEnd(self);
+        runtime.spawn(async move {
+            let _end = end;
+            job.await;
+        });
+    }
+
+    /// Wait until no job is open, or `within` has passed. Returns how many
+    /// are still open (0 when all ended).
+    pub(crate) async fn drain(&self, within: std::time::Duration) -> usize {
+        let _ = within;
+        self.open.load(Ordering::Acquire)
+    }
 }
 
 /// Run one HTTP `/mcp` request as the owner of its calls' records. A record
@@ -87,13 +129,13 @@ pub(crate) async fn owned<F: Future>(meta: Arc<MetaMcp>, request: F) -> F::Outpu
 
 /// Run a nested step: its records are written inline, never held by the
 /// request's owner.
-pub(crate) async fn inline<F: Future>(step: F) -> F::Output {
+pub(crate) fn inline<F: Future>(step: F) -> impl Future<Output = F::Output> {
     let owner = Owner {
         meta: None,
         pending: RefCell::default(),
         refused: Cell::new(false),
     };
-    OWNER.scope(owner, step).await
+    OWNER.scope(owner, step)
 }
 
 /// Hold `record` for the open owner; with none open it comes back to be
