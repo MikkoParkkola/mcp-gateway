@@ -197,6 +197,17 @@ test.describe('T2 the page follows the live status', () => {
     await settle(page);
     await expect(link).toBeFocused();
   });
+
+  test('T2e a server gone from a status event gets the not-found state, and its listener goes', async ({ page }) => {
+    await countListeners(page, ['gateway-status']);
+    await fakeServerGateway(page, { status: fullView(entry('svc', 'unhealthy'), entry('other', 'running')) });
+    await open(page, '/ui/servers/svc/status');
+    await statusEvent(page, fullView(entry('other', 'running')));
+    await expect(content(page).locator('[data-state="empty"] h2')).toHaveText('No server named svc');
+    await expect(content(page).locator('dl.sp-facts')).toHaveCount(0);
+    await expect(content(page).locator('[data-state="server"]')).toHaveCount(0);
+    expect(await page.evaluate(() => window.__listeners('gateway-status'))).toBe(0);
+  });
 });
 
 test.describe('T11 accessibility of the Status and Actions tabs', () => {
