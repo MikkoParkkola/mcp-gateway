@@ -114,7 +114,7 @@ control_plane:
 ## Evidence export to a SIEM
 
 Off by default. When it is on, a background task reads the gateway's two audit
-logs every `poll_interval_secs`: the transparency log of tool calls, and the
+logs every 15 seconds: the transparency log of tool calls, and the
 governance `audit.jsonl` described above. It checks each new entry's hash chain,
 and its HMAC when the transparency log has a signing secret, then appends the
 verified entries to `sink_path`, one JSON object per line. Point your SIEM agent
@@ -125,8 +125,6 @@ control_plane:
   export:
     enabled: true
     sink_path: ~/.mcp-gateway/export/siem.ndjson   # the default
-    poll_interval_secs: 15                          # the default
-    max_batch: 1024                                 # entries per log per poll; the default
 ```
 
 - Delivery is at least once. The export saves its place only after the file
