@@ -14,6 +14,7 @@ use mcp_gateway::discovery::{
 };
 
 use super::super::config_write::CommentLoss;
+use super::super::{CliExit, fail, write_remedy};
 use super::render::{render_server_entry, render_shadow_report};
 
 pub(super) async fn cap_discover(
@@ -80,8 +81,11 @@ pub(super) async fn cap_discover(
                         );
                     }
                     Err(e) => {
-                        eprintln!("{}", failure_line("Failed to write config", &e));
-                        return ExitCode::FAILURE;
+                        return fail(
+                            CliExit::LocalFailure,
+                            &failure_line("Failed to write config", &e).to_string(),
+                            &write_remedy(config_path.as_deref()),
+                        );
                     }
                 }
             } else {
@@ -93,10 +97,11 @@ pub(super) async fn cap_discover(
             }
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("{}", failure_line("Discovery failed", &e));
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &failure_line("Discovery failed", &e).to_string(),
+            "The message names the source that failed; rerun once it is fixed.",
+        ),
     }
 }
 
@@ -166,9 +171,11 @@ async fn cap_discover_shadow(
             .collect();
         if adoptable_servers.is_empty() {
             // Nothing written is a failure a script can see.
-            eprintln!("No adoptable local shadow servers found; leaving gateway config unchanged.");
-            eprintln!("Review the report actions before changing network or sensitive findings.");
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                "No adoptable local shadow servers found; leaving gateway config unchanged.",
+                "Review the report actions before changing network or sensitive findings.",
+            );
         }
 
         let apply_path = output_config_path.unwrap_or_else(|| compare_config_path.clone());
@@ -196,8 +203,11 @@ async fn cap_discover_shadow(
                 );
             }
             Err(e) => {
-                eprintln!("{}", failure_line("Failed to adopt shadow servers", &e));
-                return ExitCode::FAILURE;
+                return fail(
+                    CliExit::LocalFailure,
+                    &failure_line("Failed to adopt shadow servers", &e).to_string(),
+                    &write_remedy(Some(&apply_path)),
+                );
             }
         }
     }
@@ -248,11 +258,11 @@ fn print_server_entry(server: &mcp_gateway::discovery::DiscoveredServer) {
     render_server_entry(&mut std::io::stdout().lock(), server);
 }
 
-/// The terminal line for a failed step, escaped whole: an error can carry a
-/// path or text from a client's config file. One `shown` call, so the
-/// discovery output guard accepts it where it is printed.
+/// The message of a failed step, escaped whole: an error can carry a path or
+/// text from a client's config file. One `shown` call, so the discovery output
+/// guard accepts it where it is printed.
 fn failure_line(what: &str, error: &impl std::fmt::Display) -> mcp_gateway::cli_support::Shown {
-    mcp_gateway::cli_support::shown(&format!("❌ {what}: {error}"))
+    mcp_gateway::cli_support::shown(&format!("{what}: {error}"))
 }
 
 #[cfg(tp1)]

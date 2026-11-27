@@ -9,7 +9,9 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.eb4a79cf1d0c.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.23eb92bf6df3.js';
+import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.8abcae2314bd.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -56,6 +58,8 @@ const EXTRA_MS = 15_000;
 let dropListener = null;
 
 const slug = (label) => label.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+/** A name in the list: a link to its Status tab, or text for a name no address can carry. */
+const nameLink = (name) => (addressable(name) ? el('a', { class: 'lnk', href: serverPath(name, 'status') }, name) : name);
 const known = (n) => typeof n === 'number' && Number.isFinite(n);
 const ms = (n) => (n < 1000 ? `${Math.round(n)} ms` : `${(n / 1000).toFixed(1)} s`);
 const notKnown = () => el('td', { class: 'n', 'aria-label': 'not known' }, '—');
@@ -115,7 +119,7 @@ function needsBlock(list) {
   const rank = (s) => (WORST_FIRST.includes(s.state) ? WORST_FIRST.indexOf(s.state) : WORST_FIRST.length);
   const sorted = [...list].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   return block('Needs a look', sorted.length, el('tbody', {}, ...sorted.map((s) => el('tr', {},
-    el('th', { scope: 'row' }, s.name), stateCell(serverBadge(s.state, { plain: true }), detail(s)),
+    el('th', { scope: 'row' }, nameLink(s.name)), stateCell(serverBadge(s.state, { plain: true }), detail(s)),
     numberCell(s.tools_cached), numberCell(s.calls_24h), p95Cell(s.latency_p95_ms)))));
 }
 
@@ -170,7 +174,7 @@ function answeringBlock(list, categories, view) {
     for (const s of members) {
       const words = s.state === 'slow' && typeof s.reason === 'string' ? s.reason : '';
       tbody.append(el('tr', { class: 'sv-member', 'data-member-of': key },
-        el('th', { scope: 'row' }, s.name), stateCell(memberBadge(s.state), words),
+        el('th', { scope: 'row' }, nameLink(s.name)), stateCell(memberBadge(s.state), words),
         numberCell(s.tools_cached), numberCell(s.calls_24h), p95Cell(s.latency_p95_ms)));
     }
   }
@@ -196,7 +200,7 @@ function showOpen(tbody, key) {
 function offBlock(list) {
   const sorted = [...list].sort((a, b) => a.name.localeCompare(b.name));
   return block(OFF_BLOCK_TITLE, sorted.length, el('tbody', {}, ...sorted.map((s) => el('tr', {},
-    el('th', { scope: 'row' }, s.name), el('td', {}, serverBadge('off', { plain: true })),
+    el('th', { scope: 'row' }, nameLink(s.name)), el('td', {}, serverBadge('off', { plain: true })),
     numberCell(s.tools_cached), numberCell(s.calls_24h), p95Cell(s.latency_p95_ms)))));
 }
 
@@ -217,6 +221,7 @@ function focusKey(root) {
   const at = document.activeElement;
   if (!at || !root.contains(at)) return null;
   if (at.dataset.group) return `button[data-group="${CSS.escape(at.dataset.group)}"]`;
+  if (at.matches('th a.lnk')) return `th a.lnk[href="${CSS.escape(at.getAttribute('href'))}"]`; // a server-name link
   const holder = at.closest('.has-tip[data-tip]');
   if (holder) return `.has-tip[data-tip="${CSS.escape(holder.dataset.tip)}"] button`;
   if (at.matches('.sv-scroll')) return `.sv-scroll[aria-label="${CSS.escape(at.getAttribute('aria-label'))}"]`;
@@ -334,8 +339,21 @@ function statusTab(body, ctx) {
   return refresh();
 }
 
+/**
+ * Each tab first drops a listener a server page left. With an object it draws
+ * that server's tab; without one, Status is the list and Actions is not built.
+ */
+const tab = (onServer, onList) => (body, ctx) => {
+  leave();
+  return ctx.object === null ? onList(body, ctx) : onServer(body, ctx);
+};
+
 register('servers', {
   title: 'Servers',
-  tabs: { status: statusTab, actions: null, settings: null },
+  tabs: {
+    status: tab(serverStatus, statusTab),
+    actions: tab(serverActions, (body, ctx) => body.append(ctx.state('not-built'))),
+    settings: null,
+  },
   entries: [],
 });

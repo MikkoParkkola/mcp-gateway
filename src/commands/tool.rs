@@ -19,6 +19,7 @@ use mcp_gateway::cli::{
 };
 
 use super::capability_dirs::{self, CapabilityDirs, NONE_FOUND};
+use super::{CliExit, fail, usage};
 
 pub async fn run_tool_command(cmd: ToolCommand, config: Option<&Path>) -> ExitCode {
     match cmd {
@@ -50,25 +51,14 @@ async fn catalogue(
     capabilities: Option<PathBuf>,
     config: Option<&Path>,
 ) -> Result<(ToolCatalogue, CapabilityDirs), ExitCode> {
-    let dirs = capability_dirs::resolve(capabilities, config).map_err(|e| {
-        eprintln!("Error: {e}");
-        ExitCode::FAILURE
-    })?;
-    let cat = capability_dirs::load(&dirs).await.map_err(|e| {
-        eprintln!("Error: {e}");
-        ExitCode::FAILURE
-    })?;
+    let dirs = capability_dirs::resolve(capabilities, config).map_err(|e| e.exit())?;
+    let cat = capability_dirs::load(&dirs).await.map_err(|e| e.exit())?;
     Ok((cat, dirs))
 }
 
-/// Whether a catalogue read from the configured directories came back empty;
-/// says so on stderr.
+/// Whether a catalogue read from the configured directories came back empty.
 fn none_found(cat: &ToolCatalogue, dirs: &CapabilityDirs) -> bool {
-    let empty = cat.all().is_empty() && matches!(dirs, CapabilityDirs::Configured(_));
-    if empty {
-        eprintln!("{NONE_FOUND}.");
-    }
-    empty
+    cat.all().is_empty() && matches!(dirs, CapabilityDirs::Configured(_))
 }
 
 async fn tool_list(
@@ -90,7 +80,9 @@ async fn tool_list(
     }
     match catalogue(capabilities, config).await {
         Ok((cat, dirs)) => {
-            none_found(&cat, &dirs);
+            if none_found(&cat, &dirs) {
+                eprintln!("{NONE_FOUND}.");
+            }
             print_tool_list(&cat.list_entries(), format);
             ExitCode::SUCCESS
         }
@@ -109,14 +101,17 @@ async fn tool_inspect(
         Err(code) => return code,
     };
     if none_found(&cat, &dirs) {
-        return ExitCode::FAILURE;
+        return capability_dirs::none_found_failure();
     }
     if let Some(cap) = cat.find(&tool) {
         print_tool_inspect(&cap.name, &cap.description, &cap.schema.input, format);
         ExitCode::SUCCESS
     } else {
-        eprintln!("Error: Tool '{tool}' not found. Run 'tool list' to see available tools.");
-        ExitCode::FAILURE
+        fail(
+            CliExit::LocalFailure,
+            &format!("Tool '{tool}' not found"),
+            "Run 'mcp-gateway tool list' to see the available tools.",
+        )
     }
 }
 
@@ -133,15 +128,26 @@ async fn tool_invoke(
         Err(code) => return code,
     };
     if none_found(&catalogue, &dirs) {
-        return ExitCode::FAILURE;
+        return capability_dirs::none_found_failure();
+    }
+    // `--args` that is not JSON is a wrong invocation (exit 2); stdin that is not JSON and a malformed `key=value`
+    // stay failures of the input (exit 1).
+    if let Some(Err(e)) = args
+        .as_deref()
+        .map(serde_json::from_str::<serde_json::Value>)
+    {
+        return usage("tool invoke", &format!("--args is not valid JSON: {e}"));
     }
     // `key=value` text is typed by the tool's own input schema (MIK-7943).
     let kv_schema = catalogue.find(&tool).map(|cap| &cap.schema.input);
     let resolved = match resolve_args(args.as_deref(), &kv_args, true, kv_schema) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
+            return fail(
+                CliExit::LocalFailure,
+                &e.to_string(),
+                "Pass the arguments as JSON on stdin, a JSON --args, or key=value pairs.",
+            );
         }
     };
     match execute_tool(&catalogue, &tool, resolved).await {
@@ -149,10 +155,11 @@ async fn tool_invoke(
             print_tool_result(&result, format);
             ExitCode::SUCCESS
         }
-        Err(e) => {
-            eprintln!("Error: {e}");
-            ExitCode::FAILURE
-        }
+        Err(e) => fail(
+            CliExit::LocalFailure,
+            &e.to_string(),
+            "Run 'mcp-gateway tool inspect' on the tool to see what it takes, then rerun.",
+        ),
     }
 }
 
@@ -166,10 +173,7 @@ async fn tool_completions(
     // as before, just without tool names.
     let dirs = match capability_dirs::resolve(capabilities, config) {
         Ok(dirs) => dirs,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            return ExitCode::FAILURE;
-        }
+        Err(e) => return e.exit(),
     };
     let tool_names: Vec<String> = match capability_dirs::load(&dirs).await {
         Ok(cat) => cat.all().iter().map(|c| c.name.clone()).collect(),

@@ -28,20 +28,21 @@ fn patch() -> Patch {
         }],
     }
 }
-async fn check(refusal: UiRefused, status: StatusCode, code: &str, retry: bool) {
-    let response = answer(refusal);
+async fn check(refusal: UiRefused, asked: Asked, status: StatusCode, code: &str, retry: bool) {
+    let response = answer(refusal, asked);
     assert_eq!(response.status(), status, "shared answer status");
     assert_eq!(response.headers().contains_key(RETRY_AFTER), retry);
     if retry {
         let header = response.headers().get(RETRY_AFTER).expect("Retry-After");
-        assert!(
-            header
-                .to_str()
-                .expect("ASCII")
-                .parse::<u64>()
-                .expect("retry seconds")
-                > 0
-        );
+        let seconds = header
+            .to_str()
+            .expect("ASCII")
+            .parse::<u64>()
+            .expect("retry seconds");
+        assert!(seconds > 0);
+        if status == StatusCode::CONFLICT {
+            assert_eq!(seconds, 1, "a refusal that clears by itself: retry in 1 s");
+        }
     }
     let (_, body) = decode(response).await;
     assert_eq!(body["error"], code, "{body}");
@@ -61,9 +62,12 @@ async fn check(refusal: UiRefused, status: StatusCode, code: &str, retry: bool) 
 }
 macro_rules! row {
     ($name:ident, $refusal:expr, $status:ident, $code:expr, $retry:expr) => {
+        row!($name, Save, $refusal, $status, $code, $retry);
+    };
+    ($name:ident, $asked:ident, $refusal:expr, $status:ident, $code:expr, $retry:expr) => {
         #[doc = concat!("Red oracle: ", stringify!($name), " maps to ", stringify!($status), ", its code and retry contract, without payload text.")]
         #[tokio::test]
-        async fn $name() { check($refusal, StatusCode::$status, $code, $retry).await; }
+        async fn $name() { check($refusal, Asked::$asked, StatusCode::$status, $code, $retry).await; }
     };
 }
 row!(
@@ -140,8 +144,22 @@ row!(
 row!(
     no_audit_log,
     UiRefused::NoAuditLog,
+    CONFLICT,
+    "audit_log_required",
+    false
+);
+row!(
+    audit_refused,
+    UiRefused::AuditRefused,
     SERVICE_UNAVAILABLE,
     "audit_log_required",
+    false
+);
+row!(
+    writer_refused,
+    UiRefused::WriterRefused,
+    CONFLICT,
+    "failed",
     false
 );
 row!(
@@ -164,12 +182,20 @@ row!(
 row!(
     stale_unpreviewable,
     UiRefused::StaleUnpreviewable(CANARY.into()),
-    SERVICE_UNAVAILABLE,
+    CONFLICT,
     "stale",
     true
 );
 row!(
     recovering,
+    UiRefused::Preview(PreviewRefused::Recovering),
+    CONFLICT,
+    "the config write is recovering; retry",
+    true
+);
+row!(
+    recovering_on_the_diff,
+    Diff,
     UiRefused::Preview(PreviewRefused::Recovering),
     SERVICE_UNAVAILABLE,
     "the config write is recovering; retry",
@@ -185,12 +211,28 @@ row!(
 row!(
     untrusted,
     UiRefused::Preview(PreviewRefused::Untrusted(CANARY.into())),
-    SERVICE_UNAVAILABLE,
+    CONFLICT,
     "gateway.yaml could not be loaded",
     false
 );
 row!(
     unread,
+    UiRefused::Preview(PreviewRefused::Unread(CANARY.into())),
+    CONFLICT,
+    "gateway.yaml could not be loaded",
+    false
+);
+row!(
+    untrusted_on_the_diff,
+    Diff,
+    UiRefused::Preview(PreviewRefused::Untrusted(CANARY.into())),
+    SERVICE_UNAVAILABLE,
+    "gateway.yaml could not be loaded",
+    false
+);
+row!(
+    unread_on_the_diff,
+    Diff,
     UiRefused::Preview(PreviewRefused::Unread(CANARY.into())),
     SERVICE_UNAVAILABLE,
     "gateway.yaml could not be loaded",
@@ -201,6 +243,13 @@ row!(
     UiRefused::Busy(BusyReason::Locked),
     CONFLICT,
     "the config is being written; retry",
+    true
+);
+row!(
+    busy_restart,
+    UiRefused::Busy(BusyReason::Restart),
+    CONFLICT,
+    "a restart is being prepared; retry",
     true
 );
 row!(
@@ -317,4 +366,18 @@ async fn reload_not_enabled() {
         body,
         json!({"error": "Config reload is not enabled on this gateway"})
     );
+}
+
+/// Review r1 (kimi): a writer refusal keeps the failed write's body byte for
+/// byte; only its status moves, from 500 to the refusal's 409.
+#[tokio::test]
+async fn a_writer_refusal_keeps_the_failed_write_body() {
+    let refused = answer(UiRefused::WriterRefused, Asked::Save);
+    let failed = answer(UiRefused::Failed(FAILED.to_owned()), Asked::Save);
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(failed.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(!refused.headers().contains_key(RETRY_AFTER));
+    let (_, refused) = decode(refused).await;
+    let (_, failed) = decode(failed).await;
+    assert_eq!(refused, failed);
 }

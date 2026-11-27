@@ -519,10 +519,7 @@ async fn with_auth_on_and_no_audit_log_an_adopt_is_refused() {
 
     assert_eq!(
         (status, &body["error"]),
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            &Value::from("audit_log_required")
-        ),
+        (StatusCode::CONFLICT, &Value::from("audit_log_required")),
         "the adopt was not refused for the missing audit log: {body}"
     );
     assert_eq!(
@@ -576,7 +573,7 @@ async fn a_config_others_can_write_is_refused_at_the_writers_read() {
 
     let (status, body) = route.adopt(true, &id, &revision).await;
 
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "gateway.yaml could not be loaded", "{body}");
     for path in paths_of(&route) {
         assert!(!body.to_string().contains(&path), "the answer names {path}");
@@ -643,7 +640,7 @@ async fn a_loose_recovery_file_answers_the_fixed_refusal(
 
     let (status, body) = route.adopt(true, &id, &revision).await;
 
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["error"], "gateway.yaml could not be loaded", "{body}");
     for path in paths_of(&route) {
         assert!(!body.to_string().contains(&path), "the answer names {path}");

@@ -1,8 +1,8 @@
 # path, method, request shape, caller, answer. One route per file; a digest named in ../ui_access_matrix_bodies.tsv is written as status:@name.
-/ui/api/backends/{name}	DELETE	plain	AdminKey	503
-/ui/api/backends/{name}	DELETE	plain	AdminKeyUnmapped	503
+/ui/api/backends/{name}	DELETE	plain	AdminKey	409
+/ui/api/backends/{name}	DELETE	plain	AdminKeyUnmapped	409
 /ui/api/backends/{name}	DELETE	plain	AuthOff	403:error="Admin authentication required"
-/ui/api/backends/{name}	DELETE	plain	Bearer	503
+/ui/api/backends/{name}	DELETE	plain	Bearer	409
 /ui/api/backends/{name}	DELETE	plain	NoKey	401:error.code=-32000
 /ui/api/backends/{name}	DELETE	plain	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}	DELETE	plain	OidcAdmin	403:error="Admin authentication required"
@@ -12,7 +12,7 @@
 /ui/api/backends/{name}	DELETE	plain	OidcDeveloperNoSubject	403:error="Admin authentication required"
 /ui/api/backends/{name}	DELETE	plain	OidcReviewer	403:error="Admin authentication required"
 /ui/api/backends/{name}	DELETE	plain	OidcUnmapped	403:error="Admin authentication required"
-/ui/api/backends/{name}	DELETE	plain	Session	503
+/ui/api/backends/{name}	DELETE	plain	Session	409
 /ui/api/backends/{name}	DELETE	plain	StandardKey	403:error="Admin authentication required"
 /ui/api/backends/{name}	GET	bad-query	AdminKey	405
 /ui/api/backends/{name}	GET	bad-query	AdminKeyUnmapped	405
@@ -104,10 +104,10 @@
 /ui/api/backends/{name}	PATCH	bad-type	OidcUnmapped	415
 /ui/api/backends/{name}	PATCH	bad-type	Session	415
 /ui/api/backends/{name}	PATCH	bad-type	StandardKey	415
-/ui/api/backends/{name}	PATCH	json	AdminKey	503
-/ui/api/backends/{name}	PATCH	json	AdminKeyUnmapped	503
+/ui/api/backends/{name}	PATCH	json	AdminKey	409
+/ui/api/backends/{name}	PATCH	json	AdminKeyUnmapped	409
 /ui/api/backends/{name}	PATCH	json	AuthOff	403:error="Admin authentication required"
-/ui/api/backends/{name}	PATCH	json	Bearer	503
+/ui/api/backends/{name}	PATCH	json	Bearer	409
 /ui/api/backends/{name}	PATCH	json	NoKey	401:error.code=-32000
 /ui/api/backends/{name}	PATCH	json	NoKeyPublicStatus	401:error.code=-32000
 /ui/api/backends/{name}	PATCH	json	OidcAdmin	403:error="Admin authentication required"
@@ -117,7 +117,7 @@
 /ui/api/backends/{name}	PATCH	json	OidcDeveloperNoSubject	403:error="Admin authentication required"
 /ui/api/backends/{name}	PATCH	json	OidcReviewer	403:error="Admin authentication required"
 /ui/api/backends/{name}	PATCH	json	OidcUnmapped	403:error="Admin authentication required"
-/ui/api/backends/{name}	PATCH	json	Session	503
+/ui/api/backends/{name}	PATCH	json	Session	409
 /ui/api/backends/{name}	PATCH	json	StandardKey	403:error="Admin authentication required"
 /ui/api/backends/{name}	POST	bad-json	AdminKey	405
 /ui/api/backends/{name}	POST	bad-json	AdminKeyUnmapped	405

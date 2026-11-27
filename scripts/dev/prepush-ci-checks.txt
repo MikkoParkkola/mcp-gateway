@@ -173,3 +173,4 @@ python3 scripts/dev/check_clippy_textlints.py	0	closed
 python3 scripts/dev/check_clippy_textlints.py --self-test	0	closed
 python3 scripts/ci/test_coverage_union.py	30	closed
 python3 scripts/release/test_coverage_grade.py	25	closed
+python3 scripts/release/test_c6_build_host_batch.py	5	closed

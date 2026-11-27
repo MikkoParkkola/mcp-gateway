@@ -311,6 +311,9 @@ pub struct HttpTransport {
     /// The start-once preview's byte budget; unset everywhere
     /// else, so a live backend reads its bodies as before.
     body_budget: std::sync::OnceLock<Arc<budget::ByteBudget>>,
+    /// The most bytes one answer may carry: the backend's
+    /// `max_frame_bytes`, else the stdio frame default.
+    max_response_bytes: std::sync::atomic::AtomicUsize,
     /// The values the backend's rules injected; every answer this transport
     /// reads is scrubbed of them. Attached before the first send.
     needles: std::sync::OnceLock<Arc<crate::security::needles::NeedleSet>>,
@@ -536,6 +539,9 @@ impl HttpTransport {
             lent_only: AtomicBool::new(false),
             lender: std::sync::OnceLock::new(),
             body_budget: std::sync::OnceLock::new(),
+            max_response_bytes: std::sync::atomic::AtomicUsize::new(
+                crate::transport::DEFAULT_MAX_FRAME_BYTES,
+            ),
             needles: std::sync::OnceLock::new(),
             request_id: AtomicU64::new(1),
             listen_cancel: tokio_util::sync::CancellationToken::new(),
@@ -663,6 +669,16 @@ impl HttpTransport {
         let _ = self
             .body_budget
             .set(Arc::new(budget::ByteBudget::new(per_response, total)));
+    }
+
+    /// Set the most bytes one answer may carry.
+    pub(crate) fn set_max_response_bytes(&self, bytes: usize) {
+        self.max_response_bytes.store(bytes, Ordering::Relaxed);
+    }
+
+    /// The most bytes one answer may carry.
+    pub(crate) fn max_response_bytes(&self) -> usize {
+        self.max_response_bytes.load(Ordering::Relaxed)
     }
 }
 

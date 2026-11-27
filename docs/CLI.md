@@ -17,8 +17,9 @@ How `mcp-gateway` commands report results and failures, so scripts can rely on t
 
 ## Exit codes
 
-`api`, `dashboard-link`, `events dead-letters` and `audit lookup-email` exit with these codes. Other commands
-exit 0 on success and nonzero on failure (2 when their arguments are wrong) until they move to the same table.
+`api`, `dashboard-link`, `events dead-letters` and `audit lookup-email` exit with these codes. Every other command
+exits 0 on success, 2 when it is called wrong and 1 for any other failure. A check that answers no (`validate`
+with findings, a failed `audit verify`) keeps the code it has always had.
 
 | Code | Meaning |
 | --- | --- |
