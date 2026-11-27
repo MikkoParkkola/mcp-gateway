@@ -91,7 +91,7 @@ test('DIAG where the phone update time goes', async ({ page }) => {
   await open(page);
   await expect(page.locator('#content [data-panel="flow-map"] .ov-map')).toHaveCount(1);
   await profileOn(page, 'phone');
-  const parts = await page.evaluate(async ([a, b]) => {
+  const parts = await page.evaluate(async ([a, b, bSameDots]) => {
     const screens = JSON.parse(document.getElementById('screens').textContent);
     const { flowModel, updateMap } = await import(screens.overview.js);
     const root = document.querySelector('#content [data-panel="flow-map"]');
@@ -113,7 +113,16 @@ test('DIAG where the phone update time goes', async ({ page }) => {
     const same = run([a, a]);
     root.querySelectorAll('.ov-lines path').forEach((p) => { p.style.transition = 'none'; });
     const noTransition = run([a, b]);
-    return { changing, same, noTransition, flushOnly: p95(flushOnly) };
-  }, [big(0), big(1)]);
+    // Same bodies, but no dot comes or goes between them.
+    const noDotChurn = run([a, bSameDots]);
+    // The pulse switched off.
+    const calm = new CSSStyleSheet();
+    calm.replaceSync('.ov-dot.ov-pulse { animation: none !important; }');
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, calm];
+    const noPulse = run([a, b]);
+    document.adoptedStyleSheets = document.adoptedStyleSheets.filter((s) => s !== calm);
+    const changingAgain = run([a, b]);
+    return { changing, same, noTransition, noDotChurn, noPulse, changingAgain, flushOnly: p95(flushOnly) };
+  }, [big(0), big(1), (() => { const b = big(1); const a = big(0); b.edges.rows.forEach((r, i) => { r.blocks = a.edges.rows[i].blocks; }); return b; })()]);
   console.log(`DIAG phone ${JSON.stringify(parts)}`);
 });
