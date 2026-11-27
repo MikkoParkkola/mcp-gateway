@@ -6,6 +6,8 @@
 // H3 marker, H4 listener pid, H5 a taken port, H6 two tests never share, H11 a gateway that never comes up,
 // S1 the fresh-install seed (init's starter config), S2 the populated seed.
 import net from 'node:net';
+import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { test, expect, startGateway } from './gateway.mjs';
 
@@ -86,4 +88,76 @@ test.describe('seeds', () => {
       for (const stub of gw.stubs) expect(names).toContain(stub);
     });
   });
+
+  test.describe('pendingDecision', () => {
+    test.use({ seed: 'pendingDecision' });
+    test('S3 the decisions list holds one adopt item for the planted server', async ({ gw }) => {
+      const { decisions } = await (await gw.api('/ui/api/decisions')).json();
+      const adopt = decisions.filter((d) => d.kind === 'adopt' && JSON.stringify(d).includes('pending-adopt'));
+      expect(adopt).toHaveLength(1);
+    });
+  });
+
+  test.describe('blockedCall', () => {
+    test.use({ seed: 'blockedCall' });
+    test('S4 Activity holds the blocked real call, and its receipt names the tool_policy rule', async ({ gw }) => {
+      const { rows } = await (await gw.api('/ui/api/activity?server=tide')).json();
+      const blocked = rows.filter((r) => r.tool === 'tide_secret' && r.outcome === 'blocked');
+      expect(blocked.length, 'no blocked tide_secret call in Activity').toBeGreaterThan(0);
+      const receipt = await (await gw.api(`/ui/api/activity/${encodeURIComponent(blocked[0].id)}`)).json();
+      expect(JSON.stringify(receipt.decision ?? {})).toContain('tool_policy');
+    });
+  });
+});
+
+test.describe('the gateway reads only the test home', () => {
+  test.use({ seed: 'fresh' });
+
+  test('H7 it lists the test home\'s discovery entry and never the decoy\'s', async ({ gw }) => {
+    const seen = JSON.stringify(await (await gw.api('/ui/api/discovery')).json());
+    expect(seen).toContain('h-planted');
+    expect(seen).not.toContain('decoy-planted');
+    expect(JSON.stringify(await (await gw.api('/ui/api/backends')).json())).not.toContain('decoy-planted');
+  });
+
+  // From gpt r3's MEDIUM (init does write the store-backed bearer: cli_support/init.rs:22-86), these controls make
+  // the decoy key's 401 mean "the gateway never read D's store", not "the decoy key was malformed".
+  test('H8 the decoy home\'s real key is refused while the test home\'s is accepted', async ({ gw }) => {
+    expect(gw.decoyKey.length, 'the decoy secret is empty').toBeGreaterThan(0);
+    expect(gw.decoyKey).not.toBe(gw.adminKey);
+    expect((await gw.api('/ui/api/status')).status).toBe(200);
+    expect((await gw.api('/ui/api/status', { key: gw.decoyKey })).status).toBe(401);
+  });
+});
+
+/** The child's real environment, read from the OS: /proc on Linux, ps -E on macOS. */
+function childEnvironment(pid) {
+  if (process.platform === 'linux') return readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').join('\n');
+  return spawnSync('ps', ['-wwE', '-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).stdout;
+}
+
+test('H9 nothing from the parent environment reaches the gateway', async () => {
+  process.env.JH_PARENT_SENTINEL = 'jh-parent-only-value';
+  const gw = await startGateway({ seed: 'fresh' });
+  try {
+    const env = childEnvironment(gw.pid);
+    expect(env, 'could not read the child environment').toContain('MCP_GATEWAY_TEST_HOME_DIR');
+    expect(env).not.toContain('JH_PARENT_SENTINEL');
+    expect(env).not.toContain('jh-parent-only-value');
+  } finally {
+    delete process.env.JH_PARENT_SENTINEL;
+    await gw.stop();
+  }
+});
+
+test('H10 after a passing test the gateway is gone and its port refuses', async () => {
+  const gw = await startGateway({ seed: 'fresh' });
+  await gw.stop();
+  expect(() => process.kill(gw.pid, 0), 'the gateway process is still alive').toThrow();
+  const answered = await new Promise((resolve) => {
+    const c = net.connect(gw.port, '127.0.0.1');
+    c.once('connect', () => { c.destroy(); resolve(true); });
+    c.once('error', () => resolve(false));
+  });
+  expect(answered, 'the port still answers').toBe(false);
 });
