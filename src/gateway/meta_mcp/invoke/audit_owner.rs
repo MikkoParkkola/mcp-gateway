@@ -56,7 +56,8 @@ fn hand_off(meta: Arc<MetaMcp>, pending: Vec<InvocationRecord>, verdict: AnswerV
     let jobs = Arc::clone(&meta.audit_jobs);
     jobs.spawn(async move {
         for record in pending {
-            if let Err(error) = meta.write_record(record, verdict, None).await {
+            let appended = meta.append_record(record, verdict).await;
+            if let Err(error) = meta.settle_record(appended, None) {
                 tracing::error!(%error, "invocation record of a dropped request not written");
             }
         }
@@ -249,7 +250,19 @@ pub(crate) async fn commit(lease: Option<&SyncLease>) -> crate::Result<()> {
     };
     let mut written = Ok(());
     for record in pending {
-        let landed = meta.write_record(record, verdict, lease).await;
+        // The write is a job of its own (D2.3): the request may be cancelled
+        // or dropped while it appends, and the record still lands, once.
+        let (sent, received) = tokio::sync::oneshot::channel();
+        let job = Arc::clone(&meta);
+        Arc::clone(&meta.audit_jobs).spawn(async move {
+            let _ = sent.send(job.append_record(record, verdict).await);
+        });
+        let landed = match received.await {
+            Ok(appended) => meta.settle_record(appended, lease),
+            // The job ended with no verdict (it panicked, or no runtime ran
+            // it): the record is not known to have landed.
+            Err(_) => Err(crate::Error::AuditUnavailable),
+        };
         written = written.and(landed);
     }
     written

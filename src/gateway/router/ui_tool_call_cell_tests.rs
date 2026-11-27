@@ -196,6 +196,11 @@ const SPAWN_ALLOWED: &[(&str, &str, &str)] = &[
         "jobs.spawn(async move {",
         "hand_off: a dropped request's records, as one AuditJobs job",
     ),
+    (
+        "src/gateway/meta_mcp/invoke/audit_owner.rs",
+        "Arc::clone(&meta.audit_jobs).spawn(async move {",
+        "commit: each record's write as an AuditJobs job the request awaits, after finalize",
+    ),
 ];
 
 /// T20 (design C0b): a web UI call's cell is a task-local, which does not

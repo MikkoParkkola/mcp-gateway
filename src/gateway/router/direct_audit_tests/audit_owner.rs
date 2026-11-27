@@ -252,3 +252,47 @@ async fn p4_3_a_cancelled_meta_call_keeps_todays_record_and_counts() {
         "a cancelled call writes no record"
     );
 }
+
+/// P4 (3), cancellation while the append is in flight: a `/mcp` call dropped
+/// after finalize handed its record to the audit job, while that job is still
+/// held, leaves exactly one complete record once the job runs, counted once.
+#[tokio::test]
+async fn p4_3_a_request_dropped_mid_append_still_lands_one_record() {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    let fx = fixture(Setup::default()).await;
+    let store = attach(&fx);
+    let jobs = std::sync::Arc::clone(&fx.state.meta_mcp.audit_jobs);
+    jobs.seams.gate_jobs.store(true, Ordering::SeqCst);
+    let call = meta_invoke("alpha", "t", &json!({}));
+    {
+        let request = post_to(&fx, "/mcp", &call, &Caller::Anonymous);
+        tokio::pin!(request);
+        loop {
+            tokio::select! {
+                _ = &mut request => panic!("the request answered before its record's job ran"),
+                () = tokio::time::sleep(Duration::from_millis(5)) => {
+                    if jobs.drain(Duration::ZERO).await > 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    jobs.seams.open_gate();
+    assert_eq!(
+        jobs.drain(Duration::from_secs(30)).await,
+        0,
+        "the job did not end"
+    );
+    assert_eq!(
+        totals(&store),
+        [1, 0, 0, 0, 0],
+        "counted once, as delivered"
+    );
+    let records = invocations(&fx);
+    let [record] = records.as_slice() else {
+        panic!("{} records, want exactly 1", records.len());
+    };
+    assert_eq!(record["outcome"], "ok", "{record}");
+}

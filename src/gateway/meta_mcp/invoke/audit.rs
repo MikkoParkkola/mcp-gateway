@@ -92,6 +92,28 @@ pub(crate) struct InvocationRecord {
     notes: DispatchNotes,
 }
 
+/// What an audit job hands back to the request that awaits it: the write's
+/// verdict, and what only the request can settle with it (the replay facts
+/// for its lease, the delivered reading for its read scope).
+pub(crate) struct Appended {
+    written: Result<()>,
+    facts: Option<super::super::admission::ReplayAudit>,
+    args: Value,
+    reading: DeliveredReading,
+}
+
+impl Appended {
+    /// Nothing was appended (no log, or no class), so nothing failed.
+    fn unwritten(args: &Value, reading: DeliveredReading) -> Self {
+        Self {
+            written: Ok(()),
+            facts: None,
+            args: args.clone(),
+            reading,
+        }
+    }
+}
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
@@ -670,8 +692,22 @@ impl MetaMcp {
         notes: DispatchNotes,
         reading: DeliveredReading,
     ) -> Result<Value> {
+        let mut notes = notes;
+        let withheld = super::denial::withheld(args, notes.not_found);
+        // A withheld target's record carries the memo's code, so its check.
+        if withheld.is_some()
+            && let Some(refusal) = args
+                .get("server")
+                .and_then(Value::as_str)
+                .zip(args.get("tool").and_then(Value::as_str))
+                .and_then(|(server, tool)| {
+                    crate::gateway::meta_mcp::visible::memo::denial(server, tool)
+                })
+        {
+            notes.refused_by_memo(refusal);
+        }
         let record = InvocationRecord {
-            withheld: super::denial::withheld(args, notes.not_found),
+            withheld,
             answered: AuditOutcome::from_result(&result),
             denial: crate::security::security_metrics::meta_denial(&result),
             firewall: matches!(result, Err(Error::ResponseFirewallRefused)),
@@ -695,15 +731,28 @@ impl MetaMcp {
             .and(result)
     }
 
-    /// Write `record` once, under the verdict of the answer's scan. A refused
-    /// answer is classed as `Err(ResponseFirewallRefused)`: `denied`, no
-    /// response hash, a block and a firewall catch on the counters.
+    /// Write `record` once, under the verdict of the answer's scan, and settle
+    /// it on the caller's side (`lease`, the delivered reading). `Err` only
+    /// when the write failed under fail-closed.
     pub(crate) async fn write_record(
         &self,
         record: InvocationRecord,
         verdict: AnswerVerdict,
         lease: Option<&super::super::admission::SyncLease>,
     ) -> Result<()> {
+        let appended = self.append_record(record, verdict).await;
+        self.settle_record(appended, lease)
+    }
+
+    /// Count `record` and append it, under the verdict of the answer's scan:
+    /// the whole audit job, which needs none of the request's scopes. A
+    /// refused answer is classed as `Err(ResponseFirewallRefused)`: `denied`,
+    /// no response hash, a block and a firewall catch on the counters.
+    pub(crate) async fn append_record(
+        &self,
+        record: InvocationRecord,
+        verdict: AnswerVerdict,
+    ) -> Appended {
         let InvocationRecord {
             withheld,
             mut answered,
@@ -739,25 +788,11 @@ impl MetaMcp {
         super::denial::count_meta_denial(withheld.is_some(), class, denial);
         self.count_invocation(args, &who, firewall, &notes, class);
         let Some(log) = self.transparency_logger.as_ref() else {
-            self.note_reading(args, reading);
-            return Ok(());
+            return Appended::unwritten(args, reading);
         };
         let Some(outcome) = class else {
-            self.note_reading(args, reading);
-            return Ok(());
+            return Appended::unwritten(args, reading);
         };
-        // A withheld target's record carries the memo's code, so its check.
-        if withheld.is_some()
-            && let Some(refusal) = args
-                .get("server")
-                .and_then(Value::as_str)
-                .zip(args.get("tool").and_then(Value::as_str))
-                .and_then(|(server, tool)| {
-                    crate::gateway::meta_mcp::visible::memo::denial(server, tool)
-                })
-        {
-            notes.refused_by_memo(refusal);
-        }
         // Boxed: held across the write, it would grow every dispatch future.
         let decision = Box::new(notes.decided(self, outcome, credential_kind));
         // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
@@ -782,16 +817,37 @@ impl MetaMcp {
                 recorded,
             )
             .await;
+        Appended {
+            written,
+            facts: Some(facts),
+            args: args.clone(),
+            reading,
+        }
+    }
+
+    /// Settle an appended record on the caller's side, once its job ended.
+    /// Returns the write's verdict.
+    pub(crate) fn settle_record(
+        &self,
+        appended: Appended,
+        lease: Option<&super::super::admission::SyncLease>,
+    ) -> Result<()> {
+        let Appended {
+            written,
+            facts,
+            args,
+            reading,
+        } = appended;
         // #2472: a replay of this execution is recorded with these facts, but
         // only once they describe what was delivered (#2521): a failed write
         // withholds the value, so a replay must not record it as delivered.
         if written.is_ok()
-            && let Some(lease) = lease
+            && let (Some(lease), Some(facts)) = (lease, facts)
         {
             lease.note_audit(facts);
         }
         if written.is_ok() {
-            self.note_reading(args, reading);
+            self.note_reading(&args, reading);
         }
         written
     }
