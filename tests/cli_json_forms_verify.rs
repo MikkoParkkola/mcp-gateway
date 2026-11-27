@@ -9,6 +9,10 @@ mod gateway_bin;
 #[path = "common/private_home.rs"]
 #[macro_use]
 mod private_home;
+#[path = "common/provenance_fixture.rs"]
+mod provenance_fixture;
+
+use provenance_fixture::fixture;
 
 use std::fmt::Write as _;
 use std::path::Path;
@@ -282,6 +286,12 @@ fn audit_verify_failed_verdicts_print_their_document_with_exit_1() {
         .unwrap_or_else(|| panic!("no failure line: {}", plain.stderr));
     assert_eq!(doc["error"], json!(message));
     assert_eq!((plain.code, plain.stdout.as_str()), (Some(1), ""));
+    // A verdict prints no `error: ` line: a chain failure is not a local error.
+    assert!(
+        !plain.stderr.lines().any(|l| l.starts_with("error: ")),
+        "{}",
+        plain.stderr
+    );
     assert_eq!(json.stderr, plain.stderr);
 
     // A signed log verified with another key: the HMAC check fails the verdict.
@@ -431,18 +441,18 @@ fn audit_verify_errors_before_a_verdict_print_no_document() {
         (
             config.clone(),
             missing_s.clone(),
-            format!("Error: transparency log not found at {missing_s}\n"),
+            format!("error: transparency log not found at {missing_s}\n"),
         ),
         (
             broken.to_str().expect("utf-8").to_owned(),
             small.to_str().expect("utf-8").to_owned(),
-            "Error: could not load gateway config for signed verification: ".to_owned(),
+            "error: could not load gateway config for signed verification: ".to_owned(),
         ),
         (
             config,
             signed_s.clone(),
             format!(
-                "Error: log at {signed_s} has signed entries but no shared secret is configured"
+                "error: log at {signed_s} has signed entries but no shared secret is configured"
             ),
         ),
     ];
@@ -524,25 +534,14 @@ fn audit_show_missing_log_prints_nothing_on_stdout() {
         (
             Some(1),
             "",
-            &*format!("Error: transparency log not found at {log}\n")
+            &*format!(
+                "error: transparency log not found at {log}\nCheck that {log} exists, or pass --path naming the log.\n"
+            )
         )
     );
 }
 
 // ── provenance verify (J14, V3) ─────────────────────────────────────────────
-
-fn fixture(home: &Path, name: &str) -> String {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/mik_8398")
-        .join(name);
-    let target = home.join(name);
-    mcp_gateway::gateway::test_helpers::write_owner_only(
-        &target,
-        std::fs::read(&source).expect("fixture"),
-    )
-    .expect("copy");
-    target.to_str().expect("utf-8").to_owned()
-}
 
 fn provenance(
     home: &Path,

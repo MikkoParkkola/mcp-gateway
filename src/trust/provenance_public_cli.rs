@@ -74,6 +74,7 @@ pub(crate) fn run_provenance_command(
 
 /// Export the gateway's public provenance JWK and thumbprint.
 fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
+    use crate::commands::{CliExit, fail, write_remedy};
     match configured_signer(config) {
         Ok(Some(signer)) => {
             let output = serde_json::json!({
@@ -82,22 +83,21 @@ fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
             });
             if let Ok(line) = serde_json::to_string(&output) {
                 emit_line(&line);
-                ExitCode::from(0)
+                ExitCode::SUCCESS
             } else {
-                eprintln!("failed to render the public key");
-                ExitCode::from(1)
+                fail(
+                    CliExit::LocalFailure,
+                    "failed to render the public key",
+                    "Report this as a bug, with the command line.",
+                )
             }
         }
-        Ok(None) => {
-            eprintln!(
-                "{PROVENANCE_SEED_ENV} is not set: set it and {PROVENANCE_KEY_ID_ENV} to export the public key"
-            );
-            ExitCode::from(1)
-        }
-        Err(error) => {
-            eprintln!("{error}");
-            ExitCode::from(1)
-        }
+        Ok(None) => fail(
+            CliExit::LocalFailure,
+            &format!("{PROVENANCE_SEED_ENV} is not set"),
+            &format!("Set it and {PROVENANCE_KEY_ID_ENV} to export the public key."),
+        ),
+        Err(error) => fail(CliExit::LocalFailure, &error, &write_remedy(config)),
     }
 }
 
@@ -201,18 +201,15 @@ fn verdict_printed(
             }) {
                 Ok(doc) => doc,
                 Err(why) => {
-                    return Printed {
-                        stdout: String::new(),
-                        stderr: format!("could not print the verdict: {why}\n"),
-                        exit: 1,
-                    };
+                    return Printed::error(
+                        crate::commands::CliExit::LocalFailure,
+                        &format!("could not print the verdict: {why}"),
+                        "Rerun without --json for the text form, and report this as a bug.",
+                    );
                 }
             }
         }
     };
-    Printed {
-        stdout,
-        stderr: String::new(),
-        exit: u8::from(!accepted),
-    }
+    // The verdict, accepted or not: what it printed, and its code.
+    Printed::verdict(u8::from(!accepted), stdout, String::new())
 }

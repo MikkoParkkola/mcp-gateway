@@ -158,67 +158,6 @@ const WANT_REMOTE_ON_SHARED_ERRORS: &[&str] = &[
     "events dead-letters",
 ];
 
-/// Every other leaf, until `MIK-9765.LERR.2`.
-const WANT_PENDING_SHARED_ERRORS: &[&str] = &[
-    "accounts init-store",
-    "accounts migrate-credentials",
-    "add",
-    "audit show",
-    "audit verify",
-    "cap discover",
-    "cap import",
-    "cap import-url",
-    "cap install",
-    "cap list",
-    "cap pin",
-    "cap registry-list",
-    "cap search",
-    "cap test",
-    "cap validate",
-    "doctor",
-    "get",
-    "hash-key",
-    "identity grants grant",
-    "identity grants list",
-    "identity grants revoke",
-    "import apply",
-    "import preview",
-    "init",
-    "kubernetes apply-plan",
-    "kubernetes controller",
-    "kubernetes plan",
-    "list",
-    "provenance public-key",
-    "provenance verify",
-    "ranking eval",
-    "remove",
-    #[cfg(feature = "runtime-substrate")]
-    "runtime compile",
-    "serve",
-    "setup export",
-    "setup wizard",
-    "skills generate",
-    "skills import",
-    "skills list",
-    "skills remove",
-    "skills search",
-    "skills show",
-    "stats",
-    "tls init-ca",
-    "tls issue-client",
-    "tls issue-server",
-    "tool completions",
-    "tool inspect",
-    "tool invoke",
-    "tool list",
-    "trust generate",
-    "trust inspect",
-    "trust lab evaluate",
-    "trust validate",
-    "upgrade",
-    "validate",
-];
-
 fn real_leaves() -> Vec<String> {
     leaf_paths(&crate::cli::Cli::command())
         .into_iter()
@@ -237,7 +176,7 @@ fn sorted(items: &[&str]) -> Vec<String> {
 #[test]
 fn command_classes_cover_the_real_tree() {
     assert_eq!(real_leaves(), sorted(LEAVES), "the tree's leaf commands");
-    let want: [(&str, &[&str], &[&str]); 7] = [
+    let want: [(&str, &[&str], &[&str]); 6] = [
         ("JSON_CAPABLE", JSON_CAPABLE, WANT_JSON_CAPABLE),
         ("JSON_DEFAULT", JSON_DEFAULT, WANT_JSON_DEFAULT),
         ("PENDING_JSON", PENDING_JSON, WANT_PENDING_JSON),
@@ -247,11 +186,6 @@ fn command_classes_cover_the_real_tree() {
             "REMOTE_ON_SHARED_ERRORS",
             REMOTE_ON_SHARED_ERRORS,
             WANT_REMOTE_ON_SHARED_ERRORS,
-        ),
-        (
-            "PENDING_SHARED_ERRORS",
-            PENDING_SHARED_ERRORS,
-            WANT_PENDING_SHARED_ERRORS,
         ),
     ];
     for (name, list, members) in want {
@@ -272,14 +206,7 @@ fn command_classes_cover_the_real_tree() {
 #[test]
 fn pending_entries_cite_their_tickets() {
     let source = include_str!("command_classes.rs");
-    for (list, members, ticket) in [
-        ("PENDING_JSON", WANT_PENDING_JSON, "// MIK-9764.JSONF.2"),
-        (
-            "PENDING_SHARED_ERRORS",
-            WANT_PENDING_SHARED_ERRORS,
-            "// MIK-9765.LERR.2",
-        ),
-    ] {
+    for (list, members, ticket) in [("PENDING_JSON", WANT_PENDING_JSON, "// MIK-9764.JSONF.2")] {
         let start = source
             .find(&format!("const {list}: &[&str] = &["))
             .unwrap_or_else(|| panic!("{list} is not in command_classes.rs"));

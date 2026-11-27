@@ -335,7 +335,7 @@ proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
 # The preview relay's rows listen on a Unix socket with a backlog of one (rustix `net`), to stall a
 # connect; tests only (already in Cargo.lock, no new crate).
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-rustix = { version = "1.1", features = ["net"] }
+rustix = { version = "1.1", features = ["net", "pty"] }
 
 [features]
 default = ["a2a", "webui", "config-export", "cost-governance", "firewall", "discovery", "semantic-search", "tool-profiles", "metrics"]
