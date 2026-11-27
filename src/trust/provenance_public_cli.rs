@@ -99,7 +99,7 @@ fn run_public_key(config: Option<&std::path::Path>) -> ExitCode {
         ),
         Err(error) => fail(
             CliExit::LocalFailure,
-            &error.to_string(),
+            &error,
             &write_remedy(config),
         ),
     }

@@ -208,6 +208,7 @@ fn tool_invoke_bad_stdin_and_pairs_stay_one() {
 /// X2-X10: every wrong invocation that exits 2 today still exits 2, now with the two lines and a help pointer
 /// (X7, an unreadable --env-file, names the file instead).
 #[test]
+#[allow(clippy::too_many_lines, reason = "one row per exit-2 refusal, X2-X10")]
 fn exits_that_were_two_stay_two() {
     let scratch = tempfile::tempdir().expect("scratch");
     let p = scratch.path();

@@ -187,7 +187,7 @@ async fn cap_pin(file: std::path::PathBuf) -> ExitCode {
         }
         Ok(Err(error)) => fail(
             CliExit::LocalFailure,
-            &error.to_string(),
+            &error,
             &check_capability_file(&file),
         ),
         Err(join) => fail(
