@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
 // The journeys that wait for a screen or route that has not landed, and the coverage check over them (part C design,
-// decision D-W1, and the row coverage.journey.mjs runs). A waiting journey is listed here, never skipped: a skip leaves
-// the run green. The harness smoke must be one runnable real test; each journey id is a runnable real test or a waiting
-// entry, never both and never neither. Halves of a journey that partly waits are counted on their own.
+// decision D-W1; outcomes.mjs runs it over the titles of the tests that ran). A waiting journey is listed here, never
+// skipped: a skip leaves the run green. The harness smoke must be one real test; each journey id is a real test or a
+// waiting entry, never both and never neither. Halves of a journey that partly waits are counted on their own.
 
 export const SMOKE = 'harness smoke';
 
@@ -33,25 +33,17 @@ export function idOf(title) {
   return title.match(/^((?:J|K)\d+[a-z]?)[: ]/)?.[1] ?? null;
 }
 
-// A skip decided inside a test body never shows in the list, so journey files may not call one at all. Comments are
-// removed first (block comments, and line comments that start a line or follow a space), so `x.skip /* why */ (` and
-// a bracketed `x['skip'](` are caught as well.
-const SKIP_CALL = /(?:\.\s*(?:skip|fixme|fail)|\[\s*['"`](?:skip|fixme|fail)['"`]\s*\])\s*\(/;
-const withoutComments = (text) => text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|\s)\/\/.*$/gm, '$1');
-
 /**
- * Every coverage problem, as a sentence naming its id or file; empty when covered. `tests`: the listed tests as
- * { title, runnable } (runnable: Playwright expects it to pass); `waiting`: the entries; `sources`: { file: text } of
- * every journey file.
+ * Every coverage problem, as a sentence naming its id or file; empty when covered. `titles`: the titles of the
+ * tests that ran (outcomes.mjs reads them from the run's report); `waiting`: the entries.
  */
-export function checkCoverage({ tests, waiting, sources }) {
+export function checkCoverage({ titles, waiting }) {
   const problems = [];
   const realIds = [];
-  for (const { title, runnable } of tests) {
+  for (const title of titles) {
     const id = idOf(title);
     if (id === null) continue;
     if (id !== SMOKE && !JOURNEYS.includes(id)) problems.push(`${id}: a test "${title}" has an id that is not a journey`);
-    if (!runnable) problems.push(`${id}: "${title}" is listed but skipped or expected to fail`);
     realIds.push(id);
   }
   const count = (list, id) => list.filter((x) => x === id).length;
@@ -71,9 +63,6 @@ export function checkCoverage({ tests, waiting, sources }) {
     else if (r > 0 && wt > 0) problems.push(`${id}: both a real test and waiting`);
     else if (r > 1) problems.push(`${id}: ${r} real tests`);
     else if (wt > 1) problems.push(`${id}: ${wt} waiting entries`);
-  }
-  for (const [file, text] of Object.entries(sources)) {
-    if (SKIP_CALL.test(withoutComments(text))) problems.push(`${file}: calls a skip, fixme or fail; a journey that waits goes on WAITING`);
   }
   return problems;
 }

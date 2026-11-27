@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { journeysRun } from './nested.mjs';
+import { spawnSync } from 'node:child_process';
 
 const JOURNEYS = dirname(fileURLToPath(import.meta.url));
 
@@ -29,7 +30,7 @@ function reportErrors(node, found = []) {
  * its first line, the one before the message). Read from Playwright's structured JSON report, never from printed
  * text, whose source excerpts could quote the message beside an unrelated error.
  */
-function redAt(file, fault, message, cause = '') {
+function redAt(file, fault, message) {
   const dir = mkdtempSync(join(tmpdir(), 'jh-fault-'));
   let run;
   let json;
@@ -45,8 +46,6 @@ function redAt(file, fault, message, cause = '') {
   const [first] = reportErrors(json.suites);
   assert.ok(first, `the report holds no error:\n${run.out}`);
   assert.ok(String(first.message).includes(message), `the first error is not the row's own:\n${first.message}`);
-  // `cause`: the specific problem the planted fault must produce, beyond the row's general message.
-  assert.ok(String(first.message).includes(cause), `the first error does not name the fault's cause "${cause}":\n${first.message}`);
   const at = readFileSync(join(JOURNEYS, file), 'utf8').split('\n').findIndex((l) => l.includes(message)) + 1;
   assert.ok(at > 0, `${file} has no line holding "${message}"`);
   assert.ok(String(first.location?.file).endsWith(`/${file}`) && [at - 1, at].includes(first.location?.line),
@@ -61,7 +60,26 @@ test('J4:remove, a Remove answered but never forwarded, fails at the config read
   redAt('j04-diagnose.journey.mjs', 'J4:remove', 'J4-remove: the config file still names tide');
 });
 
-test('JOURNEY7:drop-J4, a journey missing from the project, fails the coverage row', () => {
-  redAt('coverage.journey.mjs', 'JOURNEY7:drop-J4', 'JOURNEY7: the project does not cover the smoke and every journey',
-    'J4: neither a real test nor waiting');
+/** The outcomes step over `report` (a path), with `fault` planted or none: { status, out }. */
+function outcomesStep(report, fault) {
+  const r = spawnSync(process.execPath, [join(JOURNEYS, 'outcomes.mjs'), report], { encoding: 'utf8', env: { ...process.env, JH_FAULT: fault } });
+  return { status: r.status, out: `${r.stdout}${r.stderr}` };
+}
+
+test('JOURNEY7:drop-J4, a real journey missing from the run, fails the outcomes step', () => {
+  // A real run of the smoke and J4, its report kept, then the step over it: clean, and with J4 dropped.
+  const dir = mkdtempSync(join(tmpdir(), 'jh-outcomes-fault-'));
+  try {
+    const report = join(dir, 'journeys.json');
+    const run = journeysRun(['journeys/harness-smoke.journey.mjs', 'journeys/j04-diagnose.journey.mjs', '--reporter=json'],
+      { JH_FAULT: '', PLAYWRIGHT_JSON_OUTPUT_NAME: report });
+    assert.equal(run.status, 0, `the companion run failed:\n${run.out}`);
+    const clean = outcomesStep(report, '');
+    assert.equal(clean.status, 0, `the step failed a clean run:\n${clean.out}`);
+    const red = outcomesStep(report, 'JOURNEY7:drop-J4');
+    assert.equal(red.status, 1, `the step did not fail the planted fault:\n${red.out}`);
+    assert.match(red.out, /^J4: neither a real test nor waiting$/m);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

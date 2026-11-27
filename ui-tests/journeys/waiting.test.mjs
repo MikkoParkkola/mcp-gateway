@@ -1,17 +1,24 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
-// Units for the coverage check (waiting.mjs): the harness smoke is one runnable real test, and each journey id is a
-// runnable real test or a waiting entry, never both and never neither. Each red row changes one thing from today's
-// clean set. Stdlib only, no gateway: node --test journeys/waiting.test.mjs.
+// Units for the coverage check (waiting.mjs) and the run's one check over its JSON report (outcomes.mjs): the harness
+// smoke is one real test, each journey id ran XOR waits, and everything that ran passed with nothing skipped. Each red
+// row changes one thing from today's clean set. Stdlib only, no gateway: node --test journeys/waiting.test.mjs.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { JOURNEYS, WAITING, idOf, checkCoverage } from './waiting.mjs';
+import { checkOutcomes } from './outcomes.mjs';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const real = (title, runnable = true) => ({ title, runnable });
-const TODAY = [real('harness smoke: try a tool'), real('J4 diagnose: x'), real('JOURNEY.7 coverage: y')];
-const CLEAN_SOURCES = { 'j04-diagnose.journey.mjs': "test('J4 diagnose: x', async () => {});" };
-const check = (over = {}) => checkCoverage({ tests: TODAY, waiting: WAITING, sources: CLEAN_SOURCES, ...over });
+const OUTCOMES_CLI = join(dirname(fileURLToPath(import.meta.url)), 'outcomes.mjs');
+
+const real = (title) => title;
+const TODAY = [real('harness smoke: try a tool'), real('J4 diagnose: x'), real('H3 harness row: y')];
+const check = (over = {}) => checkCoverage({ titles: TODAY, waiting: WAITING, ...over });
 const without = (id) => WAITING.filter((w) => w.id !== id);
 // A problem names its id (or file) first, then a colon ("J10: ..." is never taken as being about J1), then its kind;
 // both are matched, so a red row cannot pass on a different problem about the same id.
@@ -37,11 +44,11 @@ test('a journey neither real nor waiting is reported', () => {
 });
 
 test('a journey both real and waiting is reported', () => {
-  assert.ok(named(check({ tests: [...TODAY, real('J6 blocked: x')] }), 'J6', 'both a real test and waiting'));
+  assert.ok(named(check({ titles: [...TODAY, real('J6 blocked: x')] }), 'J6', 'both a real test and waiting'));
 });
 
 test('two real tests with one id are reported', () => {
-  assert.ok(named(check({ tests: [...TODAY, real('J4 again: x')] }), 'J4', '2 real tests'));
+  assert.ok(named(check({ titles: [...TODAY, real('J4 again: x')] }), 'J4', '2 real tests'));
 });
 
 test('two waiting entries with one id are reported', () => {
@@ -54,19 +61,19 @@ test('a waiting id that is not a journey is reported', () => {
 });
 
 test('a real test with an unknown journey id is reported (J11, and J5 once J5 is split)', () => {
-  assert.ok(named(check({ tests: [...TODAY, real('J11 something: x')] }), 'J11', 'has an id that is not a journey'));
-  assert.ok(named(check({ tests: [...TODAY, real('J5 approve: x')] }), 'J5', 'has an id that is not a journey'));
+  assert.ok(named(check({ titles: [...TODAY, real('J11 something: x')] }), 'J11', 'has an id that is not a journey'));
+  assert.ok(named(check({ titles: [...TODAY, real('J5 approve: x')] }), 'J5', 'has an id that is not a journey'));
 });
 
 test('J10 never counts as J1, nor J1 as J10', () => {
-  const j10Real = check({ tests: [...TODAY, real('J10 maintenance: x')], waiting: without('J10') });
+  const j10Real = check({ titles: [...TODAY, real('J10 maintenance: x')], waiting: without('J10') });
   assert.deepEqual(j10Real, []);
-  assert.ok(named(check({ tests: [...TODAY, real('J10 maintenance: x')], waiting: without('J1') }), 'J1', 'neither a real test nor waiting'));
+  assert.ok(named(check({ titles: [...TODAY, real('J10 maintenance: x')], waiting: without('J1') }), 'J1', 'neither a real test nor waiting'));
 });
 
 test('each half counts on its own', () => {
-  assert.deepEqual(check({ tests: [...TODAY, real('J5a list: x')], waiting: without('J5a') }), []);
-  assert.ok(named(check({ tests: [...TODAY, real('J5a list: x')], waiting: without('J5a').filter((w) => w.id !== 'J5b') }), 'J5b', 'neither a real test nor waiting'));
+  assert.deepEqual(check({ titles: [...TODAY, real('J5a list: x')], waiting: without('J5a') }), []);
+  assert.ok(named(check({ titles: [...TODAY, real('J5a list: x')], waiting: without('J5a').filter((w) => w.id !== 'J5b') }), 'J5b', 'neither a real test nor waiting'));
 });
 
 test('a waiting entry needs a reason and a vN.N.N release', () => {
@@ -76,26 +83,70 @@ test('a waiting entry needs a reason and a vN.N.N release', () => {
 });
 
 test('the smoke is required, once, and can never wait', () => {
-  assert.ok(named(check({ tests: TODAY.filter((t) => !t.title.startsWith('harness')) }), 'harness smoke', '0 real tests'));
-  assert.ok(named(check({ tests: [...TODAY, real('harness smoke: again')] }), 'harness smoke', '2 real tests'));
+  assert.ok(named(check({ titles: TODAY.filter((t) => !t.startsWith('harness')) }), 'harness smoke', '0 real tests'));
+  assert.ok(named(check({ titles: [...TODAY, real('harness smoke: again')] }), 'harness smoke', '2 real tests'));
   const waits = check({ waiting: [...WAITING, { id: 'harness smoke', waitsFor: 'x', release: 'v4.0.0' }] });
   assert.ok(named(waits, 'harness smoke', 'can never wait'));
 });
 
-test('a listed test that is not runnable (declared skipped or expected to fail) is reported', () => {
-  const swapped = TODAY.map((t) => (t.title.startsWith('J4') ? real(t.title, false) : t));
-  assert.ok(named(check({ tests: swapped }), 'J4', 'skipped or expected to fail'));
+// outcomes.mjs: the run's report. One reported test = its spec title, overall status and each attempt's status.
+const spec = (title, status = 'expected', attempts = ['passed']) => ({
+  title, tests: [{ projectName: 'journeys', status, results: attempts.map((s) => ({ status: s })) }],
+});
+const report = (specs, { skipped = 0, suites = [] } = {}) => ({
+  stats: { expected: specs.length, unexpected: 0, flaky: 0, skipped },
+  suites: [{ title: 'journeys', specs, suites }],
+});
+const ran = () => TODAY.map((t) => spec(t));
+const swapJ4 = (status, attempts) => ran().map((s) => (s.title.startsWith('J4') ? spec(s.title, status, attempts) : s));
+
+test('outcomes: a clean run is clean', () => {
+  assert.deepEqual(checkOutcomes(report(ran())), []);
 });
 
-for (const call of ['test.skip(', 'test.fixme(', 'test.fail(', 'test.describe.skip(', 'testInfo.skip(', 'test.info().fail(',
-  'testInfo.skip /* why */ (', "testInfo['skip'](", 'test\n    .skip(']) {
-  test(`a journey file calling ${JSON.stringify(call)} is reported`, () => {
-    const sources = { 'j04-diagnose.journey.mjs': `${CLEAN_SOURCES['j04-diagnose.journey.mjs']}\n  ${call}true, 'later');` };
-    assert.ok(named(check({ sources }), 'j04-diagnose.journey.mjs', 'calls a skip'));
+test('outcomes: a skip anywhere in the run is reported, even in a row with no journey id', () => {
+  assert.ok(named(checkOutcomes(report(ran(), { skipped: 1 })), 'run', 'skipped'));
+});
+
+for (const [why, status, attempts] of [['skipped', 'skipped', []], ['expected to fail (test.fail)', 'expected', ['failed']],
+  ['flaky (passed on a retry)', 'flaky', ['failed', 'passed']], ['failed', 'unexpected', ['failed']]]) {
+  test(`outcomes: a journey that ${why} is reported`, () => {
+    assert.ok(named(checkOutcomes(report(swapJ4(status, attempts))), 'J4', 'did not pass as expected'));
   });
 }
 
-test('a skip named only in a comment is not a call', () => {
-  const sources = { 'j04-diagnose.journey.mjs': `${CLEAN_SOURCES['j04-diagnose.journey.mjs']}\n  // never test.skip(here)\n  /* nor test.skip( */` };
-  assert.deepEqual(check({ sources }), []);
+test('outcomes: coverage comes from what ran: a missing J4, a waiting J6 that ran, no smoke', () => {
+  assert.ok(named(checkOutcomes(report(ran().filter((s) => !s.title.startsWith('J4')))), 'J4', 'neither a real test nor waiting'));
+  assert.ok(named(checkOutcomes(report([...ran(), spec('J6 blocked: x')])), 'J6', 'both a real test and waiting'));
+  assert.ok(named(checkOutcomes(report(ran().filter((s) => !s.title.startsWith('harness')))), 'harness smoke', '0 real tests'));
 });
+
+test('outcomes: a journey inside a nested describe suite is found', () => {
+  const outer = ran().filter((s) => !s.title.startsWith('J4'));
+  assert.deepEqual(checkOutcomes(report(outer, { suites: [{ title: 'a group', specs: [spec('J4 diagnose: x')], suites: [] }] })), []);
+});
+
+/** The CLI over `body` in a temp file (or over `args` as given): { status, out }. */
+function outcomesCli(body, args) {
+  const dir = mkdtempSync(join(tmpdir(), 'jh-outcomes-'));
+  try {
+    const file = join(dir, 'journeys.json');
+    if (body !== undefined) writeFileSync(file, body);
+    const r = spawnSync(process.execPath, [OUTCOMES_CLI, ...(args ?? [file])], { encoding: 'utf8', env: { ...process.env, JH_FAULT: '' } });
+    return { status: r.status, out: `${r.stdout}${r.stderr}` };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('outcomes CLI: 0 on a clean report; 1 with each problem; 2 on no argument, a missing file or malformed JSON', () => {
+  assert.equal(outcomesCli(JSON.stringify(report(ran()))).status, 0);
+  const failing = outcomesCli(JSON.stringify(report(ran().filter((s) => !s.title.startsWith('J4')))));
+  assert.equal(failing.status, 1);
+  assert.match(failing.out, /J4: neither a real test nor waiting/);
+  for (const [r, why] of [[outcomesCli(undefined, []), /usage/], [outcomesCli(undefined), /cannot read/], [outcomesCli('{ not json'), /not JSON/]]) {
+    assert.equal(r.status, 2, r.out);
+    assert.match(r.out, why);
+  }
+});
+
