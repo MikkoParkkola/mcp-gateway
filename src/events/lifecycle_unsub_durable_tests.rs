@@ -121,20 +121,37 @@ async fn unsub2_the_owner_hears_an_error_not_success() {
     assert_eq!(unsubscribe_details(&audit, 1).await, ["absent"]);
 }
 
+/// Whether any captured log record carries `text`.
+fn logged(records: &[serde_json::Value], text: &str) -> bool {
+    records
+        .iter()
+        .any(|record| record.to_string().contains(text))
+}
+
 /// The withdraw and the revoke take the error too: the withdraw reports the
-/// row it could not remove, the revoke leaves it live; each finishes on a
-/// second run whose sync succeeds.
-#[tokio::test]
-async fn unsub2_withdraw_and_revoke_take_the_error() {
+/// row it could not remove and warns, the revoke leaves it live and announces
+/// nothing; each finishes on a second run whose sync succeeds. A plain test on
+/// its own current-thread runtime, so the capture (thread-local) sees the logs.
+#[test]
+fn unsub2_withdraw_and_revoke_take_the_error() {
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime");
     let dir = crate::test_dir_keep::kept_tempdir();
     let subs = dir.path().join("subs");
     let hub = hub_at(dir.path(), &dir.path().join("audit.jsonl"));
-    let id = subscribed(&hub).await;
+    let id = rt.block_on(subscribed(&hub));
     let row = hub.store.get(&id).expect("row");
     sync_fault::arm(&subs, 1);
+    let mut withdrawn = true;
+    let logs = crate::test_log_capture::records(|| {
+        withdrawn = hub.withdraw_rows(std::slice::from_ref(&row));
+    });
+    assert!(!withdrawn, "a failed sync reported as withdrawn");
     assert!(
-        !hub.withdraw_rows(std::slice::from_ref(&row)),
-        "a failed sync reported as withdrawn"
+        logged(&logs, "withdrawn subscription not removed"),
+        "the failed withdraw did not warn: {logs:?}"
     );
     assert_eq!(sync_fault::armed(&subs), 0);
     assert!(
@@ -147,10 +164,10 @@ async fn unsub2_withdraw_and_revoke_take_the_error() {
     let dir = crate::test_dir_keep::kept_tempdir();
     let subs = dir.path().join("subs");
     let hub = hub_at(dir.path(), &dir.path().join("audit.jsonl"));
-    let id = subscribed(&hub).await;
+    let id = rt.block_on(subscribed(&hub));
     let row = hub.store.get(&id).expect("row");
     sync_fault::arm(&subs, 1);
-    hub.revoke(&row).await;
+    let logs = crate::test_log_capture::records(|| rt.block_on(hub.revoke(&row)));
     assert_eq!(
         sync_fault::armed(&subs),
         0,
@@ -160,6 +177,15 @@ async fn unsub2_withdraw_and_revoke_take_the_error() {
         hub.store.get(&id).is_some(),
         "the revoke dropped the row on a failed sync"
     );
-    hub.revoke(&row).await;
+    assert!(
+        !logged(&logs, "subscription revoked"),
+        "a revoke whose removal failed announced it: {logs:?}"
+    );
+    // The control: the same capture sees the announcement once the removal holds.
+    let logs = crate::test_log_capture::records(|| rt.block_on(hub.revoke(&row)));
     assert!(hub.store.get(&id).is_none());
+    assert!(
+        logged(&logs, "subscription revoked"),
+        "the capture missed the revoke announcement: {logs:?}"
+    );
 }
