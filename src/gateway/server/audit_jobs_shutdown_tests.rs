@@ -1,30 +1,32 @@
 // SPDX-FileCopyrightText: 2026 Mikko Parkkola
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
-//! D2.5 at the gateway: a `/mcp` request dropped at the listener's deadline
-//! hands its invocation record off as it drops, and `run`'s shutdown waits
-//! for that write before it returns.
+//! D2.5 at the gateway: `run`'s shutdown waits for every record write handed
+//! off by a request that no longer awaits it, both one dropped at the
+//! listener's deadline and one handed off by a request still finishing after
+//! the listener returned.
 //!
-//! The request is parked at its commit (after its record was built, before
-//! it is written), so only its drop can write the record. The handed-off
-//! write is held at a gate the row opens only once a drain is waiting with
-//! that job open: a drain that ran before the request was dropped (the
-//! wrong order) sees no job, the gate stays shut, and no record lands.
+//! A `/mcp` request is parked at its commit (after its record was built,
+//! before it is written), so only its drop at the deadline can write the
+//! record (job A). The row also holds one in-flight permit, a request still
+//! finishing; once the in-flight drain waits on it, the row hands off job B
+//! and lets the permit go. Every handed-off write is held at a gate the row
+//! opens only when a drain reports a job open. Drained in order, the one audit
+//! drain sees both jobs; drained before the in-flight requests (the wrong
+//! order), it sees only A and returns before B is handed off.
 
-use std::sync::atomic::Ordering;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// A gateway whose stop is the smallest a listener grace fits in, so the
-/// parked request is dropped at that grace's deadline, not by the row; its
-/// audit log at `log`, its task store under `dir`.
-fn gateway_config(dir: &std::path::Path, log: &std::path::Path) -> crate::config::Config {
-    let mut built = crate::config::Config::default();
-    built.server.shutdown_timeout = Duration::from_secs(14);
-    built.server.port = 0;
-    built.server.host = "127.0.0.1".to_string();
-    built.security.transparency_log.enabled = Some(true);
-    built.security.transparency_log.path = log.display().to_string();
-    built.tasks.store_dir = dir.join("tasks").to_string_lossy().into_owned();
-    built
+/// The shared run-level config, with the smallest stop a listener grace fits
+/// in (so the parked request is dropped at that grace's deadline, not by the
+/// row) and its audit log at `log`.
+fn config(dir: &std::path::Path, log: &std::path::Path) -> crate::config::Config {
+    let mut config = super::super::http_test_config::http_test_config(dir);
+    config.server.shutdown_timeout = Duration::from_secs(14);
+    config.security.transparency_log.enabled = Some(true);
+    config.security.transparency_log.path = log.display().to_string();
+    config
 }
 
 /// A `gateway_invoke` of a backend no config names, in flight on its own
@@ -51,12 +53,13 @@ async fn a_record_handed_off_at_the_listener_deadline_lands_before_shutdown_ends
     let minute = Duration::from_secs(60);
     let dir = crate::test_dir_keep::kept_tempdir();
     let log = dir.path().join("audit.log");
-    let mut gateway = super::super::Gateway::new(gateway_config(dir.path(), &log))
+    let mut gateway = super::super::Gateway::new(config(dir.path(), &log))
         .await
         .expect("gateway")
         .with_data_dir(dir.path().to_path_buf());
     let bound = gateway.bound_port_for_test();
     let jobs = gateway.audit_jobs_for_test();
+    let inflight = gateway.inflight_for_test();
     let trigger = gateway.shutdown_trigger_for_test();
     let mut server = tokio::spawn(async move { Box::pin(gateway.run()).await });
     let port = tokio::time::timeout(minute, bound)
@@ -64,6 +67,7 @@ async fn a_record_handed_off_at_the_listener_deadline_lands_before_shutdown_ends
         .expect("the gateway binds")
         .expect("the gateway reports its port");
     let jobs = jobs.await.expect("run hands over its audit jobs");
+    let inflight = inflight.await.expect("run hands over its in-flight gate");
     jobs.seams.hold_commit.store(true, Ordering::SeqCst);
     jobs.seams.gate_jobs.store(true, Ordering::SeqCst);
 
@@ -71,6 +75,13 @@ async fn a_record_handed_off_at_the_listener_deadline_lands_before_shutdown_ends
     tokio::time::timeout(minute, jobs.seams.parked.notified())
         .await
         .expect("the request reaches its commit");
+    let mut finishing = Some(
+        Arc::clone(&inflight)
+            .acquire_owned()
+            .await
+            .expect("the gate is open before shutdown"),
+    );
+    let job_b = Arc::new(AtomicBool::new(false));
     trigger.send(()).expect("run still holds the trigger");
 
     let ended = loop {
@@ -78,8 +89,17 @@ async fn a_record_handed_off_at_the_listener_deadline_lands_before_shutdown_ends
             () = jobs.seams.draining.notified() => {
                 let open = jobs.seams.drains.lock().expect("drains").last().copied();
                 if open.is_some_and(|open| open > 0) {
-                    jobs.seams.job_gate.notify_one();
+                    jobs.seams.open_gate();
                 }
+            }
+            // The in-flight drain holds every permit but the row's: the
+            // still-finishing request hands its write off, then ends.
+            () = tokio::time::sleep(Duration::from_millis(10)),
+                if finishing.is_some() && inflight.available_permits() == 0 =>
+            {
+                let landed = Arc::clone(&job_b);
+                Arc::clone(&jobs).spawn(async move { landed.store(true, Ordering::SeqCst) });
+                finishing = None;
             }
             ended = &mut server => break ended,
         }
@@ -89,8 +109,12 @@ async fn a_record_handed_off_at_the_listener_deadline_lands_before_shutdown_ends
     let drains = jobs.seams.drains.lock().expect("drains").clone();
     assert_eq!(
         drains,
-        vec![1],
-        "one drain, after the request dropped, with its handed-off job open"
+        vec![2],
+        "one audit drain, after the in-flight one, with both handed-off jobs open"
+    );
+    assert!(
+        job_b.load(Ordering::SeqCst),
+        "the late hand-off landed before run returned"
     );
     let records: Vec<serde_json::Value> = std::fs::read_to_string(&log)
         .unwrap_or_default()

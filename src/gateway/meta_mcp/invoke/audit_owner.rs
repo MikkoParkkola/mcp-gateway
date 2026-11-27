@@ -83,6 +83,8 @@ pub(crate) struct JobSeams {
     pub(crate) hold_commit: std::sync::atomic::AtomicBool,
     pub(crate) parked: Notify,
     pub(crate) gate_jobs: std::sync::atomic::AtomicBool,
+    /// Set (then `job_gate` woken) to let every gated job run.
+    pub(crate) gate_open: std::sync::atomic::AtomicBool,
     pub(crate) job_gate: Notify,
     pub(crate) drains: std::sync::Mutex<Vec<usize>>,
     pub(crate) draining: Notify,
@@ -90,6 +92,29 @@ pub(crate) struct JobSeams {
 
 /// Ends one job when dropped, so a job that panics still ends.
 struct JobEnd(Arc<AuditJobs>);
+
+#[cfg(test)]
+impl JobSeams {
+    /// Wait until the row opens the gate; registered before each check, so
+    /// an opening in between is not missed.
+    async fn wait_for_gate(&self) {
+        loop {
+            let opened = self.job_gate.notified();
+            tokio::pin!(opened);
+            opened.as_mut().enable();
+            if self.gate_open.load(Ordering::SeqCst) {
+                return;
+            }
+            opened.await;
+        }
+    }
+
+    /// Let every gated job run, now and later.
+    pub(crate) fn open_gate(&self) {
+        self.gate_open.store(true, Ordering::SeqCst);
+        self.job_gate.notify_waiters();
+    }
+}
 
 impl Drop for JobEnd {
     fn drop(&mut self) {
@@ -114,7 +139,7 @@ impl AuditJobs {
         runtime.spawn(async move {
             #[cfg(test)]
             if gated {
-                end.0.seams.job_gate.notified().await;
+                end.0.seams.wait_for_gate().await;
             }
             job.await;
             // Also dropped if `job` panics: the future owns it.
