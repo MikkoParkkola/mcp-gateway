@@ -8,8 +8,10 @@ verdict. The resolver reads the committed tree, so every fixture is committed fi
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import importlib.util
 import io
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,9 +27,12 @@ spec.loader.exec_module(c6)
 RANK_HEAD = "rank\tstatus\tnamed_path\tfile\tqualified\toccurrence\treason\n"
 REPL_HEAD = "named_path\tslot_rank\trule\tunderstudy_rank\tfile\tqualified\toccurrence\tevidence\n"
 GAP_TABLE = "docs/release/c6-gap/v4.0.0-c6-gap-table.tsv"
-GAP_HEAD = "rank\tpath\tfile\tfunction\tmutant\tdeclared_killer_args\n"
-# The killer the gap row names, at the module path its filter spells.
-KILLER = "#[test]\nfn guard_admits_only_its_host() {}\n"
+GAP_HEAD = "rank\tpath\tfile\tfunction\tmutant\tdeclared_killer_args\tdeclared_assertion\n"
+# The killer the gap row names, at the module path its filter spells. Its assertion sits on line
+# 3; the digest is sha256("assert!(ok());")[:8], written out so no test derives it from the
+# resolver under test.
+KILLER = "#[test]\nfn guard_admits_only_its_host() {\n    assert!(ok());\n}\n"
+SITE = "assert!(ok()); [stmt:404cc513]"
 GUARD = """impl Guard {
     fn admits(&self, host: &str) -> bool {
         let allowed = host == self.host;
@@ -63,7 +68,8 @@ class Repo:
             c6.REPLACEMENTS: REPL_HEAD,
             f"{c6.PATCHES}/http/1_admits.patch": PATCH,
             "src/guard.rs": GUARD,
-            GAP_TABLE: GAP_HEAD + "1\tHTTP dispatch\tsrc/guard.rs\tGuard::admits\t1_admits.patch\t--lib checks::guard_admits_only_its_host\n",
+            GAP_TABLE: GAP_HEAD + "1\tHTTP dispatch\tsrc/guard.rs\tGuard::admits\t1_admits.patch\t--lib checks::guard_admits_only_its_host\t"
+                       f"src/checks.rs:3 {SITE}\n",
             "src/lib.rs": "mod checks;\n",
             "src/checks.rs": KILLER,
         }
@@ -81,6 +87,12 @@ class Repo:
                 self.git("rm", "-q", stale)
         self.git("add", "-A")
         self.git("commit", "-qm", "fixture", "--allow-empty")
+
+    def declare(self, cell: str) -> None:
+        """Set the rank-1 gap row's declared_assertion cell."""
+        lines = self.files[GAP_TABLE].splitlines()
+        lines = [f"{l.rsplit(chr(9), 1)[0]}\t{cell}" if l.startswith("1\t") else l for l in lines]
+        self.files[GAP_TABLE] = "\n".join(lines) + "\n"
 
     def run(self) -> tuple[int, str]:
         self.commit()
@@ -463,6 +475,7 @@ class KillerFilters(unittest.TestCase):
         self.repo.files["src/lib.rs"] = '#[cfg(test)]\n#[path = "guard_checks.rs"]\nmod checks;\n'
         self.repo.files.pop("src/checks.rs")
         self.repo.files["src/guard_checks.rs"] = KILLER
+        self.repo.declare(f"src/guard_checks.rs:3 {SITE}")
         code, out = self.repo.run()
         self.assertEqual(code, 0, out)
 
@@ -470,6 +483,7 @@ class KillerFilters(unittest.TestCase):
         self.filter("--lib checks::inner::deep::guard_admits_only_its_host")
         self.repo.files["src/checks.rs"] = "mod inner {\n    mod deep;\n}\n"
         self.repo.files["src/checks/inner/deep.rs"] = KILLER
+        self.repo.declare(f"src/checks/inner/deep.rs:3 {SITE}")
         code, out = self.repo.run()
         self.assertEqual(code, 0, out)
 
@@ -483,6 +497,7 @@ class KillerFilters(unittest.TestCase):
         self.filter("--test acs issuer::guard_admits_only_its_host")
         self.repo.files["tests/acs.rs"] = "mod issuer;\n"
         self.repo.files["tests/issuer.rs"] = KILLER
+        self.repo.declare(f"tests/issuer.rs:3 {SITE}")
         code, out = self.repo.run()
         self.assertEqual(code, 0, out)
 
@@ -491,6 +506,7 @@ class KillerFilters(unittest.TestCase):
         self.repo.files["Cargo.toml"] = ('[package]\nname = "x"\n\n[[test]]\nname = "acs"\n'
                                          'path = "tests/suites/acs_main.rs"\n\n[features]\n')
         self.repo.files["tests/suites/acs_main.rs"] = KILLER
+        self.repo.declare(f"tests/suites/acs_main.rs:3 {SITE}")
         self.repo.files["tests/acs.rs"] = "// not the target: cargo reads the declared path\n"
         code, out = self.repo.run()
         self.assertEqual(code, 0, out)
@@ -558,6 +574,471 @@ class KillerFilters(unittest.TestCase):
         code, out = self.repo.run()
         self.assertEqual(code, 1, out)
         self.assertIn("mod gone in src/lib.rs: none of src/gone.rs, src/gone/mod.rs", out)
+
+
+class DeclaredAssertions(unittest.TestCase):
+    """G7 scores a RED only when the killer panics at the row's declared file:line, so the
+    resolver refuses a declared site that no longer holds the recorded statement inside the
+    killer (or the helper the row names). A second obligation rides along in every fixture, so
+    each refusal also shows the rows it did not touch stay resolved."""
+
+    def setUp(self) -> None:
+        self.repo = Repo()
+        f = self.repo.files
+        f[c6.RANKING] += "2\tSAMPLE\tHTTP dispatch\tsrc/other.rs\tOther::check\t1\tChecks.\n"
+        f["src/other.rs"] = GUARD.replace("impl Guard", "impl Other").replace("fn admits", "fn check")
+        f[f"{c6.PATCHES}/http/2_check.patch"] = (
+            PATCH.replace("src/guard.rs", "src/other.rs").replace("impl Guard", "impl Other").replace("fn admits", "fn check"))
+        f["src/checks.rs"] = KILLER + "#[test]\nfn guard_two_refuses() {\n    assert!(ok(2));\n}\n"
+        f[GAP_TABLE] += ("2\tHTTP dispatch\tsrc/other.rs\tOther::check\t2_check.patch\t--lib checks::guard_two_refuses\t"
+                         "src/checks.rs:7 assert!(ok(2)); [stmt:d867f072]\n")
+
+    def tearDown(self) -> None:
+        self.repo.close()
+
+    def accepted(self) -> None:
+        code, out = self.repo.run()
+        self.assertEqual(code, 0, out)
+        self.assertIn("2 framed obligations, 0 framed items unresolved", out)
+
+    def refused(self, why: str) -> None:
+        code, out = self.repo.run()
+        self.assertEqual(code, 1, out)
+        self.assertIn(f"unresolved\tHTTP dispatch rank 1 Guard::admits\t{why}", out)
+        self.assertIn("in-place\tHTTP dispatch rank 2 Other::check", out)
+        self.assertIn("2 framed obligations, 1 framed items unresolved", out)
+
+    def test_the_fixture_as_written_resolves(self) -> None:
+        self.accepted()
+
+    # -- rule 1: the cell's shape ------------------------------------------------------------
+
+    def test_prose_instead_of_a_site_is_refused(self) -> None:
+        self.repo.declare("status 403 for a foreign host")
+        self.refused("declared assertion does not open with file:line, text and [stmt:")
+
+    def test_a_site_without_a_digest_is_refused(self) -> None:
+        self.repo.declare("src/checks.rs:3 assert!(ok());")
+        self.refused("declared assertion does not open with file:line, text and [stmt:")
+
+    def test_a_seven_digit_digest_is_refused(self) -> None:
+        self.repo.declare("src/checks.rs:3 assert!(ok()); [stmt:404cc51]")
+        self.refused("declared assertion does not open with file:line, text and [stmt:")
+
+    def test_none_and_empty_on_an_active_row_are_refused(self) -> None:
+        for cell in ("NONE", ""):
+            with self.subTest(cell=cell):
+                self.repo.declare(cell)
+                self.refused("declared assertion does not open with file:line, text and [stmt:")
+
+    # -- rule 2: the file and the line exist -------------------------------------------------
+
+    def test_a_file_that_is_gone_is_refused(self) -> None:
+        self.repo.declare(f"src/gone.rs:3 {SITE}")
+        self.refused("declared assertion src/gone.rs:3: no such file")
+
+    def test_line_zero_is_refused(self) -> None:
+        self.repo.declare(f"src/checks.rs:0 {SITE}")
+        self.refused("declared assertion src/checks.rs:0 is outside the file's 8 lines")
+
+    def test_one_past_the_last_line_is_refused(self) -> None:
+        self.repo.declare(f"src/checks.rs:9 {SITE}")
+        self.refused("declared assertion src/checks.rs:9 is outside the file's 8 lines")
+
+    def test_line_one_and_the_last_line_are_inside_the_file(self) -> None:
+        # The killer is the file's only item, on one line: line 1 is also the last line.
+        self.repo.files["src/checks.rs"] = "#[test] fn guard_admits_only_its_host() { assert!(ok()); }\n"
+        self.repo.files[GAP_TABLE] = self.repo.files[GAP_TABLE].replace("src/checks.rs:7", "src/two.rs:3")
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod two;\n"
+        self.repo.files["src/two.rs"] = "#[test]\nfn guard_two_refuses() {\n    assert!(ok(2));\n}\n"
+        self.repo.files[GAP_TABLE] = self.repo.files[GAP_TABLE].replace("checks::guard_two_refuses", "two::guard_two_refuses")
+        # The statement that starts at line 1 runs to the end of that line (brackets balance there).
+        self.repo.declare("src/checks.rs:1 #[test] fn guard_admits_only_its_host() { assert!(ok()); } [stmt:56ffb052]")
+        self.accepted()
+
+    def killer(self, first: str) -> None:
+        """Replace the rank-1 killer with `first` (whole source of its item); the rank-2 killer
+        follows it and its declared line moves with it."""
+        two = "#[test]\nfn guard_two_refuses() {\n    assert!(ok(2));\n}\n"
+        self.repo.files["src/checks.rs"] = first + two
+        line = first.count("\n") + 3
+        self.repo.files[GAP_TABLE] = re.sub(r"src/checks\.rs:\d+ assert!\(ok\(2\)\);", f"src/checks.rs:{line} assert!(ok(2));",
+                                            self.repo.files[GAP_TABLE])
+
+    # -- rule 3: inside the killer -----------------------------------------------------------
+    # Each refused site's statement also occurs once inside the killer, so uniqueness (rule 5)
+    # holds and only the span decides.
+
+    def test_a_site_inside_another_test_is_refused(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    assert!(ok());\n    assert!(ok(2));\n}\n")
+        self.repo.declare("src/checks.rs:8 assert!(ok(2)); [stmt:d867f072]")
+        self.refused("declared assertion src/checks.rs:8 is not inside guard_admits_only_its_host")
+
+    def test_the_line_before_the_killers_fn_line_is_refused(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    #[test]\n    assert!(ok());\n}\n")
+        self.repo.declare("src/checks.rs:1 #[test] [stmt:fa446a9f]")
+        self.refused("declared assertion src/checks.rs:1 is not inside guard_admits_only_its_host")
+
+    def test_the_killers_fn_line_is_inside_it(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() { assert!(ok()); }\n")
+        self.repo.declare("src/checks.rs:2 fn guard_admits_only_its_host() { assert!(ok()); } [stmt:b0170562]")
+        self.accepted()
+
+    def test_the_line_after_the_killers_closing_brace_is_refused(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    #[test]\n    assert!(ok());\n}\n")
+        self.repo.declare("src/checks.rs:6 #[test] [stmt:fa446a9f]")
+        self.refused("declared assertion src/checks.rs:6 is not inside guard_admits_only_its_host")
+
+    def test_the_killers_closing_brace_line_is_inside_it(self) -> None:
+        # The statement stops at its `;`: the enclosing `}` is not part of it.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    assert!(ok()); }\n")
+        self.repo.declare("src/checks.rs:3 assert!(ok()); } [stmt:404cc513]")
+        self.accepted()
+
+    def test_a_tail_expression_stops_before_the_closing_brace(self) -> None:
+        # No `;`: the statement ends where the enclosing `}` would take the depth below zero.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    assert!(ok()) }\n")
+        self.repo.declare("src/checks.rs:3 assert!(ok()) } [stmt:c0c6e8a3]")
+        self.accepted()
+
+    def test_the_same_lines_in_another_file_are_refused(self) -> None:
+        self.repo.files["src/two.rs"] = "#[test]\nfn unrelated() {\n    assert!(ok());\n}\n"
+        self.repo.declare(f"src/two.rs:3 {SITE}")
+        self.refused("declared assertion src/two.rs:3 is not inside guard_admits_only_its_host")
+
+    # -- rule 4: the recorded text and statement ---------------------------------------------
+
+    def test_a_moved_assertion_is_refused(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n\n\n    assert!(ok());\n}\n")
+        # Line 3 is now blank: its statement is empty, sha256("")[:8] = e3b0c442.
+        self.refused("declared assertion src/checks.rs:3 does not carry the recorded text (statement digest there is e3b0c442)")
+
+    def test_a_prefix_of_the_line_is_not_the_line(self) -> None:
+        self.repo.declare("src/checks.rs:3 assert!(ok() [stmt:404cc513]")
+        self.refused("declared assertion src/checks.rs:3 does not carry the recorded text")
+
+    def test_runs_of_whitespace_compare_as_one_space(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    assert!(  ok()   );\n}\n")
+        self.repo.declare("src/checks.rs:3 assert!( ok() ); [stmt:3e14286a]")
+        self.accepted()
+
+    def test_another_statement_behind_the_same_first_line_is_refused(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    assert!(\n        ok(1)\n    );\n}\n")
+        self.repo.declare("src/checks.rs:3 assert!( [stmt:3e14286a]")
+        self.refused("declared assertion src/checks.rs:3 statement digest is 7b8ca3f5, recorded 3e14286a")
+
+    def test_an_annotation_after_the_digest_is_not_compared(self) -> None:
+        self.repo.declare(f"src/checks.rs:3 {SITE} [re-run: inner cause src/x.rs:9]")
+        self.accepted()
+
+    def test_statement_extraction_follows_brackets_and_an_argument_line_is_its_calls(self) -> None:
+        cases = (
+            ("    assert!(\n        ok(),\n        \"msg\");\n", "src/checks.rs:3 assert!( [stmt:3bf590c2]"),
+            # An argument line belongs to the statement whose call or list holds it.
+            ("    let e = (\n        ok(1).unwrap_err(),\n    );\n", "src/checks.rs:4 ok(1).unwrap_err(), [stmt:29798dd7]"),
+            # Brackets, a comma, a `;` and a `}` inside a string, and a comment after: the scan
+            # reads code only, so the statement ends at the real `;`.
+            ("    assert!(ok(), \"a ) , ; }\"); // ) ;\n",
+             "src/checks.rs:3 assert!(ok(), \"a ) , ; }\"); // ) ; [stmt:c88e394b]"),
+            # A line that opens with a literal, as an argument, belongs to its call too.
+            ("    assert!(\n        ok(),\n        \"expected\",\n    );\n", "src/checks.rs:5 \"expected\", [stmt:9e93f9b7]"),
+            # A `[stmt:...]` inside the source text is text, not the row's digest marker.
+            ("    assert_eq!(tag(), \" [stmt:12345678]\");\n",
+             "src/checks.rs:3 assert_eq!(tag(), \" [stmt:12345678]\"); [stmt:f6928722]"),
+        )
+        for body, cell in cases:
+            with self.subTest(cell=cell):
+                self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + body + "}\n")
+                self.repo.declare(cell)
+                self.accepted()
+
+    # -- rule 5: one statement, one place ----------------------------------------------------
+
+    def test_a_statement_that_occurs_twice_in_the_killer_is_refused(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    assert!(ok());\n    assert!(ok());\n}\n")
+        self.refused("statement at src/checks.rs:3 occurs 2 times in guard_admits_only_its_host")
+
+    CHAIN = "    assert_eq!(\n        make(a, b)\n            .take()\n            .unwrap_err(),\n        {n}\n    );\n"
+
+    def test_a_chained_call_line_repeated_in_the_killer_names_its_whole_statement(self) -> None:
+        # Rust reports a chained call's panic at its continuation line. `.unwrap_err(),` occurs
+        # twice here, but it belongs to two different statements (1 and 2), so the site is
+        # unique; the digest covers the whole statement it continues. The comma inside make(a, b)
+        # sits at depth 1 on the way back, so it is no boundary.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + self.CHAIN.format(n=1) + self.CHAIN.format(n=2) + "}\n")
+        self.repo.declare("src/checks.rs:6 .unwrap_err(), [stmt:dc5561ca]")
+        self.accepted()
+
+    def test_two_identical_whole_chained_statements_still_fail_closed(self) -> None:
+        # The same chain twice, values included: the check cannot tell which one panics.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + self.CHAIN.format(n=1) + self.CHAIN.format(n=1) + "}\n")
+        self.repo.declare("src/checks.rs:6 .unwrap_err(), [stmt:dc5561ca]")
+        self.refused("statement at src/checks.rs:6 occurs 2 times in guard_admits_only_its_host")
+
+    def test_a_bare_chain_digests_through_its_last_link(self) -> None:
+        # Two statements share the head line `make(a, b)` and differ only in a later link: the
+        # statement runs on while the next line opens with `.`, so each is whole and unique.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    make(a, b)\n        .take()\n        .unwrap_err();\n"
+                    "    make(a, b)\n        .put()\n        .unwrap_err();\n}\n")
+        self.repo.declare("src/checks.rs:5 .unwrap_err(); [stmt:0eb136cf]")
+        self.accepted()
+
+    def test_a_chain_on_a_block_receiver_starts_at_the_block(self) -> None:
+        # `}` then `.await`: the brace closes the chain's receiver, not a statement.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    let x = async {\n        1\n    }\n    .await\n    .unwrap_err();\n"
+                    "    let y = async {\n        2\n    }\n    .await\n    .unwrap_err();\n}\n")
+        self.repo.declare("src/checks.rs:7 .unwrap_err(); [stmt:d7a63421]")
+        self.accepted()
+
+    def test_an_assignment_and_an_operator_split_over_lines_continue_the_statement(self) -> None:
+        cases = (
+            # `let err =` ends in `=`: the statement goes on (the live OAuth 6 shape).
+            ("    let err =\n        make(a, b)\n            .take()\n            .unwrap_err();\n", "src/checks.rs:6 .unwrap_err(); [stmt:c18a9217]"),
+            # `+ other()` opens with an operator: the statement goes on.
+            ("    let total = make(a, b)\n        + other()\n            .take()\n            .unwrap_err();\n",
+             "src/checks.rs:6 .unwrap_err(); [stmt:62eb3ae6]"),
+        )
+        for body, cell in cases:
+            with self.subTest(cell=cell):
+                self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + body + "}\n")
+                self.repo.declare(cell)
+                self.accepted()
+
+    def test_blank_and_comment_only_lines_never_end_a_continued_statement(self) -> None:
+        # Digests are sha256 of the expected whitespace-collapsed statement, computed by hand.
+        # A comment's text is part of the statement (editing it refuses the row: fails closed).
+        cases = (
+            # After a trailing `=`: the continuation must survive a comment line and a blank line.
+            ("    let err =\n        // why\n\n        make(a, b)\n            .unwrap_err();\n",
+             "src/checks.rs:7 .unwrap_err(); [stmt:b483de43]"),
+            # Before a `.` line: the next code line is found past the comment and the blank line.
+            ("    let x = make(a, b)\n        // why\n\n        .unwrap_err();\n",
+             "src/checks.rs:6 .unwrap_err(); [stmt:eca195cf]"),
+            # A line holding only `?` continues the statement.
+            ("    let v = make(a, b)\n        // why\n        ?\n        .unwrap_err();\n",
+             "src/checks.rs:6 .unwrap_err(); [stmt:2e571dd8]"),
+        )
+        for body, cell in cases:
+            with self.subTest(cell=cell):
+                self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + body + "}\n")
+                self.repo.declare(cell)
+                self.accepted()
+
+    def test_a_continuation_form_not_followed_fails_closed(self) -> None:
+        # `as Total` opens with a keyword, a form the statement rule does not follow, so the
+        # statement found from the head ends at line 3 and never reaches the declared line 6.
+        # The recorded digest is that head's own (sha256("let total = make(a, b)")[:8]), so
+        # only the coverage check can refuse it.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    let total = make(a, b)\n        as Total\n            .take()\n            .unwrap_err();\n}\n")
+        self.repo.declare("src/checks.rs:6 .unwrap_err(); [stmt:494445d2]")
+        self.refused("statement at src/checks.rs:6 does not reach its declared line (it ends at line 3)")
+
+    # -- #5461 review: three stale or ambiguous cells the resolver accepted ----------------------
+    # Digests are sha256 of the hand-collapsed statement.
+
+    OPERATOR_LED = ("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    let total = make(a, c)\n        + other()\n            .unwrap_err();\n}\n")
+
+    def test_an_operator_led_site_digests_its_whole_statement(self) -> None:
+        # The head changed (`make(a, b)` -> `make(a, c)`) after a digest of the `+` line onward
+        # alone (sha256("+ other() .unwrap_err();")) was recorded: the head must count.
+        self.killer(self.OPERATOR_LED)
+        self.repo.declare("src/checks.rs:4 + other() [stmt:300d72c8]")
+        self.refused("declared assertion src/checks.rs:4 statement digest is 9bbb306c, recorded 300d72c8")
+
+    def test_an_operator_led_site_resolves_with_the_whole_statements_digest(self) -> None:
+        self.killer(self.OPERATOR_LED)
+        self.repo.declare("src/checks.rs:4 + other() [stmt:9bbb306c]")
+        self.accepted()
+
+    def test_a_deref_statement_after_a_finished_one_starts_on_its_own_line(self) -> None:
+        # `*` is an operator character, but the line before ends in `;`: the statement is its own.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    let a = make();\n    *slot = a;\n}\n")
+        self.repo.declare("src/checks.rs:4 *slot = a; [stmt:d55b59f8]")
+        self.accepted()
+
+    def test_a_duplicate_after_another_statement_on_one_line_counts(self) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    setup(); assert!(ok());\n    assert!(ok());\n}\n")
+        self.repo.declare("src/checks.rs:4 assert!(ok()); [stmt:404cc513]")
+        self.refused("statement at src/checks.rs:4 occurs 2 times in guard_admits_only_its_host")
+
+    def test_a_line_inside_a_nested_fn_is_not_the_killers(self) -> None:
+        # Without [via F], the innermost fn holding the line must be the killer itself.
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                    "    fn inner() {\n        assert!(ok());\n    }\n    setup();\n}\n")
+        self.repo.declare("src/checks.rs:4 assert!(ok()); [stmt:404cc513]")
+        self.refused("declared assertion src/checks.rs:4 is in inner, not guard_admits_only_its_host")
+
+    # -- the sweep: line leader x how the line before ends x what the declared line holds -------
+    # Only valid Rust is built. A continuation leader needs an unfinished line before it; a plain
+    # line follows a finished statement, or an open `vec![a,` it then closes. The expected
+    # statement is written out by hand here, never taken from the resolver.
+
+    LEADS = {".": ".finish()", "?": "?", "=": "== other()", "+": "+ other()", "-": "- other()",
+             "*": "* other()", "/": "/ other()", "%": "% other()", "&": "& other()", "|": "| other()",
+             "^": "^ other()", "<": "< other()", ">": "> other()"}
+    UNFINISHED = {"}": "let v = { make(a) }", ")": "let v = make(a)", "]": "let v = items[a]", "expr": "let v = a"}
+
+    def sweep_cases(self):
+        """(name, line before, declared line, expected statement, stale line before or None)."""
+        for lead, body in self.LEADS.items():
+            for end, before in self.UNFINISHED.items():
+                for tail in ("", " mark();"):
+                    yield (f"{lead!r} after {end}{tail}", before, f"{body};{tail}",
+                           f"{before} {body};", before.replace("a", "c"))
+        for end, before in ((";", "setup();"), ("}", "if c { a() }")):
+            for tail in ("", " mark();"):
+                yield f"plain after {end}{tail}", before, f"assert!(ok());{tail}", "assert!(ok());", None
+        for tail in ("", " mark();"):
+            yield (f"plain closing an open list{tail}", "let v = vec![a,", f"assert!(ok())];{tail}",
+                   "let v = vec![a, assert!(ok())];", "let v = vec![c,")
+            yield (f"plain element mid-list{tail}", "let v = vec![a,", f"assert!(ok()), b];{tail}",
+                   "let v = vec![a, assert!(ok()), b];", "let v = vec![c,")
+
+    def sweep_run(self, before: str, declared: str, digest_of: str, after: str = "") -> tuple[int, str]:
+        closing = f"    {after}\n" if after else ""
+        self.killer(f"#[test]\nfn guard_admits_only_its_host() {{\n    {before}\n        {declared}\n{closing}}}\n")
+        digest = hashlib.sha256(digest_of.encode()).hexdigest()[:8]
+        self.repo.declare(f"src/checks.rs:4 {' '.join(declared.split())} [stmt:{digest}]")
+        return self.repo.run()
+
+    def test_the_sweep_accepts_each_whole_statement_and_refuses_a_stale_head(self) -> None:
+        for name, before, declared, statement, stale in self.sweep_cases():
+            with self.subTest(case=name, check="whole statement accepted"):
+                code, out = self.sweep_run(before, declared, statement)
+                self.assertEqual(code, 0, out)
+            if stale is not None:
+                with self.subTest(case=name, check="edited head refused"):
+                    code, out = self.sweep_run(stale, declared, statement)
+                    self.assertEqual(code, 1, out)
+
+    def test_the_sweep_takes_a_final_element_without_a_comma_as_its_calls(self) -> None:
+        # The dimension the first sweep missed: the declared line is a call's or list's last
+        # element, with no trailing comma, and the closer comes on the next line.
+        for before, after, stale in (("check(a,", ");", "check(c,"), ("let v = vec![a,", "];", "let v = vec![c,"),
+                                     ("let v = (a,", ");", "let v = (c,")):
+            statement = f"{before} assert!(ok()) {after}"
+            with self.subTest(before=before, check="whole statement accepted"):
+                code, out = self.sweep_run(before, "assert!(ok())", statement, after)
+                self.assertEqual(code, 0, out)
+            with self.subTest(before=before, check="edited head refused"):
+                code, out = self.sweep_run(stale, "assert!(ok())", statement, after)
+                self.assertEqual(code, 1, out)
+
+    def test_the_sweep_counts_a_duplicate_after_any_closer(self) -> None:
+        # A statement after the closer of an earlier line's construct is counted like any other.
+        for opener, inner, closer in (("check(", "a,", ");"), ("let v = vec![", "a,", "];"), ("let v = {", "a", "};")):
+            with self.subTest(closer=closer):
+                self.killer("#[test]\nfn guard_admits_only_its_host() {\n"
+                            f"    {opener}\n        {inner}\n    {closer} assert!(ok());\n    assert!(ok());\n}}\n")
+                self.repo.declare("src/checks.rs:6 assert!(ok()); [stmt:404cc513]")
+                self.refused("statement at src/checks.rs:6 occurs 2 times in guard_admits_only_its_host")
+
+    # -- [via F]: the panic is reported inside a helper the killer calls ---------------------
+
+    HELP = "fn check(x: u8) {\n    assert!(ok(x));\n}\nfn other(x: u8) {\n    assert!( ok(x + 1) );\n}\n"
+    VIA = "src/help.rs:2 assert!(ok(x)); [stmt:dcda11c2] [via check]"
+
+    def helper(self, body: str, help_src: str | None = None, cell: str | None = None) -> None:
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n" + body + "}\n")
+        self.repo.files["src/help.rs"] = help_src if help_src is not None else self.HELP
+        self.repo.declare(cell or self.VIA)
+
+    def test_a_helper_the_killer_calls_is_accepted(self) -> None:
+        self.helper("    check(1);\n")
+        self.accepted()
+
+    def test_markers_written_inside_a_helper_line_do_not_steer_the_check(self) -> None:
+        # The line's own text holds "[stmt:...] [via other]"; only the tail after the row's
+        # digest marker names the helper.
+        self.helper("    check(1);\n", help_src="fn check(x: u8) {\n    assert_eq!(tag(x), \" [stmt:12345678] [via other]\");\n}\n",
+                    cell="src/help.rs:2 assert_eq!(tag(x), \" [stmt:12345678] [via other]\"); [stmt:8731b4c2] [via check]")
+        self.accepted()
+
+    def test_a_helper_named_only_in_a_comment_and_a_string_is_refused(self) -> None:
+        self.helper("    // check(1);\n    let s = \"check(1)\";\n    other(1);\n")
+        self.refused("guard_admits_only_its_host does not call check")
+
+    def test_a_helper_name_that_is_not_the_fn_holding_the_line_is_refused(self) -> None:
+        self.helper("    check(1);\n    other(1);\n", cell=self.VIA.replace("[via check]", "[via other]"))
+        self.refused("declared assertion src/help.rs:2 is in check, not other")
+
+    def test_every_direct_call_form_counts(self) -> None:
+        for call in ("check (1);", "check::<u8>(1);", "check::<Option<u8>>(1);", "check::<fn() -> u8>(f);",
+                     "check::<{ 1 > 0 }>(1);"):
+            with self.subTest(call=call):
+                self.helper(f"    {call}\n")
+                self.accepted()
+
+    def test_a_path_through_the_helpers_name_counts_as_a_reference(self) -> None:
+        # The accepted limit: `check::LIMIT` is not a call, but `F::` counts by design.
+        self.helper("    let _ = check::LIMIT;\n")
+        self.accepted()
+
+    def test_a_helper_reached_only_through_a_macro_is_refused(self) -> None:
+        self.helper("    run!(1);\n", help_src=self.HELP + "macro_rules! run { ($x:expr) => { check($x) }; }\n")
+        self.refused("guard_admits_only_its_host does not call check")
+
+    def test_a_helper_reached_only_through_a_fn_pointer_is_refused(self) -> None:
+        self.helper("    let f = check;\n    f(1);\n")
+        self.refused("guard_admits_only_its_host does not call check")
+
+    def test_a_helper_two_calls_deep_is_refused(self) -> None:
+        # Only a direct call counts: wrap calls check, the killer calls only wrap.
+        self.helper("    wrap(1);\n", help_src=self.HELP + "fn wrap(x: u8) {\n    check(x);\n}\n")
+        self.refused("guard_admits_only_its_host does not call check")
+
+    def test_a_longer_name_containing_the_helpers_name_is_not_a_call(self) -> None:
+        self.helper("    precheck(1);\n    check_more(1);\n    other(1);\n")
+        self.refused("guard_admits_only_its_host does not call check")
+
+    def test_a_moved_assertion_in_the_helper_is_refused(self) -> None:
+        self.helper("    check(1);\n", help_src="fn check(x: u8) {\n\n    assert!(ok(x));\n}\n")
+        self.refused("declared assertion src/help.rs:2 does not carry the recorded text")
+
+    def test_another_statement_in_the_helper_behind_the_same_first_line_is_refused(self) -> None:
+        self.helper("    check(1);\n", help_src="fn check(x: u8) {\n    assert!(\n        ok(x) || true\n    );\n}\n",
+                    cell="src/help.rs:2 assert!( [stmt:dcda11c2] [via check]")
+        self.refused("declared assertion src/help.rs:2 statement digest is 15d97aca, recorded dcda11c2")
+
+    def test_a_statement_that_occurs_twice_in_the_helper_is_refused(self) -> None:
+        self.helper("    check(1);\n", help_src="fn check(x: u8) {\n    assert!(ok(x));\n    assert!(ok(x));\n}\n")
+        self.refused("statement at src/help.rs:2 occurs 2 times in check")
+
+    # -- the judged file is the one the mutant run compiles ----------------------------------
+
+    # The rank-1 patch replaces one line of Guard::admits with four, so everything below it in
+    # src/guard.rs sits three lines lower in the patched file the log was taken from.
+    GROW = ("diff --git a/src/guard.rs b/src/guard.rs\n--- a/src/guard.rs\n+++ b/src/guard.rs\n"
+            "@@ -1,5 +1,8 @@\n impl Guard {\n     fn admits(&self, host: &str) -> bool {\n"
+            "-        let allowed = host == self.host;\n+        let allowed = true;\n+        let _a = 1;\n"
+            "+        let _b = 2;\n+        let _c = 3;\n         allowed\n     }\n")
+
+    def shifted(self, tail: str) -> None:
+        self.repo.files[f"{c6.PATCHES}/http/1_admits.patch"] = self.GROW
+        self.repo.files["src/guard.rs"] = GUARD + tail  # `tail` is clean line 7, patched line 10
+        self.repo.files["src/lib.rs"] = "mod checks;\nmod guard;\n"
+
+    def test_a_killer_below_its_own_patch_is_judged_at_its_patched_line(self) -> None:
+        self.shifted("#[test] fn guard_admits_only_its_host() { assert!(ok()); }\n")
+        self.repo.files["src/checks.rs"] = "#[test]\nfn guard_two_refuses() {\n    assert!(ok(2));\n}\n"
+        self.repo.files[GAP_TABLE] = (self.repo.files[GAP_TABLE].replace("checks::guard_admits_only_its_host", "guard::guard_admits_only_its_host")
+                                      .replace("src/checks.rs:7 assert!(ok(2))", "src/checks.rs:3 assert!(ok(2))"))
+        self.repo.declare("src/guard.rs:10 #[test] fn guard_admits_only_its_host() { assert!(ok()); } [stmt:56ffb052]")
+        self.accepted()
+        self.repo.declare("src/guard.rs:7 #[test] fn guard_admits_only_its_host() { assert!(ok()); } [stmt:56ffb052]")
+        self.refused("declared assertion src/guard.rs:7 is not inside guard_admits_only_its_host")
+
+    def test_a_helper_below_the_patch_is_judged_at_its_patched_line(self) -> None:
+        self.shifted("fn check(x: u8) { assert!(ok(x)); }\n")
+        self.killer("#[test]\nfn guard_admits_only_its_host() {\n    check(1);\n}\n")
+        self.repo.declare("src/guard.rs:10 fn check(x: u8) { assert!(ok(x)); } [stmt:c3ff6b33] [via check]")
+        self.accepted()
+        self.repo.declare("src/guard.rs:7 fn check(x: u8) { assert!(ok(x)); } [stmt:c3ff6b33] [via check]")
+        self.refused("declared assertion src/guard.rs:7 is in admits, not check")
 
 
 class TheReleaseLine(unittest.TestCase):
