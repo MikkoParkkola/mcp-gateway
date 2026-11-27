@@ -871,22 +871,28 @@ def _apply_reanchored(source: str, patch: str) -> str:
     return text
 
 
-def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int, int], str, int]:
+def _statement(src: list[str], blanked: list[str], line: int,
+               at: int | None = None) -> tuple[tuple[int, int], str, int]:
     """The statement holding 1-based `line`, as (its start (line index, column), its
     whitespace-collapsed source text, the index of its last line), from the source lines `src`
     and the same lines blanked.
     Rust reports a chained call's panic at its continuation line (`.unwrap_err(),`), which
-    starts no statement and can repeat inside one test: a line that opens with `.` belongs to
+    starts no statement and can repeat inside one test: a line whose code opens with `.`, `?` or an operator belongs to
     the statement found by scanning back, in the blanked text, to the previous `;`, `,`, `{` or
     `}` at depth 0 (an opening `(` or `[` passed at depth 0 means the chain sits inside a call
-    or list, and the scan goes on). Any other line starts its own statement at its first
-    non-blank source character. From the start the text runs forward up to a `;` or `,` at
+    or list, and the scan goes on; after a finished statement that is the line itself, `*slot = a;`). Any other line starts its own statement at its first
+    non-blank source character, or at column `at` when given (a second statement on one line). From the start the text runs forward up to a `;` or `,` at
     depth 0 (kept), a closer that would take the depth below 0 (left out), or a line end at
     depth 0 that does not visibly go on (see `_continues`). A declared line the statement does
     not reach is refused by the caller: any continuation form not followed fails closed."""
     col = len(src[line - 1]) - len(src[line - 1].lstrip())
-    j, c = (_statement_start(src, blanked, line - 1, col) if src[line - 1].lstrip().startswith(".")
-            else (line - 1, col))
+    lead = blanked[line - 1].lstrip()[:1]
+    if at is not None:
+        j, c = line - 1, at
+    elif lead and lead in _CONTINUATION_LEAD:
+        j, c = _statement_start(src, blanked, line - 1, col)
+    else:
+        j, c = line - 1, col
     depth, parts = 0, []
     for k in range(j, len(blanked)):
         text = blanked[k]
@@ -917,6 +923,22 @@ def _statement(src: list[str], blanked: list[str], line: int) -> tuple[tuple[int
 # A line ending in one of these, or a next code line opening with one (or with `.` or `?`),
 # continues the statement: an assignment, a binary operator, a chain or `?` split over lines.
 _OPERATOR_CHARS = "=+-*/%&|^<>"
+# A line whose code opens with one of these continues the statement before it, if any.
+_CONTINUATION_LEAD = ".?" + _OPERATOR_CHARS
+
+
+def _later_starts(text: str) -> list[int]:
+    """Columns in one blanked line where a statement begins after a `;` closed another at the
+    line's own nesting level (`setup(); assert!(ok());`); a `;` inside a block or call is not one."""
+    depth, starts = 0, []
+    for i, ch in enumerate(text):
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        elif ch == ";" and depth == 0 and text[i + 1:].strip():
+            starts.append(len(text) - len(text[i + 1:].lstrip()))
+    return starts
 
 
 def _continues(src: list[str], blanked: list[str], k: int) -> bool:
@@ -1003,10 +1025,10 @@ def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: 
     wanted = _collapse(src[line - 1])
     pick = next((mk for mk in marks if _collapse(rest[:mk.start()]) == wanted), marks[0])
     text, digest, via = rest[:pick.start()], pick.group(1), _VIA.search(rest[pick.end():])
+    holders = [d for d in decls if d.start <= line <= d.end]
+    inner = min(holders, key=lambda d: (d.end - d.start, -d.start)) if holders else None
     if via:
         helper = via.group(1)
-        holders = [d for d in decls if d.start <= line <= d.end]
-        inner = min(holders, key=lambda d: (d.end - d.start, -d.start)) if holders else None
         if inner is None or inner.name != helper:
             return f"{site} is in {inner.name if inner else 'no fn'}, not {helper}"
         body = "\n".join(blank(killer_src).splitlines()[kdecl.start - 1:kdecl.end])
@@ -1017,20 +1039,28 @@ def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: 
     else:
         if path != killer_file or not kdecl.start <= line <= kdecl.end:
             return f"{site} is not inside {killer}"
+        # A fn nested in the killer is not the killer: without [via F] the line must be its own.
+        if inner is not None and inner.name != killer:
+            return f"{site} is in {inner.name}, not {killer}"
         span = kdecl
     _, statement, last = _statement(src, blanked, line)
     actual = hashlib.sha256(statement.encode()).hexdigest()[:8]
     if _collapse(src[line - 1]) != _collapse(text):
         return f"{site} does not carry the recorded text (statement digest there is {actual})"
-    # The statement must run through the declared line: a chain continued by something other
-    # than a `.` line (an operator, a comment) ends early, and its head alone vouches for nothing.
+    # The statement must run through the declared line: a continuation form the statement rule
+    # does not follow ends early, and its head alone vouches for nothing.
     if last < line - 1:
         return f"statement at {path}:{line} does not reach its declared line (it ends at line {last + 1})"
     if actual != digest:
         return f"{site} statement digest is {actual}, recorded {digest}"
-    # Distinct statements in the span (each line maps to the statement holding it), counted by
-    # start, so a multi-line statement counts once and two identical statements count twice.
-    found = {where: other for where, other, _ in (_statement(src, blanked, k) for k in range(span.start, span.end + 1))}
+    # Distinct statements in the span, counted by start: each line's own (or the one it
+    # continues) and any that begin after a `;` on the same line, so a multi-line statement counts
+    # once and two identical statements count twice wherever they sit.
+    found = {}
+    for k in range(span.start, span.end + 1):
+        for at in (None, *_later_starts(blanked[k - 1])):
+            where, other, _ = _statement(src, blanked, k, at)
+            found[where] = other
     same = sum(other == statement for other in found.values())
     if same != 1:
         return f"statement at {path}:{line} occurs {same} times in {span.name}"
