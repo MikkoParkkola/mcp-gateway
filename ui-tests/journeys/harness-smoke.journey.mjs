@@ -15,7 +15,8 @@ test('harness smoke: try a tool', async ({ page, gw }) => {
   await page.getByRole('link', { name: 'Tools' }).first().click();
 
   const picker = page.locator('#try-tool');
-  const label = await picker.locator('option').filter({ hasText: 'tide_table' }).first().textContent();
+  // Both stubs serve tide_table; the option label is "<tool> <server> · ...", so pick tide's own.
+  const label = await picker.locator('option').filter({ hasText: /^tide_table tide · / }).textContent();
   await picker.selectOption({ label: label.trim() });
   const tideCalls = async () => (await gw.stubLog('tide')).split('\n')
     .filter((l) => l.includes('"tools/call"') && l.includes('tide_table')).length;

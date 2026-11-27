@@ -66,6 +66,8 @@ jobs:
       # Journeys mode, before anything else: a caller whose build did not succeed gets a red job at once.
       - name: Stop when the caller's gateway build did not succeed (journeys mode)
         if: ${{ inputs.journeys_bin && inputs.build_result != 'success' }}
+        # Before the checkout, so the job default ui-tests does not exist yet.
+        working-directory: .
         env:
           RESULT: ${{ inputs.build_result }}
         run: |

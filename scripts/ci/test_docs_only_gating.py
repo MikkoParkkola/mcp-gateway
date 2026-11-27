@@ -550,9 +550,7 @@ def called_journeys_errors() -> list[str]:
     errs = []
 
     def active(step, inputs):
-        cond = step.get("if")
-        c = dict(ctx("pull_request", "success", "false"), inputs=inputs)
-        return cond is None or evaluate(str(cond).replace("${{", "").replace("}}", ""), c)
+        return step_runs(step, dict(ctx("pull_request", "success", "false"), inputs=inputs))
 
     standalone, called_ok = {}, {"journeys_bin": True, "build_result": "success"}
     called_bad = {"journeys_bin": True, "build_result": "failure"}

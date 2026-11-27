@@ -59,7 +59,7 @@ const SEEDS = {
     return {
       ...seeded,
       ready: async (gw, deadline) => {
-        await mcpCall(gw.origin, { server: 'tide', tool: 'tide_secret', arguments: {} });
+        await mcpCall(gw, { server: 'tide', tool: 'tide_secret', arguments: {} });
         await until(deadline, 'no blocked tide_secret call in Activity', async () => {
           const { rows } = await (await gw.api('/ui/api/activity?server=tide')).json();
           return rows.some((r) => r.tool === 'tide_secret' && r.outcome === 'blocked');
@@ -69,13 +69,22 @@ const SEEDS = {
   },
 };
 
-/** One real MCP client exchange on POST /mcp: initialize, initialized, then gateway_invoke of the given call. */
-async function mcpCall(origin, call) {
-  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
-  const post = (body, extra = {}) => fetch(`${origin}/mcp`, { method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(body) });
+/** One real MCP client exchange on POST /mcp with the test's bearer: initialize, initialized, then gateway_invoke
+ * of the given call. Each HTTP answer must succeed; the call's own result may be the policy refusal it seeds. */
+async function mcpCall({ origin, adminKey }, call) {
+  const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream',
+    authorization: `Bearer ${adminKey}` };
+  const post = async (body, extra = {}) => {
+    const res = await fetch(`${origin}/mcp`, { method: 'POST', headers: { ...headers, ...extra }, body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5_000) });
+    const text = await res.text();
+    if (!res.ok) throw new Error(`POST /mcp ${body.method} answered ${res.status}: ${text.slice(0, 300)}`);
+    return { res, text };
+  };
   const init = await post({ jsonrpc: '2.0', id: 1, method: 'initialize',
     params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'journey-seed', version: '1' } } });
-  const session = init.headers.get('mcp-session-id');
+  if (/"error"\s*:/.test(init.text)) throw new Error(`initialize was refused: ${init.text.slice(0, 300)}`);
+  const session = init.res.headers.get('mcp-session-id');
   const withSession = session ? { 'mcp-session-id': session } : {};
   await post({ jsonrpc: '2.0', method: 'notifications/initialized' }, withSession);
   await post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'gateway_invoke', arguments: call } }, withSession);

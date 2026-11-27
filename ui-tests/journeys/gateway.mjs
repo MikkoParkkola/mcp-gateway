@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
 // The journey harness (spec D3): each test gets the REAL gateway binary, started by this file in a private
-// home H with a seed, while HOME points at a decoy home D that must stay unread. One shared fixture owns the process,
+// home H with a seed, while HOME points at a decoy home D that must leave no trace. One shared fixture owns the process,
 // the stub servers, both homes, the port and the teardown; no journey manages them itself.
 // Inputs: JOURNEYS_GATEWAY_BIN only. Unset, missing or not executable fails the run; nothing here ever skips.
 import { spawn, spawnSync } from 'node:child_process';
@@ -22,6 +22,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const HEALTH_MS = 20_000;
 const SETTLE_MS = 20_000; // discovery's first scan, and each seed's own readiness
 const STOP_MS = 5_000;
+const REQUEST_MS = 5_000; // one HTTP request: a listener that accepts and never answers must not outlast a deadline
 export const TIMING_FILE = join(HERE, '..', 'test-results', 'jh-timing.jsonl');
 
 // Every gateway this worker started and has not stopped: the exit hook kills them if a test is torn down abruptly.
@@ -134,17 +135,19 @@ async function until(deadline, what, probe) {
  * Rejects with the harness's own diagnostic (and the gateway log as error.gatewayLog) on any failure.
  * `port` and `onSpawn` exist for the harness's own rows (a taken port; counting spawns).
  */
-export async function startGateway({ seed, port, onSpawn } = {}) {
+async function start({ seed, port, onSpawn }, owned) {
   const bin = await gatewayBinary();
   requireLsof();
   const t0 = Date.now();
   const home = await mkdtemp(join(tmpdir(), 'jh-home-'));
   const decoy = await mkdtemp(join(tmpdir(), 'jh-decoy-'));
+  owned.homes = [home, decoy];
   const path = process.env.PATH;
   const env = gatewayEnv({ home, decoy, path });
   const configPath = join(home, 'gateway.yaml');
 
-  // D: a whole gateway home of its own (its own init key) plus a planted client config. Nothing may read it.
+  // D: a whole gateway home of its own (its own init key) plus a planted client config. Nothing of it may reach the gateway: no
+  // discovery entry, no accepted key, no changed file (design 6d). A read that shows none of these is not detected.
   runInit(bin, gatewayEnv({ home: decoy, decoy, path }), join(decoy, 'gateway.yaml'));
   await mkdir(join(decoy, '.cursor'), { recursive: true });
   await writeFile(join(decoy, '.cursor', 'mcp.json'), JSON.stringify({ mcpServers: { 'decoy-planted': { command: 'npx', args: ['decoy'] } } }));
@@ -174,7 +177,7 @@ export async function startGateway({ seed, port, onSpawn } = {}) {
   child.on('exit', (code, signal) => { exited = { code, signal }; live.delete(child.pid); });
 
   const origin = `http://127.0.0.1:${chosen}`;
-  const api = (p, { key = adminKey } = {}) => fetch(origin + p, { headers: key ? { Authorization: `Bearer ${key}` } : {} });
+  const api = (p, { key = adminKey } = {}) => fetch(origin + p, { signal: AbortSignal.timeout(REQUEST_MS), headers: key ? { Authorization: `Bearer ${key}` } : {} });
   const handle = {
     origin, port: chosen, pid: child.pid, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
     stubs: seeded.stubs ?? [], api,
@@ -186,6 +189,9 @@ export async function startGateway({ seed, port, onSpawn } = {}) {
         const end = Date.now() + STOP_MS;
         while (!exited && Date.now() < end) await new Promise((done) => setTimeout(done, 100));
         if (!exited) { try { process.kill(-child.pid, 'SIGKILL'); } catch { /* gone */ } }
+        // SIGKILL is delivered asynchronously: wait for the exit before judging the port.
+        const reaped = Date.now() + STOP_MS;
+        while (!exited && Date.now() < reaped) await new Promise((done) => setTimeout(done, 100));
       }
       live.delete(child.pid);
       if (await answers(chosen)) throw new Error(`port ${chosen} still answers after the gateway was stopped`);
@@ -195,6 +201,7 @@ export async function startGateway({ seed, port, onSpawn } = {}) {
       if (after !== decoyPrint) throw new Error('the decoy home changed while the gateway ran');
     },
   };
+  owned.handle = handle;
 
   const fail = async (why) => {
     const gatewayLog = await readFile(logPath, 'utf8').catch(() => '');
@@ -207,7 +214,7 @@ export async function startGateway({ seed, port, onSpawn } = {}) {
   try {
     await until(t1 + HEALTH_MS, `gateway not healthy within ${HEALTH_MS} ms`, async () => {
       if (exited) throw Object.assign(new Error('exited'), { fatal: true });
-      return (await fetch(`${origin}/health`)).status === 200;
+      return (await fetch(`${origin}/health`, { signal: AbortSignal.timeout(REQUEST_MS) })).status === 200;
     });
   } catch (e) {
     return fail(exited ? `gateway exited before it was healthy (${JSON.stringify(exited)}); gateway not healthy within ${HEALTH_MS} ms` : e.message);
@@ -232,10 +239,26 @@ export async function startGateway({ seed, port, onSpawn } = {}) {
   return handle;
 }
 
+/** Any rejection, a check's own or an unexpected one (a refused fetch, a disk error), stops the child and removes
+ * both homes, so a failed start leaves nothing behind for the next test in this worker. */
+export async function startGateway(opts = {}) {
+  const owned = {};
+  try {
+    return await start(opts, owned);
+  } catch (e) {
+    if (owned.handle) await owned.handle.stop().catch(() => {});
+    for (const dir of owned.homes ?? []) await rm(dir, { recursive: true, force: true });
+    throw e;
+  }
+}
+
 export const test = base.extend({
   seed: ['fresh', { option: true }],
   gw: async ({ seed }, use, testInfo) => {
-    const gw = await startGateway({ seed });
+    const gw = await startGateway({ seed }).catch(async (e) => {
+      if (e.gatewayLog) await testInfo.attach('gateway.log', { body: e.gatewayLog });
+      throw e;
+    });
     try {
       await use(gw);
     } finally {
