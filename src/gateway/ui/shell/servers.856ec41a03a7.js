@@ -11,7 +11,7 @@
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
 import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.509e3442f83e.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, statusTab as serverStatus, actionsTab as serverActions, settingsTab as serverSettings } from '/ui/assets/server-page.144bf4fbd66f.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions, settingsTab as serverSettings } from '/ui/assets/server-page.ef547f8f43d2.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
