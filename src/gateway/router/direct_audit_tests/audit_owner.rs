@@ -120,3 +120,56 @@ async fn p4_3_each_finished_meta_call_writes_exactly_one_record() {
     wrong.extend(once("transport failure", transport, "error", [1, 0, 1, 0, 0]).await);
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
+
+/// P4 (3), a delivered meta answer's record keeps its success response hash.
+#[tokio::test]
+async fn p4_3_a_delivered_meta_answer_keeps_its_response_hash() {
+    let fx = fixture(Setup::default()).await;
+    let call = meta_invoke("alpha", "t", &json!({}));
+    let _ = post_to(&fx, "/mcp", &call, &Caller::Anonymous).await;
+    let records = invocations(&fx);
+    let [record] = records.as_slice() else {
+        panic!("{} records, want 1", records.len());
+    };
+    let hash = record["response_hash"].as_str().unwrap_or_default();
+    assert!(hash.starts_with("sha256:"), "{record}");
+}
+
+/// P4 (3), a failed invocation append on `/mcp`: fail-closed withholds the
+/// answer (-32005, no result), fail-open delivers it; each with no record
+/// and today's counts.
+#[tokio::test]
+async fn p4_3_a_failed_meta_append_keeps_both_failure_policies() {
+    let mut wrong = Vec::new();
+    for fail_closed in [true, false] {
+        let fx = fixture(Setup {
+            fail_closed,
+            ..Setup::default()
+        })
+        .await;
+        let store = attach(&fx);
+        fx.log.set_append_failure_for_test(true);
+        let call = meta_invoke("alpha", "t", &json!({}));
+        let (_, answer) = post_to(&fx, "/mcp", &call, &Caller::Anonymous).await;
+        let withheld = answer["error"]["code"] == -32005 && answer.get("result").is_none();
+        let case = if fail_closed {
+            "fail-closed"
+        } else {
+            "fail-open"
+        };
+        if withheld != fail_closed {
+            wrong.push(format!("{case}: answer {answer}"));
+        }
+        let counted = totals(&store);
+        if counted != [1, 0, 0, 0, 0] {
+            wrong.push(format!(
+                "{case}: counters {counted:?}, want [1, 0, 0, 0, 0]"
+            ));
+        }
+        let records = invocations(&fx).len();
+        if records != 0 {
+            wrong.push(format!("{case}: {records} records, want 0"));
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
