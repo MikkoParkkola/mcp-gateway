@@ -3,8 +3,8 @@
 //
 // The Overview's flow map: callers, the gateway and servers drawn from the one
 // overview read, folded to a fixed number of rows, kept by key across updates.
-import { test, expect, blockingViolations } from './base.mjs';
-import { serve, open } from './overview.mjs';
+import { test, expect } from './base.mjs';
+import { serve, open, axeRows, tabStops } from './overview.mjs';
 import { SMALL, big, flowBody, edge, srv, callers, servers } from './flowmap.mjs';
 
 const map = (page) => page.locator('#content [data-panel="flow-map"]');
@@ -110,8 +110,6 @@ test('O1 the map takes its place in the one panel order', async ({ page }) => {
 
 /** The DOM order of the two lists inside the map. */
 const listOrder = (page) => map(page).locator('.ov-map > ol').evaluateAll((ls) => ls.map((l) => l.className));
-/** The href of the focused element. */
-const focusedHref = (page) => page.evaluate(() => document.activeElement?.getAttribute('href') ?? '');
 
 test('M4 ranked lists on a phone: servers first on screen, in the page and in the Tab order', async ({ page }) => {
   await showMap(page, SMALL, 390);
@@ -123,7 +121,7 @@ test('M4 ranked lists on a phone: servers first on screen, in the page and in th
   // Tab from the map's heading: a server's link comes before a caller's.
   const stops = [];
   await map(page).locator('h2').evaluate((e) => { e.tabIndex = -1; e.focus(); });
-  stops.push(...await tabWalk(page, 6));
+  stops.push(...await tabStops(page, 6));
   const firstServer = stops.findIndex((s) => s.startsWith('/ui/servers/'));
   const firstCaller = stops.findIndex((s) => s.startsWith('/ui/activity/'));
   expect(firstServer).toBeGreaterThanOrEqual(0);
@@ -432,13 +430,7 @@ test('R1 nothing moves with reduced motion, and at most three dots pulse at once
 
 /** The small map plus one caller with blocked calls, so a dot is in every audit and Tab row. */
 const WITH_DOT = flowBody({ edges: [...SMALL.edges.rows, edge('key:x', 'github', 5, 2)], servers: SMALL.servers.rows });
-for (const [colours, px] of [['dark', 390], ['dark', 1440], ['light', 390], ['light', 1440]]) {
-  test(`A1 the map passes axe in ${colours} colours at ${px} px`, async ({ page }) => {
-    await page.emulateMedia({ colorScheme: colours });
-    await showMap(page, WITH_DOT, px);
-    expect(await blockingViolations(page)).toEqual([]);
-  });
-}
+axeRows('A1 axe on the flow map', (page, width) => showMap(page, WITH_DOT, width));
 
 test('Z1 a long server name at 200% text is cut, kept whole in its title, and overlaps nothing', async ({ page }) => {
   const long = `${'very-long-server-name-'.repeat(14)}end`;
@@ -460,17 +452,10 @@ test('Z1 a long server name at 200% text is cut, kept whole in its title, and ov
   expect(fit).toEqual({ cut: true, apart: true, inside: true });
 });
 
-/** Press Tab `count` times from where focus is, collecting the href focus lands on each time. */
-async function tabWalk(page, count, seen = []) {
-  if (seen.length === count) return seen;
-  await page.keyboard.press('Tab');
-  return tabWalk(page, count, [...seen, await focusedHref(page)]);
-}
-
-test('A2 the keyboard meets every link and dot of the map in the order the page holds them', async ({ page }) => {
+test('A2 Tab reaches every row link and dot of the map, in page order', async ({ page }) => {
   await showMap(page, WITH_DOT);
   const links = await map(page).locator('a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
   expect(links.length).toBeGreaterThan(5);
   await map(page).locator('h2').evaluate((e) => { e.tabIndex = -1; e.focus(); });
-  expect(await tabWalk(page, links.length)).toEqual(links);
+  expect(await tabStops(page, links.length)).toEqual(links);
 });

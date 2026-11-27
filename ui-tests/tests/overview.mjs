@@ -3,7 +3,7 @@
 //
 // The Overview's test fixtures, shared by its specs: the overview body, the
 // series reads, serve() and open().
-import { expect } from './base.mjs';
+import { test, expect, blockingViolations } from './base.mjs';
 
 export const H = (hh, mm = 0) => Date.UTC(2026, 10, 19, hh, mm) / 1000;
 
@@ -61,4 +61,27 @@ export async function open(page, width = 1440) {
   await page.setViewportSize({ width, height: width < 640 ? 844 : 1100 });
   await page.goto('/ui/overview/status');
   await expect(page.locator('#content [data-overview-painted]')).toHaveCount(1);
+}
+
+/** One axe row per colour scheme and width: `show(page, width)` opens the page under test. */
+export function axeRows(name, show) {
+for (const scheme of ['dark', 'light']) {
+  for (const width of [390, 1440]) {
+    test(`${name}, ${scheme} at ${width}`, async ({ page }) => {
+      await page.emulateMedia({ colorScheme: scheme });
+      await show(page, width);
+      expect(await blockingViolations(page)).toEqual([]);
+    });
+  }
+}
+}
+
+/** Press Tab `count` times; each stop as its href, or its words when it is not a link. */
+export async function tabStops(page, count) {
+  const got = [];
+  for (let i = 0; i < count; i += 1) {
+    await page.keyboard.press('Tab');
+    got.push(await page.evaluate(() => document.activeElement?.getAttribute('href') ?? document.activeElement?.textContent ?? null));
+  }
+  return got;
 }

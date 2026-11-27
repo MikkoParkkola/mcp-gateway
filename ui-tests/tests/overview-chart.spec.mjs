@@ -6,8 +6,8 @@
 // rows on the module import it by its hashed name and call it directly.
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { test, expect, blockingViolations } from './base.mjs';
-import { overview, serve, open, series, points, T } from './overview.mjs';
+import { test, expect } from './base.mjs';
+import { overview, serve, open, series, points, T, axeRows } from './overview.mjs';
 
 const SHELL_DIR = fileURLToPath(new URL('../../src/gateway/ui/shell/', import.meta.url));
 /** The chart module's file name, or '' while none exists. */
@@ -216,15 +216,7 @@ test('K9 on a 390 px phone the chart fits and shows three time labels', async ({
   }
 });
 
-for (const scheme of ['dark', 'light']) {
-  for (const width of [390, 1440]) {
-    test(`K10 axe on the chart, ${scheme} at ${width}`, async ({ page }) => {
-      await page.emulateMedia({ colorScheme: scheme });
-      await showChart(page, { markers: MARKS, width });
-      expect(await blockingViolations(page)).toEqual([]);
-    });
-  }
-}
+axeRows('K10 axe on the chart', (page, width) => showChart(page, { markers: MARKS, width }));
 
 test('K11 a gap is never bridged, a quiet series lies on the baseline, and an empty one draws nothing', async ({ page }) => {
   const errors = [];

@@ -5,7 +5,7 @@
 // first-run checklist, all drawn from the one overview read. Each row answers
 // that read with a literal body and writes out every string it expects.
 import { test, expect, blockingViolations } from './base.mjs';
-import { overview, serve, open } from './overview.mjs';
+import { overview, serve, open, tabStops } from './overview.mjs';
 
 /** The overview body with the panels' fields; the checklist is done unless a row says otherwise. */
 function body(over = {}) {
@@ -348,10 +348,6 @@ test('A2 Tab from the last tile link reaches every panel link in page order', as
   // The checklist's two open steps, the one Needs you row, the chart's numbers toggle, then All in Activity.
   expect(want).toEqual(['/ui/tools/actions', '/ui/gateway/settings', `/ui/servers/${'n'.repeat(200)}/status`, 'The numbers', '/ui/activity/status']);
   await page.locator('#content [data-tile="tools"] a').focus();
-  const got = [];
-  for (let i = 0; i < want.length; i += 1) {
-    await page.keyboard.press('Tab');
-    got.push(await page.evaluate(() => document.activeElement?.getAttribute('href') ?? document.activeElement?.textContent ?? null));
-  }
+  const got = await tabStops(page, want.length);
   expect(got).toEqual(want);
 });
