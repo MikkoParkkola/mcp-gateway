@@ -1,8 +1,8 @@
-diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
-index ee1216584f..521e8bee62 100644
---- a/src/gateway/ui/shell/server-page.8c3a60470367.js
-+++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
-@@ -446,5 +446,5 @@ export async function settingsTab(body, ctx) {
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..a20b35a25b 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+@@ -458,5 +458,5 @@ export async function settingsTab(body, ctx) {
      ctx.api('/ui/api/keys').then((b) => (Array.isArray(b?.keys) ? b.keys : null), () => null),
    ]);
    if (!live()) return; // answered after the user moved on: write nothing

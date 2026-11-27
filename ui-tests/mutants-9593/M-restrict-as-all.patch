@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
-index ee1216584f..0b44ba42f6 100644
---- a/src/gateway/ui/shell/server-page.8c3a60470367.js
-+++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..112fe20bb5 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
 @@ -306,7 +306,7 @@ function reachWords(k, name) {
    if (reaching([k], name).length === 0) return 'None';
    if (Array.isArray(k.allowed_tools) && k.allowed_tools.length === 0) return 'None: its allowlist is empty';

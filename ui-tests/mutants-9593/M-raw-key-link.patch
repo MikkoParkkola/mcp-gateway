@@ -1,13 +1,13 @@
-diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
-index ee1216584f..d3504531bc 100644
---- a/src/gateway/ui/shell/server-page.8c3a60470367.js
-+++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
-@@ -323,7 +323,7 @@ function whoCanUse(name, keys) {
-     return section;
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..99f5879859 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+@@ -324,7 +324,7 @@ function whoCanUse(name, keys) {
    }
    const rows = keys.filter((k) => k && typeof k.name === 'string').map((k) => el('li', {},
--    el('a', { class: 'lnk', href: keyPath(k.name) }, k.name), ' ',
-+    el('a', { class: 'lnk', href: `/ui/access/${k.name}/status` }, k.name), ' ',
+     // A browser folds a . or .. segment, so such a name gets no link (it would open another page).
+-    addressable(k.name) ? el('a', { class: 'lnk', href: keyPath(k.name) }, k.name) : el('span', { class: 'sp-key' }, k.name), ' ',
++    addressable(k.name) ? el('a', { class: 'lnk', href: `/ui/access/${k.name}/status` }, k.name) : el('span', { class: 'sp-key' }, k.name), ' ',
      el('span', { class: 'sp-reach' }, reachWords(k, name)),
      ...(k.live === false ? [' ', el('span', { class: 'sp-live t3' }, 'Not live')] : [])));
    section.append(el('ul', { class: 'sp-who' }, ...rows), el('p', { class: 'sp-help t3' }, "A key's reach is changed on its own page."));

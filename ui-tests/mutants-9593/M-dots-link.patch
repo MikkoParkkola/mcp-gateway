@@ -1,7 +1,7 @@
-diff --git a/src/gateway/ui/shell/server-page.71d87d112c8d.js b/src/gateway/ui/shell/server-page.71d87d112c8d.js
-index 8902b58108..f4a10e8c09 100644
---- a/src/gateway/ui/shell/server-page.71d87d112c8d.js
-+++ b/src/gateway/ui/shell/server-page.71d87d112c8d.js
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..e14bbb5cb2 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
 @@ -324,7 +324,7 @@ function whoCanUse(name, keys) {
    }
    const rows = keys.filter((k) => k && typeof k.name === 'string').map((k) => el('li', {},

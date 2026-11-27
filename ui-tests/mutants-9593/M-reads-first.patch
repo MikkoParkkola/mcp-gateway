@@ -1,8 +1,8 @@
-diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
-index ee1216584f..1762753031 100644
---- a/src/gateway/ui/shell/server-page.8c3a60470367.js
-+++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
-@@ -439,6 +439,7 @@ export async function settingsTab(body, ctx) {
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..bfea873a97 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+@@ -451,6 +451,7 @@ export async function settingsTab(body, ctx) {
    const mine = {};
    owner = mine;
    const live = () => owner === mine && body.isConnected;

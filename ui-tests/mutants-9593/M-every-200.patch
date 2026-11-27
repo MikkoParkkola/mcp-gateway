@@ -1,8 +1,8 @@
-diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
-index ee1216584f..d073890d3e 100644
---- a/src/gateway/ui/shell/server-page.8c3a60470367.js
-+++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
-@@ -404,7 +404,7 @@ function secretLine(r, server, ctx) {
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..edca3dc86e 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+@@ -416,7 +416,7 @@ function secretLine(r, server, ctx) {
      }
      if (!form.isConnected) return;
      close();

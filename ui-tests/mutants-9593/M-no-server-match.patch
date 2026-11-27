@@ -1,8 +1,8 @@
-diff --git a/src/gateway/ui/shell/server-page.657ef6cc56df.js b/src/gateway/ui/shell/server-page.657ef6cc56df.js
-index 5964247dfc..6c0b3139be 100644
---- a/src/gateway/ui/shell/server-page.657ef6cc56df.js
-+++ b/src/gateway/ui/shell/server-page.657ef6cc56df.js
-@@ -435,7 +435,7 @@ function secrets(name, config, ctx) {
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..b75c673b3b 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+@@ -437,7 +437,7 @@ function secrets(name, config, ctx) {
      section.append(el('p', { class: 'sp-unread' }, 'The secrets could not be read.'));
      return section;
    }

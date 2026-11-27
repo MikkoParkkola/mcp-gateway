@@ -1,13 +1,13 @@
-diff --git a/src/gateway/ui/shell/server-page.8c3a60470367.js b/src/gateway/ui/shell/server-page.8c3a60470367.js
-index ee1216584f..f5ebeff894 100644
---- a/src/gateway/ui/shell/server-page.8c3a60470367.js
-+++ b/src/gateway/ui/shell/server-page.8c3a60470367.js
-@@ -388,7 +388,7 @@ function secretLine(r, server, ctx) {
+diff --git a/src/gateway/ui/shell/server-page.ef547f8f43d2.js b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+index 11d6936101..eae66cdd82 100644
+--- a/src/gateway/ui/shell/server-page.ef547f8f43d2.js
++++ b/src/gateway/ui/shell/server-page.ef547f8f43d2.js
+@@ -395,7 +395,7 @@ function secretLine(r, server, ctx) {
      let answer;
      try {
        answer = await ctx.api(backendApi(server), {
--        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: input.value } }),
-+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: input.value }, name: server }),
+-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: value } }),
++        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: value }, name: server }),
        });
      } catch (err) {
-       if (!form.isConnected) return; // left the page: the form and its value are already gone
+       if (!form.isConnected) return; // left the page: the field was emptied at Save
