@@ -319,10 +319,10 @@ async fn ui_admin_error_is_error() {
     let (status, body) = fx
         .send(ui("POST", "/ui/api/reload", &fx.alice(), &json!({})))
         .await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     let records = fx.admin_actions();
     assert_eq!(records.len(), 1, "{records:#?}");
-    assert_ui_record(&records[0], "/ui/api/reload", 503, "error", Some(-32603));
+    assert_ui_record(&records[0], "/ui/api/reload", 409, "error", Some(-32603));
 }
 
 /// E1-T12b (control): reads write nothing.
@@ -362,7 +362,7 @@ async fn ui_delete_writes_admin_action() {
     let (status, body) = fx.send(ui("DELETE", uri, &fx.alice(), &json!({}))).await;
     assert_eq!(
         status,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::CONFLICT,
         "no config path: {body}"
     );
     let records = fx.admin_actions();
@@ -370,7 +370,7 @@ async fn ui_delete_writes_admin_action() {
     assert_record(&records[0], "admin_ui", "error", Some(-32603));
     assert_eq!(records[0]["route"], "/ui/api/backends/{name}");
     assert_eq!(records[0]["method"], "DELETE");
-    assert_eq!(records[0]["http_status"], 503);
+    assert_eq!(records[0]["http_status"], 409);
 }
 
 /// A backend edit (`PATCH`) is recorded whether it fails (`error`) or is
@@ -384,7 +384,7 @@ async fn ui_patch_writes_admin_action() {
     let (status, answer) = fx.send(ui("PATCH", uri, &fx.alice(), &body)).await;
     assert_eq!(
         status,
-        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::CONFLICT,
         "no config path: {answer}"
     );
     let (status, answer) = fx.send(ui("PATCH", uri, STANDARD_KEY, &body)).await;
@@ -392,7 +392,7 @@ async fn ui_patch_writes_admin_action() {
     let records = fx.admin_actions();
     assert_eq!(records.len(), 2, "{records:#?}");
     for (record, outcome, code, status) in [
-        (&records[0], "error", -32603, 503),
+        (&records[0], "error", -32603, 409),
         (&records[1], "denied", -32600, 403),
     ] {
         assert_record(record, "admin_ui", outcome, Some(code));
