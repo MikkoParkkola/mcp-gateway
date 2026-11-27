@@ -371,13 +371,11 @@ function secretLine(r, server, ctx) {
       replace.hidden = false;
       replace.focus();
     };
-    // aria-busy marks a pending Save: typing then must not re-enable Save, nor Enter send a second PATCH.
-    const busy = () => form.getAttribute('aria-busy') === 'true';
-    input.addEventListener('input', () => { save.disabled = input.value === '' || busy(); });
+    input.addEventListener('input', () => { save.disabled = input.value === ''; });
     cancel.addEventListener('click', close);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
-      if (input.value !== '' && !busy()) send(form, input, save, cancel, close);
+      if (input.value !== '') send(form, input, save, cancel, close);
     });
     replace.hidden = true;
     li.append(form);
@@ -388,6 +386,8 @@ function secretLine(r, server, ctx) {
     form.setAttribute('aria-busy', 'true');
     save.disabled = true;
     cancel.disabled = true;
+    // Nothing can be typed while pending, so a field left behind holds nothing (it is emptied below).
+    input.disabled = true;
     form.querySelector('.sp-error')?.remove();
     // The value leaves the field at once: a field left behind while the PATCH is pending holds nothing.
     const value = input.value;
@@ -399,8 +399,9 @@ function secretLine(r, server, ctx) {
       });
     } catch (err) {
       if (!form.isConnected) return; // left the page: the field was emptied at Save
-      // Refused while still on the page: put the value back (unless something new was typed) for a retry.
-      if (input.value === '') input.value = value;
+      // Refused while still on the page: the field comes back with the value, for a retry.
+      input.disabled = false;
+      input.value = value;
       const why = err?.serverMessage ?? (!err?.status || err.unreadable
         // No answer, or one that would not parse: the value may have been stored.
         ? NOT_CONFIRMED
