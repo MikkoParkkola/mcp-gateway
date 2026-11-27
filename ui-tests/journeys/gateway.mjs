@@ -72,6 +72,69 @@ export function activityRowFor(rows, traceId) {
   return (rows || []).find((row) => traceId && row.trace_id === traceId) ?? null;
 }
 
+// Characters a bare (unquoted) word of the start command may hold; anything else outside quotes is refused.
+const BARE = /[A-Za-z0-9_./:@%+=,-]/;
+
+/**
+ * Splits the start command the gateway shows (`'<exe>' serve --config '<config>'`, restart_advice.rs) into words
+ * with no shell (R6). A word is bare characters and single-quoted runs; the only escape is the gateway's own `'\''`
+ * apostrophe between two quoted runs. Throws, naming the problem, on an unbalanced quote, any other backslash, or
+ * any character a shell would act on (`$`, `;`, `&`, `|`, a backtick, a double quote, a newline ...).
+ */
+export function parseStartCommand(text) {
+  const words = [];
+  let word = null;
+  let closedRun = false; // the previous character closed a quoted run, so `\'` may follow
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === ' ' || c === '\t') {
+      if (word !== null) words.push(word);
+      word = null;
+      closedRun = false;
+    } else if (c === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end < 0) throw new Error(`unbalanced quote at column ${i + 1}: ${text}`);
+      word = (word ?? '') + text.slice(i + 1, end);
+      i = end;
+      closedRun = true;
+    } else if (c === '\\') {
+      if (!closedRun || text[i + 1] !== "'" || text[i + 2] !== "'") {
+        throw new Error(`refused backslash at column ${i + 1}: only the gateway's '\\'' apostrophe form is accepted`);
+      }
+      word += "'";
+      i += 1; // the next turn reads the opening quote of the following run
+      closedRun = false;
+    } else if (BARE.test(c)) {
+      word = (word ?? '') + c;
+      closedRun = false;
+    } else {
+      throw new Error(`refused character ${JSON.stringify(c)} outside quotes at column ${i + 1}`);
+    }
+  }
+  if (word !== null) words.push(word);
+  if (words.length === 0) throw new Error('no command to run');
+  return words;
+}
+
+/**
+ * The C-H1 check of a parsed start command: exactly the gateway's four words [<exe>, serve, --config, <config>],
+ * <exe> an absolute path whose real path is this test's binary, <config>'s real path this test's config. Returns the
+ * binary's real path, which is what gets spawned (never the word as written). Throws, naming the token, otherwise.
+ */
+export function checkStartArgv(argv, { bin, configPath }) {
+  const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+  if (argv.length !== 4) throw new Error(`the command has ${argv.length} words, not the gateway's four: ${JSON.stringify(argv)}`);
+  const [exe, sub, flag, config] = argv;
+  if (!isAbsolute(exe)) throw new Error(`"${exe}" is not an absolute path`);
+  const exeReal = real(exe);
+  if (!exeReal || exeReal !== real(bin)) throw new Error(`"${exe}" is not this test's gateway binary`);
+  if (sub !== 'serve') throw new Error(`"${sub}" where the gateway writes "serve"`);
+  if (flag !== '--config') throw new Error(`"${flag}" where the gateway writes "--config"`);
+  const configReal = real(config);
+  if (!configReal || configReal !== real(configPath)) throw new Error(`"${config}" is not this test's config`);
+  return exeReal;
+}
+
 async function freePort() {
   const s = net.createServer();
   await new Promise((done) => s.listen(0, '127.0.0.1', done));
@@ -80,7 +143,8 @@ async function freePort() {
   return port;
 }
 
-function answers(port) {
+/** True when something accepts a TCP connection on 127.0.0.1:port. */
+export function answers(port) {
   return new Promise((resolve) => {
     const c = net.connect(port, '127.0.0.1');
     c.once('connect', () => { c.destroy(); resolve(true); });
@@ -201,6 +265,16 @@ async function start({ seed, port, onSpawn }, owned) {
     origin, port: chosen, get pid() { return child.pid; }, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
     stubs: seeded.stubs ?? [], api,
     mcp: (request) => mcpExchange(origin, request),
+    // C-H1: restarts this test's own gateway and keeps its home. With `argv` (parseStartCommand of the command the
+    // page shows) it runs only the gateway's four words naming this test's binary and config, spawning the binary's
+    // real path; a refusal throws before anything stops or runs. Re-proves identity as the first start does and
+    // writes no timing line (the p95 bar is start+seed only).
+    restart: async ({ argv } = {}) => {
+      if (argv !== undefined) checkStartArgv(argv, { bin, configPath });
+      await handle.kill();
+      launch(argv === undefined ? ['serve', '--config', configPath] : argv.slice(1));
+      await prove();
+    },
     listenerPids: () => listenerPids(chosen),
     stubLog: (name) => readFile(join(home, `stub-${name}.log`), 'utf8').catch(() => ''),
     // Harness-internal (restart and stop use it): ends the current child and proves its port refuses again.
@@ -263,7 +337,7 @@ async function start({ seed, port, onSpawn }, owned) {
 
   const startMs = Date.now() - t1;
   await mkdir(dirname(TIMING_FILE), { recursive: true });
-  await appendFile(TIMING_FILE, `${JSON.stringify({ jh_timing: { seed_ms: seedMs, start_ms: startMs } })}\n`);
+  await appendFile(TIMING_FILE, `${JSON.stringify({ jh_timing: { seed_ms: seedMs, start_ms: startMs, marker } })}\n`);
   return handle;
 }
 

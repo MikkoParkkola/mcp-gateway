@@ -2,8 +2,94 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 //
 // Part C's harness rows (part C design, "The harness contract"): the additions the journeys use, each proved here
-// where no journey row proves it yet. M1 gw.mcp and the key-acceptance read (C-H2).
-import { test, expect } from './gateway.mjs';
+// where no journey row proves it yet. M1 gw.mcp and the key-acceptance read (C-H2); R1-R5 and R3b restart (C-H1;
+// R6 and the command check also run as units in startcmd.test.mjs).
+import { readFileSync, realpathSync } from 'node:fs';
+import { mkdtemp, readFile, rm, symlink } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { join, relative } from 'node:path';
+import { test, expect, answers, parseStartCommand, startGateway, TIMING_FILE } from './gateway.mjs';
+
+const BIN = process.env.JOURNEYS_GATEWAY_BIN;
+
+/** The path the child was spawned by (its argv[0]), read from the OS: /proc on Linux, ps on macOS. */
+function spawnedAs(pid) {
+  if (process.platform === 'linux') return readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0')[0];
+  return spawnSync('ps', ['-ww', '-o', 'args=', '-p', String(pid)], { encoding: 'utf8' }).stdout.trim().split(' ')[0];
+}
+
+/** How many timing lines this test's own gateway wrote (other workers append to the same file). */
+async function timingLines(marker) {
+  const text = await readFile(TIMING_FILE, 'utf8').catch(() => '');
+  return text.split('\n').filter((l) => l.includes(`"marker":"${marker}"`)).length;
+}
+
+test.describe('restart (C-H1)', () => {
+  test('R1 R1b R2 a refused command stops nothing and spawns nothing', async () => {
+    let spawned = 0;
+    const gw = await startGateway({ seed: 'fresh', onSpawn: () => { spawned += 1; } });
+    try {
+      const first = gw.pid;
+      const refused = [
+        [[process.execPath, 'serve', '--config', gw.configPath], /not this test's gateway binary/],
+        [[relative(process.cwd(), BIN), 'serve', '--config', gw.configPath], /not an absolute path/],
+        [[BIN, 'serve', '--config', gw.configPath, '--extra'], /5 words/],
+        [[BIN, 'serve', '--config', join(gw.decoy, 'gateway.yaml')], /not this test's config/],
+      ];
+      for (const [argv, why] of refused) await expect(gw.restart({ argv })).rejects.toThrow(why);
+      // R6: a command with anything after the words never reaches restart at all.
+      expect(() => parseStartCommand(`'${BIN}' serve --config '${gw.configPath}'; rm x`)).toThrow(/";"/);
+      expect(spawned, 'a refused command spawned a gateway').toBe(1);
+      expect(gw.pid).toBe(first);
+      expect(gw.listenerPids()).toEqual([first]);
+    } finally {
+      await gw.stop();
+    }
+  });
+
+  test('R3 R4 a restart with the shown command replaces the child, keeps the home, and writes no timing line', async () => {
+    const gw = await startGateway({ seed: 'fresh' });
+    try {
+      const old = gw.pid;
+      expect(await timingLines(gw.marker)).toBe(1);
+      await gw.restart({ argv: parseStartCommand(`'${BIN}' serve --config '${gw.configPath}'`) });
+      expect(gw.pid).not.toBe(old);
+      expect(() => process.kill(old, 0), 'the old gateway is still alive').toThrow();
+      expect(gw.listenerPids()).toEqual([gw.pid]);
+      expect((await (await gw.api('/ui/api/gateway')).json()).environment?.name).toBe(gw.marker);
+      expect(await timingLines(gw.marker), 'the restart wrote a timing line').toBe(1);
+    } finally {
+      await gw.stop();
+    }
+  });
+
+  test('R3b a symlink alias of the binary is spawned as its real path', async () => {
+    const gw = await startGateway({ seed: 'fresh' });
+    const dir = await mkdtemp(join(tmpdir(), 'jh-alias-'));
+    try {
+      const alias = join(dir, 'gateway-alias');
+      await symlink(BIN, alias);
+      await gw.restart({ argv: [alias, 'serve', '--config', gw.configPath] });
+      expect(spawnedAs(gw.pid)).toBe(realpathSync(BIN));
+    } finally {
+      await gw.stop();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('R5 teardown after a restart leaves no gateway and the port refuses', async () => {
+    const gw = await startGateway({ seed: 'fresh' });
+    const first = gw.pid;
+    try {
+      await gw.restart();
+    } finally {
+      await gw.stop();
+    }
+    for (const pid of [first, gw.pid]) expect(() => process.kill(pid, 0), `gateway ${pid} is still alive`).toThrow();
+    expect(await answers(gw.port), 'the port still answers').toBe(false);
+  });
+});
 
 test.describe('keyed reads', () => {
   test.use({ seed: 'fresh' });
