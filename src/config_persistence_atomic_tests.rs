@@ -130,3 +130,66 @@ fn inherit_without_acl_probe_keeps_owner_bits_only() {
     write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace).unwrap();
     assert_eq!(mode_of(&path), 0o600);
 }
+
+/// Review r1 (gpt): a refused save's scratch that cannot be removed returns
+/// the removal error, so the refusal is never read as "nothing left behind".
+/// Gone or removed, the refusal itself is returned.
+#[test]
+fn a_scratch_that_stays_replaces_the_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let refusal = || std::io::Error::other("refused");
+    let stays = dir.path().join("stays");
+    std::fs::create_dir(&stays).unwrap();
+    let kept = super::drop_scratch(&stays, refusal());
+    assert_ne!(kept.to_string(), "refused", "{kept}");
+    assert!(stays.exists(), "a directory is not removed as a file");
+    let removed = dir.path().join("removed");
+    std::fs::write(&removed, b"scratch").unwrap();
+    assert_eq!(
+        super::drop_scratch(&removed, refusal()).to_string(),
+        "refused"
+    );
+    assert!(!removed.exists());
+    let gone = dir.path().join("gone");
+    assert_eq!(super::drop_scratch(&gone, refusal()).to_string(), "refused");
+}
+
+/// Review r2 (gpt): through the writer, a refused save whose scratch cannot
+/// be removed (the folder made read-only after the fill) answers the removal
+/// error, which is no writer refusal, and the target keeps its bytes.
+#[test]
+fn a_refusal_that_leaves_its_scratch_is_not_a_writer_refusal() {
+    use super::unix::seams::{self, Seams};
+    // Root deletes from a read-only folder; the row needs permissions to bind
+    // (the repo's pattern, as in serve_session_tests and reader_lock_tests).
+    if rustix::process::geteuid().is_root() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.json");
+    std::fs::write(&path, b"old").unwrap();
+    let folder = dir.path().to_path_buf();
+    let armed = seams::arm(
+        dir.path(),
+        Seams {
+            refuse: Some("target-changed"),
+            before_verify: Some(Box::new(move |_target, _scratch| {
+                std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o500))
+                    .expect("read-only folder");
+            })),
+            ..Seams::default()
+        },
+    );
+    let result = write_atomic(&path, b"new", FileMode::Inherit, Symlink::Replace);
+    drop(armed);
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    let error = result.expect_err("the save refuses");
+    assert!(super::writer_refusal(&error).is_none(), "{error}");
+    assert_eq!(std::fs::read(&path).unwrap(), b"old");
+    // The removal really failed: a scratch stands beside the target.
+    let left = std::fs::read_dir(dir.path()).unwrap().count();
+    assert!(
+        left > 1,
+        "the scratch was removed after all ({left} entries)"
+    );
+}
