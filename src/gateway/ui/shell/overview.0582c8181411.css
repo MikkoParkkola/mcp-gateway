@@ -124,7 +124,7 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
   .ov-agents, .ov-servers { padding: 0; contain: layout style; }
   .ov-servers + .ov-agents, .ov-agents + .ov-servers { margin-top: var(--space-3); }
   .ov-row { position: relative; }
-  .ov-dot { position: relative; transform: none; width: auto; height: auto; margin-left: var(--space-2); padding: 0 var(--space-1);
+  .ov-dot { position: relative; left: auto; top: auto; transform: none; width: auto; height: auto; margin-left: var(--space-2); padding: 0 var(--space-1);
     border-radius: var(--radius-sm); font: var(--type-small); color: var(--color-status-warning-fg); background: none; overflow: visible; }
   .ov-dot::after { content: ' ›'; }
 }
