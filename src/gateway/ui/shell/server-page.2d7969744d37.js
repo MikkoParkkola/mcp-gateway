@@ -371,11 +371,13 @@ function secretLine(r, server, ctx) {
       replace.hidden = false;
       replace.focus();
     };
-    input.addEventListener('input', () => { save.disabled = input.value === ''; });
+    // aria-busy marks a pending Save: typing then must not re-enable Save, nor Enter send a second PATCH.
+    const busy = () => form.getAttribute('aria-busy') === 'true';
+    input.addEventListener('input', () => { save.disabled = input.value === '' || busy(); });
     cancel.addEventListener('click', close);
     form.addEventListener('submit', (event) => {
       event.preventDefault();
-      if (input.value !== '') send(form, input, save, cancel, close);
+      if (input.value !== '' && !busy()) send(form, input, save, cancel, close);
     });
     replace.hidden = true;
     li.append(form);
@@ -383,6 +385,7 @@ function secretLine(r, server, ctx) {
   });
 
   async function send(form, input, save, cancel, close) {
+    form.setAttribute('aria-busy', 'true');
     save.disabled = true;
     cancel.disabled = true;
     form.querySelector('.sp-error')?.remove();
@@ -392,18 +395,26 @@ function secretLine(r, server, ctx) {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: input.value } }),
       });
     } catch (err) {
-      if (!form.isConnected) return; // left the page: the form and its value are already gone
+      // Left the page while it was pending: the field is detached but still holds the value; empty it.
+      if (!form.isConnected) {
+        input.value = '';
+        return;
+      }
       const why = err?.serverMessage ?? (!err?.status || err.unreadable
         // No answer, or one that would not parse: the value may have been stored.
         ? NOT_CONFIRMED
         : `The gateway refused the new value (HTTP ${err.status}).`);
       form.append(el('p', { class: 'sp-error' }, why));
       ctx.announce(why);
-      save.disabled = false;
+      form.removeAttribute('aria-busy');
+      save.disabled = input.value === '';
       cancel.disabled = false;
       return;
     }
-    if (!form.isConnected) return;
+    if (!form.isConnected) {
+      input.value = '';
+      return;
+    }
     close();
     const stored = Array.isArray(answer?.secrets_stored) && answer.secrets_stored.some((e) => e?.field === `env.${r.field}`);
     // Without the slot in secrets_stored the page never says replaced (a second line of defence behind the route).
