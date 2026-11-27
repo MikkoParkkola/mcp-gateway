@@ -9,7 +9,10 @@ import { test, expect, activityRowFor } from './gateway.mjs';
 test.use({ seed: 'populated' });
 
 test('harness smoke: try a tool', async ({ page, gw }) => {
-  await page.goto('/ui');
+  // The 4.0 shell lives under /ui/<route> (routes.rs UI_SHELL); /ui itself still serves the classic page until the
+  // cutover. A page without the shell's sign-in fails here, by name, not at a fill that waits out the test.
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin').waitFor({ state: 'visible', timeout: 15_000 });
   await page.locator('#signin-form input').first().fill(gw.adminKey);
   await page.getByRole('button', { name: 'Sign in' }).click();
   await page.getByRole('link', { name: 'Tools' }).first().click();
