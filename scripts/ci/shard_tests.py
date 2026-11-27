@@ -957,12 +957,16 @@ def built_parts_rows() -> None:
                     os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
             return rc, open(log).read().split("\n")[:-1]
 
+        live = dict(PARTS["macos"])
         try:
-            # R1: the leg's parts from PARTS, in order, each binary gone before the next build; the clean run passes.
-            rc, steps = leg_run("lib-b", 8)
-            assert (rc, steps) == (0, ["build 1", "build 2", "build 3", "build 4"]), (rc, steps)
-            rc, steps = leg_run("int-lib", 2)
-            assert (rc, steps) == (0, ["build 5"]), (rc, steps)
+            # R1: each leg builds its parts from the live PARTS, in order, each binary gone before the next build; the
+            # clean run passes. The live split: lib-b 1 and 3, lib-c 2 and 4, int-lib 5.
+            assert live == {"lib-b": (1, 3), "lib-c": (2, 4), "int-lib": (5,)}, live
+            for leg, parts in live.items():
+                rc, steps = leg_run(leg, 2 * len(parts))
+                assert (rc, steps) == (0, [f"build {k}" for k in parts]), (leg, rc, steps)
+            # R2-R5 test the mechanism on a four-part leg, whatever the live split; restored below.
+            PARTS["macos"]["lib-b"] = (1, 2, 3, 4)
             # R2: a part that ran a listed test less, or a test it does not list, fails the leg.
             assert leg_run("lib-b", 8, BEHAVE_2="short")[0] == 1, "a part that ran one test fewer passed"
             assert leg_run("lib-b", 8, BEHAVE_3="extra")[0] == 1, "a part that ran an unlisted test passed"
@@ -991,6 +995,7 @@ def built_parts_rows() -> None:
             assert (rc, steps) == (0, [f"build {k}" for k in range(1, part_count() + 1)]), (rc, steps)
         finally:
             SHARDS["macos"].update(saved)
+            PARTS["macos"].update(live)
 
 
 def built_parts_root_rows() -> None:
@@ -998,6 +1003,9 @@ def built_parts_root_rows() -> None:
     non-zero exit or a missing row fails the leg; parts without root rows never use PRIVILEGE."""
     global PRIVILEGE
     saved_leg, saved_priv = SHARDS["macos"]["lib-b"], PRIVILEGE
+    # These rows test the mechanism on a four-part leg, whatever the live split; restored below.
+    saved_parts = PARTS["macos"]["lib-b"]
+    PARTS["macos"]["lib-b"] = (1, 2, 3, 4)
     row = ROOT_ROWS + "r"
     with tempfile.TemporaryDirectory() as root:
         log, build, priv = (os.path.join(root, x) for x in ("log", "build.sh", "priv.sh"))
@@ -1098,6 +1106,7 @@ def built_parts_root_rows() -> None:
                 assert (rc, steps) == (1, [*plain[:6], call, *plain[6:]]), (behave, rc, steps)
         finally:
             SHARDS["macos"]["lib-b"], PRIVILEGE = saved_leg, saved_priv
+            PARTS["macos"]["lib-b"] = saved_parts
 
 
 def prebuilt_rows() -> None:
