@@ -140,17 +140,7 @@ impl StdioTransport {
                         break;
                     }
                     Err(e) => {
-                        // Includes a frame over MAX_FRAME_BYTES: the stream
-                        // cannot be resynchronised, so it is treated as gone.
-                        error!(error = %e, "Error reading from stdout");
-                        // Before the latch and the clear below: the waiter
-                        // whose answer it was reads this when it wakes.
-                        super::oversize::note_oversize(&e, &frame, &oversize);
-                        if let Some(transport) = transport.upgrade()
-                            && let Some(tree) = transport.child.lock().tree.as_mut()
-                        {
-                            tree.start_kill();
-                        }
+                        read_failed(&transport, &e, &frame, &oversize);
                         break;
                     }
                 }
@@ -266,6 +256,27 @@ fn log_unhandled_line(line_len: usize, error: &crate::Error) {
         _ => "the line could not be handled".to_owned(),
     };
     error!(line_len, error = %why, "Failed to handle a line from the backend");
+}
+
+/// A read error ends the stream: log it, record an over-limit answer's owner, and
+/// stop the child.
+fn read_failed(
+    transport: &std::sync::Weak<StdioTransport>,
+    e: &std::io::Error,
+    frame: &[u8],
+    oversize: &super::oversize::OversizeSlot,
+) {
+    // Includes a frame over MAX_FRAME_BYTES: the stream
+    // cannot be resynchronised, so it is treated as gone.
+    error!(error = %e, "Error reading from stdout");
+    // Before the latch and the clear in the reader: the waiter
+    // whose answer it was reads this when it wakes.
+    super::oversize::note_oversize(e, frame, oversize);
+    if let Some(transport) = transport.upgrade()
+        && let Some(tree) = transport.child.lock().tree.as_mut()
+    {
+        tree.start_kill();
+    }
 }
 
 #[cfg(tp5)]
