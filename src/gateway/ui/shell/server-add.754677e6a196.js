@@ -51,11 +51,23 @@ export function rowValues(rows, kind) {
   return { values: out };
 }
 
-// Rule 8's sentence per by-field reason, and the fallback. HELD: the copy guard
-// refused the spec's literal sentences (2026-11-27); the lead rules the route.
-const FIELD_WORDS = {};
-const OTHER_FIELD_WORDS = '';
-const RAN_WITHOUT = ''; // HELD: rule 5's fixed line after a failed run that held typed values back
+// The card's own sentences, written once here; the tests import them (lead
+// ruling 2026-11-27). FIELD_WORDS is rule 8: one sentence per by-field reason,
+// since the gateway sends codes only, and a code is never printed.
+export const FIELD_WORDS = {
+  secret_in_url: 'Move the key from the address into a header.',
+  secret_in_command: 'Move the secret from the command into an environment variable.',
+  header_name: 'Header names use only letters, digits and dashes, each name once.',
+  header_value: 'Header values must fit on one line.',
+  headers_need_url: 'Only URL servers take headers.',
+  url_invalid: 'This address is incomplete.',
+};
+export const OTHER_FIELD_WORDS = 'The gateway refused this value.';
+export const WORDS = {
+  hint: 'The gateway works out the name, transport and secrets when the server first starts.',
+  rowsNote: 'Values that look like secrets go to the secret store, never into gateway.yaml.',
+  ranWithout: 'A preview never sends what you typed in these rows, so a server that needs those values can refuse it.',
+};
 
 /** The by-field refusal, recognised from the parsed body only: `[{reason, field}]`, else null. */
 export const fieldRefusals = (err) =>
@@ -72,14 +84,14 @@ export function addCard(body, ctx) {
   const modes = segmented({ label: 'How to add', options: [['command-url', 'Command or URL']], value: 'command-url' });
   const fieldErr = el('p', { class: 'add-err', id: `${uid}-field-err`, hidden: true });
   const field = el('input', { type: 'text', id: `${uid}-field`, autocomplete: 'off', spellcheck: 'false', 'aria-describedby': `${uid}-hint` });
-  const hint = el('p', { class: 't3', id: `${uid}-hint` }); // HELD with FIELD_WORDS: the frame's sentence
+  const hint = el('p', { class: 't3', id: `${uid}-hint` }, WORDS.hint);
   const nameLine = el('div', { class: 'add-name' });
   const nameErr = el('p', { class: 'add-err', id: `${uid}-name-err`, hidden: true });
   const legend = el('legend');
   const rowList = el('div', { class: 'add-rows-list' });
   const rowsErr = el('p', { class: 'add-err', id: `${uid}-rows-err`, hidden: true });
   const addRow = el('button', { type: 'button', class: 'btn quiet' }, 'Add a value');
-  const rowsNote = el('p', { class: 't3' }); // HELD with FIELD_WORDS: where a secret-looking value is kept
+  const rowsNote = el('p', { class: 't3' }, WORDS.rowsNote);
   const rowsSet = el('fieldset', { class: 'add-rows', 'aria-describedby': `${uid}-rows-err` }, legend, rowsErr, rowList, addRow, rowsNote);
   const stage = el('div', { class: 'add-stage' });
   const previewBtn = el('button', { type: 'button', class: 'btn primary' }, 'Start once to preview');
@@ -218,7 +230,7 @@ export function addCard(body, ctx) {
     const buttons = [retry];
     const lines = [el('p', {}, failWords(err))];
     if (ranWithout) {
-      lines.push(el('p', {}, RAN_WITHOUT));
+      lines.push(el('p', {}, WORDS.ranWithout));
       buttons.push(addWithout());
     }
     panel('The preview did not finish', ...lines, el('div', { class: 'acts' }, ...buttons));
