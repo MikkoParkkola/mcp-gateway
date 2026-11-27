@@ -950,10 +950,10 @@ def assertion_refusal(tree: Tree, row: dict[str, str], o: Outcome, killer_file: 
         if path != killer_file or not kdecl.start <= line <= kdecl.end:
             return f"{site} is not inside {killer}"
         span = kdecl
-    if _collapse(src[line - 1]) != _collapse(text):
-        return f"{site} does not carry the recorded text"
     statement = _statement(src, blanked, line)
     actual = hashlib.sha256(statement.encode()).hexdigest()[:8]
+    if _collapse(src[line - 1]) != _collapse(text):
+        return f"{site} does not carry the recorded text (statement digest there is {actual})"
     if actual != digest:
         return f"{site} statement digest is {actual}, recorded {digest}"
     same = sum(_statement(src, blanked, k) == statement for k in range(span.start, span.end + 1))

@@ -709,7 +709,8 @@ class DeclaredAssertions(unittest.TestCase):
 
     def test_a_moved_assertion_is_refused(self) -> None:
         self.killer("#[test]\nfn guard_admits_only_its_host() {\n\n\n    assert!(ok());\n}\n")
-        self.refused("declared assertion src/checks.rs:3 does not carry the recorded text")
+        # Line 3 is now blank: its statement is empty, sha256("")[:8] = e3b0c442.
+        self.refused("declared assertion src/checks.rs:3 does not carry the recorded text (statement digest there is e3b0c442)")
 
     def test_a_prefix_of_the_line_is_not_the_line(self) -> None:
         self.repo.declare("src/checks.rs:3 assert!(ok() [stmt:404cc513]")
