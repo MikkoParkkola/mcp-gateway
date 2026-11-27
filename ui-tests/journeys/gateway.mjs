@@ -214,7 +214,10 @@ async function setPort(configPath, port) {
 
 /** Closes every seed-started service; each port must refuse afterwards. */
 async function closeServices(services) {
-  for (const service of services) await service.close();
+  // Every close runs even if one rejects; the first rejection is the one reported.
+  const closed = await Promise.allSettled(services.map((service) => service.close()));
+  const refused = closed.find((r) => r.status === 'rejected');
+  if (refused) throw refused.reason;
   for (const service of services) {
     if (await answers(service.port)) throw new Error(`port ${service.port} of a seed's service still answers after teardown`);
   }
@@ -240,9 +243,11 @@ async function start({ seed, port, onSpawn }, owned) {
   const bin = await gatewayBinary();
   requireLsof();
   const t0 = Date.now();
+  owned.homes = []; // filled as each is made, so a failed second mkdtemp still removes the first
   const home = await mkdtemp(join(tmpdir(), 'jh-home-'));
+  owned.homes.push(home);
   const decoy = await mkdtemp(join(tmpdir(), 'jh-decoy-'));
-  owned.homes = [home, decoy];
+  owned.homes.push(decoy);
   owned.services = []; // local services a seed started (an OAuth provider stub): closed at teardown, ports must refuse
   const path = `${await browserShims(home)}:${process.env.PATH}`;
   const env = gatewayEnv({ home, decoy, path });
@@ -438,7 +443,7 @@ export const test = base.extend({
     } finally {
       if (testInfo.status !== testInfo.expectedStatus) {
         await testInfo.attach('gateway.log', { path: gw.logPath }).catch(() => {});
-        for (const name of gw.stubs) await testInfo.attach(`stub-${name}.log`, { body: await gw.stubLog(name) });
+        for (const name of gw.stubs) await testInfo.attach(`stub-${name}.log`, { body: await gw.stubLog(name) }).catch(() => {});
       }
       await gw.stop();
     }
