@@ -119,7 +119,13 @@ test('DIAG where the phone update time goes', async ({ page }) => {
     const same = run([a, a]);
     root.querySelectorAll('.ov-lines path').forEach((p) => { p.style.transition = 'none'; });
     const noTransition = run([a, b]);
-    return { changing, same, noTransition, flushOnly: p95(flushOnly) };
+    // The fold's narrow fine-pointer dot rule, taken out of the page, then the same bodies again.
+    const found = [...document.styleSheets].flatMap((s) => { try { return [...s.cssRules].map((r, i) => ({ s, r, i })); } catch { return []; } })
+      .find(({ r }) => r.media && r.media.mediaText.includes('pointer: fine') && r.cssText.includes('.ov-dot'));
+    let noFineRule = 'rule not found';
+    if (found) { found.s.deleteRule(found.i); noFineRule = run([a, b]); found.s.insertRule(found.r.cssText, found.i); }
+    const changingAgain = run([a, b]);
+    return { changing, same, noTransition, noFineRule, changingAgain, flushOnly: p95(flushOnly) };
   }, [big(0), big(1)]);
   console.log(`DIAG phone ${JSON.stringify(parts)}`);
 });

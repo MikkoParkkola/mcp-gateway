@@ -496,7 +496,7 @@ for (const [where, body] of [['a low row', WITH_DOT], ['a lone caller, level wit
     const cx = d.left + d.width / 2;
     const cy = d.top + d.height / 2;
     // Where the line leaves the callers' column (37.5 of the map's 100), at the row's centre.
-    return { x: cx - (m.left + m.width * 0.375), y: cy - (m.top + (m.height * y) / 100), top: document.elementFromPoint(cx, cy)?.closest('.ov-dot') === dot };
+    return { x: cx - (m.left + m.width * 0.375), y: cy - (m.top + (m.height * y) / 100), top: ((e) => e?.closest('.ov-dot') === dot || `${e?.localName}.${e?.className} in ${e?.parentElement?.localName}.${e?.parentElement?.className}`)(document.elementFromPoint(cx, cy)) };
   });
   expect(Math.abs(off.x), 'across').toBeLessThanOrEqual(2);
   expect(Math.abs(off.y), 'down').toBeLessThanOrEqual(2);
