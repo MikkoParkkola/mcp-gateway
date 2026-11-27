@@ -389,17 +389,18 @@ function secretLine(r, server, ctx) {
     save.disabled = true;
     cancel.disabled = true;
     form.querySelector('.sp-error')?.remove();
+    // The value leaves the field at once: a field left behind while the PATCH is pending holds nothing.
+    const value = input.value;
+    input.value = '';
     let answer;
     try {
       answer = await ctx.api(backendApi(server), {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: input.value } }),
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ env: { [r.field]: value } }),
       });
     } catch (err) {
-      // Left the page while it was pending: the field is detached but still holds the value; empty it.
-      if (!form.isConnected) {
-        input.value = '';
-        return;
-      }
+      if (!form.isConnected) return; // left the page: the field was emptied at Save
+      // Refused while still on the page: put the value back (unless something new was typed) for a retry.
+      if (input.value === '') input.value = value;
       const why = err?.serverMessage ?? (!err?.status || err.unreadable
         // No answer, or one that would not parse: the value may have been stored.
         ? NOT_CONFIRMED
@@ -411,10 +412,7 @@ function secretLine(r, server, ctx) {
       cancel.disabled = false;
       return;
     }
-    if (!form.isConnected) {
-      input.value = '';
-      return;
-    }
+    if (!form.isConnected) return;
     close();
     const stored = Array.isArray(answer?.secrets_stored) && answer.secrets_stored.some((e) => e?.field === `env.${r.field}`);
     // Without the slot in secrets_stored the page never says replaced (a second line of defence behind the route).
