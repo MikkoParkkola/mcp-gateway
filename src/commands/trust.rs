@@ -124,10 +124,12 @@ async fn run_trust_lab_command(command: TrustLabCommand) -> ExitCode {
         } => {
             // A flag missing its partner is a wrong invocation, refused before the evaluation writes anything.
             if update_baseline_registry && baseline_registry.is_none() {
-                return usage(
+                return mutant!("N10", crate::commands::fail(crate::commands::CliExit::LocalFailure, 
+                    "trust lab evaluate",
+                    "--update-baseline-registry requires --baseline-registry"), usage(
                     "trust lab evaluate",
                     "--update-baseline-registry requires --baseline-registry",
-                );
+                ));
             }
             let policy = TrustLabPolicy {
                 profile: TrustLabProfile::LocalOneShot,

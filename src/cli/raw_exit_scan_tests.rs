@@ -239,7 +239,7 @@ fn unallowed(hits: &[Hit]) -> Vec<Hit> {
         if hit.path == "src/commands/cli_exit.rs" {
             continue;
         }
-        if hit.path == "src/cli/output.rs" && hit.owner == "Printed::emit" {
+        if hit.path == "src/cli/output.rs" && mutant!("N27", matches!(hit.owner.as_str(), "Printed::emit" | "Printed::error" | "Printed::verdict"), hit.owner == "Printed::emit") {
             continue;
         }
         let place = COUNTED

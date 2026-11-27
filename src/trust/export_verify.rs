@@ -197,7 +197,7 @@ pub(crate) fn export_verdict(
     };
     let exit = match verdict {
         ExportVerdict::Valid(_) => 0,
-        ExportVerdict::Invalid(_) => 1,
+        ExportVerdict::Invalid(_) => mutant!("N20", 0, 1),
     };
     let stdout = match (render, &verdict) {
         (Render::Text, ExportVerdict::Valid(r)) => format!(

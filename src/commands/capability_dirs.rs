@@ -69,7 +69,7 @@ pub(crate) fn resolve(
         Some(named) if !named.exists() => {
             return Err(DirsError::new(
                 format!("Config file not found: {}", named.display()),
-                format!("Run '{}' to see why.", super::check_config_command(named)),
+                mutant!("N23", String::from("Run doctor to see why."), format!("Run '{}' to see why.", super::check_config_command(named))),
             ));
         }
         Some(named) => Some(named.to_path_buf()),

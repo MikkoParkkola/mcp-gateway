@@ -180,10 +180,12 @@ fn run_controller_command(
 ) -> ExitCode {
     if watch {
         if interval_seconds == 0 {
-            return usage(
+            return mutant!("N6", crate::commands::fail(crate::commands::CliExit::LocalFailure, 
+                "kubernetes controller",
+                "--watch requires --interval-seconds greater than 0"), usage(
                 "kubernetes controller",
                 "--watch requires --interval-seconds greater than 0",
-            );
+            ));
         }
 
         loop {

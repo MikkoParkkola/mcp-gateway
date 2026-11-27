@@ -320,10 +320,10 @@ fn registry_unreadable(path: &Path, error: &impl std::fmt::Display) -> ExitCode 
     fail(
         CliExit::LocalFailure,
         &format!("Failed to load registry '{}': {error}", path.display()),
-        &format!(
+        &mutant!("N22", String::from("Fix or remove the registry."), format!(
             "Fix or remove {}, or pass --registry naming another.",
             path.display()
-        ),
+        )),
     )
 }
 
