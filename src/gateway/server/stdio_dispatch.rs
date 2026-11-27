@@ -299,7 +299,7 @@ impl Gateway {
         });
         let chain_nonce = crate::protocol::mrtr::take_chain_nonce(request)
             .map_err(|error| refuse(raw_id.clone(), &error))?;
-        // MIK-8154 SAN.1: mapped on the caller's view (the request's memo),
+        // Mapped on the caller's view (the request's memo),
         // then sanitized unless every target is `passthrough` (option (a)).
         if sanitize == InputSanitizing::On
             && !super::super::router::sanitize_exempt(meta_mcp, request, view)

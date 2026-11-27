@@ -155,3 +155,16 @@ fn genuine_validation_errors_default_to_validation() {
         ErrorCategory::Validation
     ));
 }
+
+/// An answer over the limit is told not to retry as is: the same request
+/// gets the same answer, so a retry only repeats the refusal.
+#[test]
+fn an_answer_over_the_limit_is_too_large_and_not_retried() {
+    let error = crate::Error::ResponseTooLarge { limit: 65_536 };
+    let (category, detail) = super::classify_dispatch_error(&error);
+    assert_eq!(category, ErrorCategory::ResponseTooLarge);
+    assert!(detail.contains("65536 bytes"), "{detail}");
+    let hint = recovery_for(category, RecoveryContext::default());
+    assert_eq!(hint.error_code, "RESPONSE_TOO_LARGE");
+    assert!(!hint.retry, "the same request gets the same answer");
+}

@@ -238,3 +238,10 @@ export function orderProblems(copy) {
   }
   return out;
 }
+
+/** The single served file whose name fits `pattern`: its name and text. */
+export function served(pattern) {
+  const hits = readdirSync(SHELL_DIR).filter((f) => pattern.test(f));
+  if (hits.length !== 1) throw new Error(`want exactly one ${pattern} in src/gateway/ui/shell, have ${hits.length}`);
+  return { name: hits[0], text: readFileSync(SHELL_DIR + hits[0], 'utf8') };
+}

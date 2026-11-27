@@ -614,7 +614,7 @@ const DRAWN_TIPS = ['servers.status.answering-24-grouped-by-the', 'servers.statu
 
 test('the status tab draws its three tips; no servers.status copy waits as unbuilt', () => {
   const scan = scanScreens(readScreens());
-  expect(scan.tabs.servers).toEqual({ status: true, actions: false, settings: false });
+  expect(scan.tabs.servers).toEqual({ status: true, actions: true, settings: false });
   for (const id of DRAWN_TIPS) expect(scan.drawn.has(id), id).toBe(true);
   const copy = readCopy();
   expect((copy._pending.servers ?? []).filter((id) => id.startsWith('servers.status.'))).toEqual([]);
