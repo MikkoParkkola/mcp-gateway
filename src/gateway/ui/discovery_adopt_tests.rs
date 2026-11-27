@@ -27,6 +27,7 @@ async fn body_of(response: Response) -> (StatusCode, Value) {
 /// One row per writer outcome: the result, its status, and the `error` code
 /// when the answer names one. Every `Refused` and `Secrets` split has its own
 /// row, so the mapping test pins each branch.
+#[allow(clippy::too_many_lines)] // one table row per outcome
 fn writer_outcomes() -> Vec<(
     Result<ReplaceOutcome, ReplaceError>,
     StatusCode,
@@ -40,7 +41,7 @@ fn writer_outcomes() -> Vec<(
             StatusCode::CONFLICT,
             "stale",
         ),
-        (Err(ReplaceError::Busy), StatusCode::SERVICE_UNAVAILABLE, ""),
+        (Err(ReplaceError::Busy), StatusCode::CONFLICT, ""),
         (
             Ok(ReplaceOutcome {
                 revision: Some(FileRevision::of(b"new")),
@@ -81,8 +82,21 @@ fn writer_outcomes() -> Vec<(
         ),
         (
             Err(ReplaceError::NoAuditLog),
+            StatusCode::CONFLICT,
+            "audit_log_required",
+        ),
+        (
+            Err(ReplaceError::AuditRefused(CANARY.to_owned())),
             StatusCode::SERVICE_UNAVAILABLE,
             "audit_log_required",
+        ),
+        (
+            Err(ReplaceError::WriterRefused {
+                code: "foreign-owner",
+                text: CANARY.to_owned(),
+            }),
+            StatusCode::CONFLICT,
+            "",
         ),
         failed(ReplaceError::Refused(REFERENCES.to_owned())),
         failed(ReplaceError::Refused(CANARY.to_owned())),
@@ -119,10 +133,75 @@ fn writer_outcomes() -> Vec<(
         ),
         (
             Err(ReplaceError::ConfigRefused(GUARD_DETAIL.to_owned())),
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::CONFLICT,
             "gateway.yaml could not be loaded",
         ),
     ]
+}
+
+/// R4: the adopt's refusals that attempted nothing are 409, and only the
+/// ones that clear by themselves carry `Retry-After: 1`.
+#[tokio::test]
+async fn discovery_adopt_refusals_follow_the_class() {
+    use crate::gateway::restart_config_floor::Refusal as Gate;
+    let cases = [
+        (ReplaceError::Busy, StatusCode::CONFLICT, Some("1")),
+        (
+            ReplaceError::Gated(Gate::ReplayOwed),
+            StatusCode::CONFLICT,
+            Some("1"),
+        ),
+        (
+            ReplaceError::Gated(Gate::Restarting),
+            StatusCode::CONFLICT,
+            None,
+        ),
+        (ReplaceError::NoAuditLog, StatusCode::CONFLICT, None),
+        (
+            ReplaceError::AuditRefused(CANARY.into()),
+            StatusCode::SERVICE_UNAVAILABLE,
+            None,
+        ),
+        (
+            ReplaceError::ConfigRefused(CANARY.into()),
+            StatusCode::CONFLICT,
+            None,
+        ),
+        (ReplaceError::NoConfigFile, StatusCode::CONFLICT, None),
+        (
+            ReplaceError::Stale {
+                current: FileRevision::of(b"c"),
+            },
+            StatusCode::CONFLICT,
+            None,
+        ),
+        (
+            ReplaceError::WriterRefused {
+                code: "acl-not-kept",
+                text: CANARY.into(),
+            },
+            StatusCode::CONFLICT,
+            None,
+        ),
+        (
+            ReplaceError::Write(CANARY.into()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            None,
+        ),
+    ];
+    for (error, status, after) in cases {
+        let label = format!("{error:?}");
+        let reply = answer("tool", Err(error));
+        let header = reply
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .map(|v| v.to_str().unwrap().to_owned());
+        assert_eq!(
+            (reply.status(), header.as_deref()),
+            (status, after),
+            "{label}"
+        );
+    }
 }
 
 /// Every writer outcome has one status, and no inner text leaves.
@@ -158,7 +237,7 @@ fn a_guard_refusal_is_logged_in_full_and_answered_without_a_path() {
         });
         (futures::executor::block_on(body_of(response)), logs)
     };
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(status, StatusCode::CONFLICT);
     assert!(
         logs.contains(GUARD_DETAIL),
         "the detail was not logged: {logs}"

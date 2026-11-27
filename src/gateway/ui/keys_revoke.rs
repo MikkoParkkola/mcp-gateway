@@ -14,7 +14,9 @@ use axum::{Extension, Json};
 use serde::Deserialize;
 
 use super::config_file::{Gateway, read_gateway};
-use super::errors::{flat_error, gate_refusal, stale, structured_error};
+use super::errors::{
+    classed, flat_error, gate_refusal, nothing_attempted, stale, structured_error,
+};
 use super::guard::Guard;
 use crate::config_persistence::keyedit::{
     Change, ComputeRefusal, FieldPath, GiveUp, Segment, edit_in_place,
@@ -86,7 +88,8 @@ pub(super) async fn revoke_key(
         return flat_error(StatusCode::CONFLICT, error).into_response();
     }
     let Some(log) = state.transparency_log.clone() else {
-        return flat_error(StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable").into_response();
+        // No log is the posture: the writer's own no-log refusal (409).
+        return refused(&name, ReplaceError::NoAuditLog);
     };
     let who =
         super::admin_audit::caller_who(&state, guard.client.as_ref(), guard.identity.as_ref());
@@ -318,17 +321,22 @@ fn revoke_response(
 }
 
 /// Only the receipt proves success; never infer it from disk or reauthenticate.
+/// A refusal that attempted nothing is 409, with `Retry-After` when it clears
+/// by itself.
 fn refused(name: &str, error: ReplaceError) -> Response {
+    let class = nothing_attempted(&error);
+    let answer = refused_answer(name, error);
+    classed(class, answer)
+}
+
+fn refused_answer(name: &str, error: ReplaceError) -> Response {
     let (status, message) = match error {
         ReplaceError::Stale { current } => return stale(&current).into_response(),
         ReplaceError::Gated(refusal) => return gate_refusal(refusal),
-        ReplaceError::Busy => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        ),
-        ReplaceError::AuditRefused(_) | ReplaceError::NoAuditLog => {
-            (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable")
-        }
+        ReplaceError::Busy => (StatusCode::CONFLICT, "the config is being written; retry"),
+        // No log is the posture (409); a refused append was started (503).
+        ReplaceError::NoAuditLog => (StatusCode::CONFLICT, "audit_unavailable"),
+        ReplaceError::AuditRefused(_) => (StatusCode::SERVICE_UNAVAILABLE, "audit_unavailable"),
         ReplaceError::NoConfigFile => (StatusCode::CONFLICT, "no_config_file"),
         ReplaceError::ConfigRefused(_) => return super::errors::config_refusal().into_response(),
         ReplaceError::Refused(error) => {
@@ -338,10 +346,11 @@ fn refused(name: &str, error: ReplaceError) -> Response {
             )
                 .into_response();
         }
+        // The writer refused before the target changed and left no scratch.
+        ReplaceError::WriterRefused { .. } => (StatusCode::CONFLICT, "not_written"),
         ReplaceError::Unsupported(_)
         | ReplaceError::Stage(_)
         | ReplaceError::Write(_)
-        | ReplaceError::WriterRefused { .. }
         | ReplaceError::Secrets(_) => (StatusCode::INTERNAL_SERVER_ERROR, "not_written"),
         ReplaceError::ReloadRefused { .. } => return uncertain(name, "reload_refused"),
         ReplaceError::RollbackFailed { .. } => return uncertain(name, "rollback_failed"),
@@ -429,6 +438,11 @@ impl KeyIdentity<'_> {
 #[cfg(test)]
 #[path = "keys_revoke_select_tests.rs"]
 mod select_tests;
+
+#[cfg(tp3)]
+#[cfg(test)]
+#[path = "keys_revoke_class_tests.rs"]
+mod class_tests;
 
 fn select_target(
     file: &[KeyIdentity<'_>],

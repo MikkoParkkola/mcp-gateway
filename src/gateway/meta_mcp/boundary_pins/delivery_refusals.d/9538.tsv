@@ -1,0 +1,8 @@
+# file	fn	callee	count	class	note (classes: see delivery_framing.rs)
+src/gateway/ui/capabilities_answers.rs	refused	refusal	1	no-record	admin UI capability editor: a held directory lock answers 409 with Retry-After through the shared refusal, no call delivery
+src/gateway/ui/errors.rs	gate_refusal	refusal	1	no-record	admin UI write routes: the config gate's busy answer takes its 409 and Retry-After from the shared refusal, no call delivery
+src/gateway/ui/keys_create.rs	preconditions	refusal	1	no-record	admin UI key create: reload off or an unloadable gateway.yaml answers 409 through the shared refusal, no call delivery
+src/gateway/ui/keys_create.rs	refused_by_writer	gate_refusal	1	no-record	admin UI key create: the config gate refused the write while a restart is prepared, decided or stopping
+src/gateway/ui/keys_revoke.rs	refused_answer	gate_refusal	1	no-record	admin UI key revoke: the config gate refused the write while a restart is prepared, decided or stopping
+src/gateway/ui/keys_revoke.rs	refused_answer	config_refusal	1	no-record	admin UI key revoke: the config writer's guarded read refused gateway.yaml, fixed text, no call delivery
+src/gateway/ui/errors.rs	classed	refusal	1	no-record	admin UI writes (key create, key revoke, discovery adopt, settings save, backend and restore routes): a class of nothing attempted turns the route's own answer into 409, no call delivery

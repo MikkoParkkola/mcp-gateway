@@ -31,7 +31,7 @@ async fn sso_group_admin_can_call_admin_meta_tool() {
 }
 
 /// E1-T2: the same caller passes the admin UI's gate. With no reload context
-/// the handler answers 503 past the gate, so reaching it is observable; a
+/// the handler answers 409 past the gate, so reaching it is observable; a
 /// caller outside the group stops at the gate with 403.
 #[cfg(feature = "webui")]
 #[tokio::test]
@@ -45,7 +45,7 @@ async fn sso_admin_reaches_ui_admin_route() {
     };
     let admin = gw.a.token("alice", &["ops-admins"], &json!({}));
     let (status, body) = send(&gw.state, reload(&admin)).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert!(
         body.to_string().contains("Config reload is not enabled"),
         "the handler ran past the admin gate: {body}"
