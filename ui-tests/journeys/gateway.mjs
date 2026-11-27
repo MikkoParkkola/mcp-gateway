@@ -406,9 +406,12 @@ export async function startGateway(opts = {}) {
   }
 }
 
-/** Signs the page in to the gateway's UI with `key`, through the sign-in form as a user does. */
+/** Signs the page in to the gateway's UI with `key`, through the sign-in form as a user does. The 4.0 shell lives under
+ * /ui/<route> (routes.rs UI_SHELL); /ui itself still serves the classic page until the cutover. A page without the
+ * shell's sign-in fails here, by name, not at a fill that waits out the test. */
 export async function signIn(page, key) {
-  await page.goto('/ui');
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin').waitFor({ state: 'visible', timeout: 15_000 });
   await page.locator('#signin-form input').first().fill(key);
   await page.getByRole('button', { name: 'Sign in' }).click();
 }
