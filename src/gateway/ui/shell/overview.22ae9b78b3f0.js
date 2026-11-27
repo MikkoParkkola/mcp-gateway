@@ -457,7 +457,9 @@ const FIRST_RUN = 'The live map appears here after the first call.';
 export function accountOf(label) {
   const m = /^(?:key|oidc|session|token):(.+)$/s.exec(typeof label === 'string' ? label : '');
   if (!m) return null;
-  const size = bytes(label);
+  // A label under 42 characters is under 125 bytes (three bytes a character at most), so only a
+  // longer one is encoded to look for the cut.
+  const size = label.length < 42 ? 0 : bytes(label);
   if (size >= 125 && size <= 128 && /~[0-9a-f]{8}$/.test(label)) return null;
   return m[1];
 }

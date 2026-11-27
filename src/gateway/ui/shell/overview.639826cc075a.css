@@ -103,3 +103,22 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
   overflow: hidden; color: transparent; white-space: nowrap; font-size: 0; }
 .ov-map-note, .ov-map-empty { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
 @media (pointer: coarse) { .ov-dot { min-width: var(--size-touch); min-height: var(--size-touch); background-clip: content-box; padding: var(--space-4); } }
+
+/* Wide: each list's size comes from the map's grid, so its layout is contained and a row that comes
+   or goes re-lays out that list alone. */
+@media (min-width: 640px) {
+  .ov-agents, .ov-servers { contain: size layout style; }
+}
+
+/* Phone: the same rows as ranked lists. The lines and the hub go; the script puts the servers' list
+   first in the page, so what is seen is what is read and tabbed. The dot reads as words in its row. */
+@media (max-width: 639px) {
+  .ov-map { display: block; min-height: 0; }
+  .ov-lines, .ov-hub { display: none; }
+  .ov-agents, .ov-servers { padding: 0; }
+  .ov-servers + .ov-agents, .ov-agents + .ov-servers { margin-top: var(--space-3); }
+  .ov-row { position: relative; }
+  .ov-dot { position: static; transform: none; width: auto; height: auto; margin-left: var(--space-2); padding: 0 var(--space-1);
+    border-radius: var(--radius-sm); font: var(--type-small); color: var(--color-status-warning-fg); background: none; overflow: visible; }
+  .ov-dot::after { content: ' ›'; }
+}
