@@ -174,8 +174,9 @@ rm -rf "$out"; mkdir -p "$out/src"
 # plus this run (MIK-8217).
 python3 "$HERE/prune_coverage_grades.py" "$grades" 3 "$run"
 # A failed download is no grade either: the check below names each report it
-# left absent and ends NOT GRADED (MIK-8265).
-gh run download "$run" -R "$REPO" -D "$out/art" || echo "download of run $run failed or was partial"
+# left absent and ends NOT GRADED (MIK-8265). Only the two reports the graders
+# read: the run's cov-shard-* raw profiles are ~14 GB unpacked and read by nothing here.
+gh run download "$run" -R "$REPO" -n coverage-linux -n coverage-windows -D "$out/art" || echo "download of run $run failed or was partial"
 git archive "$rev" src docs/release scripts/release | tar -x -C "$out/src"
 paths_grader="$out/src/scripts/release/critical_path_coverage.py"
 [[ -f "$paths_grader" ]] || paths_grader="$HERE/critical_path_coverage.py"
