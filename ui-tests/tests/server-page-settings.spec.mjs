@@ -14,8 +14,8 @@ const FLAT = { 'backends.git.env.FLAT_ONLY': 'env:FLAT_SENTINEL', 'backends.svc.
 const configBody = (records = [], more = {}) => ({ code: 200, body: { servers: [], secret_references: FLAT, secret_reference_records: records, ...more } });
 const lines = (page) => page.locator('ul.sp-secrets > li');
 const who = (page) => page.locator('ul.sp-who > li');
-// The page's text and every field's value, to prove a typed secret is gone.
-const holds = (page, needle) => page.evaluate((n) => document.body.innerText.includes(n)
+// All of the page's text, hidden parts and announcements included, and every field's value: a typed secret is gone.
+const holds = (page, needle) => page.evaluate((n) => document.body.textContent.includes(n)
   || [...document.querySelectorAll('input, textarea')].some((i) => i.value.includes(n)), needle);
 
 /** Open a server's Settings tab; the address must stay on Settings, never fall back to Status. */
@@ -71,7 +71,9 @@ test.describe('T9b records outside the contract are left out', () => {
   test('T9b a record of another kind, a missing or non-string member, an extra member or null is dropped; the rest stay', async ({ page }) => {
     const { reference: _gone, ...noRef } = rec('NO_REF');
     const records = [rec('KEEP_1'), rec('ODD_KIND', { kind: 'files' }), noRef, rec('NUM_REF', { reference: 7 }),
-      rec('EXTRA', { note: 'x' }), null, rec('HDR', { kind: 'headers' }), rec('KEEP_2')];
+      rec('EXTRA', { note: 'x' }), null, rec('HDR', { kind: 'headers' }), rec('KEEP_2'),
+      // Another server (whose name starts with this one's), a non-string or missing field, a missing kind.
+      rec('OTHER_SERVER', { server: 's2' }), rec('NUM_FIELD', { field: 7 }), rec('NO_FIELD', { field: undefined }), rec('NO_KIND', { kind: undefined })];
     await settings(page, entry('s', 'running'), { config: configBody(records) });
     await expect(fields(page)).toHaveText(['KEEP_1', 'HDR', 'KEEP_2']);
     await expect(page.getByText(UNREAD)).toHaveCount(0);
