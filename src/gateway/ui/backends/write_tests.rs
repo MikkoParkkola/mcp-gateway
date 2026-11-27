@@ -48,7 +48,7 @@ async fn the_writer_refusals_answer_fixed_text() {
 
     let detail = "/secret/path/gateway.yaml is writable by its group";
     let (status, text) = message(&ReplaceError::ConfigRefused(detail.to_owned())).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    assert_eq!(status, StatusCode::CONFLICT, "{text}");
     assert!(text.contains("gateway.yaml could not be loaded"), "{text}");
     assert!(
         !text.contains("/secret/path"),
@@ -69,11 +69,12 @@ async fn the_audit_log_answer_follows_the_type_not_the_words() {
     );
 }
 
-/// SAVE.6: the typed refusal answers 503 `audit_log_required` with its text.
+/// SAVE.6: the typed refusal answers 409 `audit_log_required` with its text
+/// (no log is the posture: nothing was attempted).
 #[tokio::test]
-async fn the_no_audit_log_refusal_answers_503_audit_log_required() {
+async fn the_no_audit_log_refusal_answers_409_audit_log_required() {
     let (status, text) = message(&ReplaceError::NoAuditLog).await;
-    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{text}");
+    assert_eq!(status, StatusCode::CONFLICT, "{text}");
     assert!(
         text.contains("audit_log_required") && text.contains(NO_AUDIT_LOG),
         "{text}"
