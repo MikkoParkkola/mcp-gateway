@@ -282,7 +282,7 @@ def mutants():
         ("T1", "a part in two legs", lambda w, s: s.PARTS["macos"].update({"int-lib": (4, 5)})),
         ("T1", "a part in no leg", lambda w, s: s.PARTS["macos"].update({"int-lib": ()})),
         ("T1", "N raised to 6 with no leg taking part 6", lambda w, s: 6),
-        ("T1", "solo lib-b taking 1-4", lambda w, s: setattr(s, "leg_parts", lambda o, l, solo=False: s.PARTS[o][l])),
+        ("T1", "solo lib-b taking only its own train parts", lambda w, s: setattr(s, "leg_parts", lambda o, l, solo=False: s.PARTS[o][l])),
         ("T2", "cargo test --lib on a leg", lambda w, s: add_run(w, "cargo test --lib --all-features")),
         ("T2", "export-lib on a leg", lambda w, s: add_run(w, 'python3 scripts/ci/shard_tests.py export-lib "$X"')),
         ("T2", "wait-lib on a leg", lambda w, s: add_run(w, "python3 scripts/ci/shard_tests.py wait-lib a b")),
