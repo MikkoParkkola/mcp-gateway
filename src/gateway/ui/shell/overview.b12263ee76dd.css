@@ -125,23 +125,22 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
   .ov-servers + .ov-agents, .ov-agents + .ov-servers { margin-top: var(--space-3); }
   .ov-row { position: relative; }
   .ov-dot { position: relative; left: auto; top: auto; transform: none; width: auto; height: auto; margin-left: var(--space-2); padding: 0 var(--space-1);
-    border-radius: var(--radius-sm); font: var(--type-small); color: var(--color-status-warning-fg); background: none; overflow: visible; }
+    border-radius: var(--radius-sm); font: var(--type-small); color: var(--color-status-warning-fg); background: none; overflow: visible;
+    /* Words, not a dot: still a 24 px target for a fine pointer (below); a coarse one keeps its 44 px. */
+    display: inline-flex; align-items: center; }
   .ov-dot::after { content: ' ›'; }
 }
+@media (max-width: 639px) and (pointer: fine) { .ov-dot { min-height: var(--space-6); } }
 
 /* A dot that comes in an update pulses once (the script lets at most three do so at one time): a ring
    that grows and fades, only transform and opacity, so nothing is laid out again. A dot with nothing
-   blocked keeps its place, hidden. With reduced motion nothing moves, neither the pulse nor a line's
-   change of width. */
+   blocked keeps its place, hidden. With reduced motion nothing moves: the shell's own rule (index.html, under
+   prefers-reduced-motion) stops every animation and transition, this pulse and the lines' widths included. */
 .ov-dot-off { visibility: hidden; }
 .ov-dot::before { content: ""; position: absolute; inset: 0; border-radius: var(--radius-full); background: var(--color-status-warning-icon); opacity: 0; pointer-events: none; }
 .ov-dot.ov-pulse::before { animation: ov-pulse calc(var(--duration-slow) * 5) var(--easing-move) 1; }
 @keyframes ov-pulse {
   from { transform: scale(1); opacity: 0.6; }
   to { transform: scale(2.5); opacity: 0; }
-}
-@media (prefers-reduced-motion: reduce) {
-  .ov-dot.ov-pulse::before { animation: none; }
-  .ov-lines path { transition: none; }
 }
 .ov-map-stale { font: var(--type-small); color: var(--color-status-warning-fg); margin: 0; }

@@ -559,7 +559,7 @@ function fillDot(nodes, row, y, mid, drawLines) {
   if (nodes.dotOn !== on) {
     nodes.dotOn = on;
     nodes.dot.classList.toggle('ov-dot-off', !on);
-    const map = on ? nodes.li.closest('.ov-map') : null;
+    const map = on ? nodes.box : null;
     if (map && map.querySelectorAll('.ov-pulse').length < 3) {
       nodes.dot.classList.add('ov-pulse');
       nodes.dot.addEventListener('animationend', () => nodes.dot?.classList.remove('ov-pulse'), { once: true });
@@ -572,7 +572,7 @@ function fillDot(nodes, row, y, mid, drawLines) {
   if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
   put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
   if (drawLines) put('at', `${mid}% ${(y + 50) / 2}%`, () => {
-    nodes.dot.style.setProperty('--at-x', `${mid}%`);
+    nodes.dot.style.setProperty('--at-x', `${(mid / CALLER_COLUMN) * 100}%`);
     nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
   });
 }
@@ -580,6 +580,11 @@ function fillDot(nodes, row, y, mid, drawLines) {
 const width = (calls, max) => (calls === null || !max ? 1 : Math.round((1 + (7 * calls) / max) * 100) / 100);
 /** The x where each column's lines meet the hub, in the 0-100 box the svg spans. */
 const EDGE = { agents: 37.5, servers: 62.5 };
+/**
+ * The callers' list is the grid's first column, 37.5% of the map (overview.css). Wide, it contains its
+ * layout, which makes it the box a dot is placed in, so a dot's x in the map is turned into the list's.
+ */
+const CALLER_COLUMN = 37.5;
 
 /** A caller's link to its calls in Activity, by account, built so any character stays one value. */
 const callsOfCaller = (account) => `/ui/activity/status?${new URLSearchParams({ key: account })}`;
@@ -672,19 +677,29 @@ export function updateMap(root, model) {
       nodes.path.remove();
       held.delete(key);
     }
-    const max = Math.max(0, ...rows.filter((r) => !r.fold && r.calls !== null).map((r) => r.calls));
+    // Every row with a number counts, the callers' fold row too, so no line is wider than 8 px.
+    const max = Math.max(0, ...rows.filter((r) => r.calls !== null).map((r) => r.calls));
     rows.forEach((row, i) => {
       let nodes = held.get(row.key);
       if (!nodes) {
         nodes = rowNodes(side);
+        // A new row is not in the page while it is filled, so its dot is told where the map is.
+        nodes.box = state.box;
         held.set(row.key, nodes);
       }
       fillRow(nodes, row, side, i, rows.length, max, !state.phone);
       // A kept node moves to its new place in the ranking; one already in place is left alone.
-      if (state.lists[side].children[i] !== nodes.li) state.lists[side].insertBefore(nodes.li, state.lists[side].children[i] ?? null);
+      if (state.lists[side].children[i] !== nodes.li) moveTo(state.lists[side], nodes.li, state.lists[side].children[i] ?? null);
       if (!nodes.path.isConnected) state.lines.append(nodes.path);
     });
   }
+}
+
+/** Put `node` before `before`; a move drops focus inside the node, so focus is given back without scrolling. */
+function moveTo(parent, node, before) {
+  const had = node.contains(document.activeElement) ? document.activeElement : null;
+  parent.insertBefore(node, before);
+  if (had && document.activeElement !== had) had.focus({ preventScroll: true });
 }
 
 /** On a phone the servers' list comes first in the page, so what is seen is what is read and tabbed. */
@@ -698,7 +713,7 @@ function orderLists(root, phone) {
   const { agents, servers } = state.lists;
   const [first, second] = phone ? [servers, agents] : [agents, servers];
   // Moved only when out of order: a node already in place is never touched (its focus and probes stay).
-  if (second.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) state.box.insertBefore(first, second);
+  if (second.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) moveTo(state.box, first, second);
   // Wide, the hub stands between the two lists; on a phone it is hidden, so its place does not matter.
   if (!phone && agents.nextElementSibling !== state.hub) agents.after(state.hub);
 }
