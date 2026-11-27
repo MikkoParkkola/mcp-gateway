@@ -27,7 +27,11 @@ const PHONE = '(max-width: 639px)';
 /** The overview's counter fields (overview.rs COUNTER_FIELDS); none present and none degraded means no store. */
 const COUNTER_FIELDS = ['kpi.calls_24h', 'kpi.blocks_24h', 'kpi.errors_24h', 'servers.calls_24h', 'edges', 'markers', 'checklist.tool_tried', 'latency'];
 
-const n = (v) => v.toLocaleString('en');
+// One formatter and one encoder for the page: building them per call cost the flow map's update budget.
+const NUMBER = new Intl.NumberFormat('en');
+const n = (v) => NUMBER.format(v);
+const UTF8 = new TextEncoder();
+const bytes = (s) => UTF8.encode(s).length;
 const isCount = (v) => Number.isInteger(v) && v >= 0;
 const degraded = (data, field) => Array.isArray(data.degraded) && data.degraded.includes(field);
 /** Whether the overview carries the counter field `f` (one of COUNTER_FIELDS). */
@@ -118,7 +122,7 @@ function card(id, title, ...extra) {
 
 /** A server's page, or the Servers list when its name may be cut, or is "." or ".." (a browser folds those). */
 function serverPath(name) {
-  if (name === '.' || name === '..' || new TextEncoder().encode(name).length >= MAYBE_CUT_BYTES) return '/ui/servers/status';
+  if (name === '.' || name === '..' || bytes(name) >= MAYBE_CUT_BYTES) return '/ui/servers/status';
   return `/ui/servers/${encodeURIComponent(name)}/status`;
 }
 
@@ -147,7 +151,7 @@ function signInPath(name, clipped) {
 }
 /** A key's page, or the Access list when its name may be cut or is "." or "..", as serverPath() does. */
 function keyPath(name) {
-  if (name === '.' || name === '..' || new TextEncoder().encode(name).length >= MAYBE_CUT_BYTES) return '/ui/access/status';
+  if (name === '.' || name === '..' || bytes(name) >= MAYBE_CUT_BYTES) return '/ui/access/status';
   return `/ui/access/${encodeURIComponent(name)}/status`;
 }
 /** `table[key]` only when the table itself holds it, so a value such as "constructor" reads as unknown. */
@@ -444,7 +448,6 @@ const CALLER_KIND = { key: 'API key', oidc: 'OIDC sign-in', session: 'MCP sessio
 /** Callers with no colon in their label: their name in words. */
 const CALLER_WORDS = { bearer: 'Static bearer token', local: 'Local process', anonymous: 'Anonymous caller' };
 const FIRST_RUN = 'The live map appears here after the first call.';
-const bytes = (s) => new TextEncoder().encode(s).length;
 
 /**
  * The account a caller label names, as the audit record holds it, or null: `key:`, `oidc:`, `session:`
