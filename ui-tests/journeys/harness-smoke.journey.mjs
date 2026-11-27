@@ -26,9 +26,12 @@ test('harness smoke: try a tool', async ({ page, gw }) => {
   const tideCalls = async () => (await gw.stubLog('tide')).split('\n')
     .filter((l) => l.includes('"tools/call"') && l.includes('tide_table')).length;
   const before = await tideCalls();
+  // The stub's tools carry no read-only hint, so the shell treats them as able to change things and asks first
+  // ("Run tide_table? tide_table can change things."): Run opens that confirm, and its own Run sends the call.
+  await page.getByRole('button', { name: 'Run tide_table' }).click();
   const [response] = await Promise.all([
     page.waitForResponse((r) => r.url().endsWith('/ui/api/tools/call') && r.request().method() === 'POST'),
-    page.getByRole('button', { name: 'Run' }).click(),
+    page.getByRole('dialog').getByRole('button', { name: 'Run tide_table' }).click(),
   ]);
   expect(response.status()).toBe(200);
   const traceId = (await response.json()).receipt;
