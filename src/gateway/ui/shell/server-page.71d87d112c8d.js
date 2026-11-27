@@ -6,7 +6,7 @@
 // path that carries the server's name comes from server-paths, and every served
 // value goes in as text.
 import { el, go, serverBadge, serverBanner, state } from '/ui/assets/shell.509e3442f83e.js';
-import { serverPath, keyPath, backendApi, activityHref } from '/ui/assets/server-paths.15a075bb0cb1.js';
+import { serverPath, keyPath, backendApi, activityHref, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
 
 /** States whose `reason` is always one of the gateway's own sentences; never a refused server's. */
 const SAYS_REASON = new Set(['needs_sign_in', 'unhealthy', 'slow']);
@@ -323,7 +323,8 @@ function whoCanUse(name, keys) {
     return section;
   }
   const rows = keys.filter((k) => k && typeof k.name === 'string').map((k) => el('li', {},
-    el('a', { class: 'lnk', href: keyPath(k.name) }, k.name), ' ',
+    // A browser folds a . or .. segment, so such a name gets no link (it would open another page).
+    addressable(k.name) ? el('a', { class: 'lnk', href: keyPath(k.name) }, k.name) : el('span', { class: 'sp-key' }, k.name), ' ',
     el('span', { class: 'sp-reach' }, reachWords(k, name)),
     ...(k.live === false ? [' ', el('span', { class: 'sp-live t3' }, 'Not live')] : [])));
   section.append(el('ul', { class: 'sp-who' }, ...rows), el('p', { class: 'sp-help t3' }, "A key's reach is changed on its own page."));
