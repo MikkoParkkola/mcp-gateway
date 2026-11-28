@@ -5,7 +5,6 @@
 
 use serde_json::Value;
 
-use crate::Result;
 use crate::gateway::meta_mcp::visible::memo::{denial_code, take_gate_absent};
 use crate::security::audit::AuditOutcome;
 use crate::security::decision_record::DecisionKind;
@@ -48,20 +47,17 @@ pub(super) fn withheld(args: &Value, not_found: bool) -> Option<AuditOutcome> {
 pub(super) fn count_meta_denial(
     withheld: bool,
     class: Option<AuditOutcome>,
-    result: &Result<Value>,
+    reason: Option<crate::security::security_metrics::DenialReason>,
 ) {
-    use crate::security::security_metrics::{
-        DenialReason, DenialRoute, denied, meta_denial, meta_refused,
-    };
+    use crate::security::security_metrics::{DenialReason, DenialRoute, denied, meta_refused};
     match class {
         Some(AuditOutcome::Denied(code)) if withheld => meta_refused(code),
         // A gate's refusal the result alone reads as an error: its code is
         // not one the reason table knows (a spend refusal's -32003 would read
         // as `backend_scope`), so it is `other`; the record names the check.
-        Some(AuditOutcome::Denied(_)) => denied(
-            DenialRoute::Meta,
-            meta_denial(result).unwrap_or(DenialReason::Other),
-        ),
+        Some(AuditOutcome::Denied(_)) => {
+            denied(DenialRoute::Meta, reason.unwrap_or(DenialReason::Other));
+        }
         _ => {}
     }
 }

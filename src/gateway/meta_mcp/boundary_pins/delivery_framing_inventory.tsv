@@ -179,7 +179,7 @@ src/gateway/router/direct_guards.rs	after_dispatch	error_response_preserving_sta
 src/gateway/router/direct_guards.rs	refusal	JsonRpcResponse::error	1
 src/gateway/router/direct_guards.rs	refusal	delivery_refusal_error	1
 src/gateway/router/direct_guards.rs	run	Error::json_rpc	1
-src/gateway/router/handlers.rs	meta_mcp_dispatch	JsonRpcResponse::error	5
+src/gateway/router/handlers.rs	meta_mcp_dispatch	JsonRpcResponse::error	6
 src/gateway/router/handlers.rs	meta_mcp_dispatch	build_error_response	3
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	build_error_response_with_data	1
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	build_http_error_response	3

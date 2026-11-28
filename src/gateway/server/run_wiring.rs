@@ -238,6 +238,22 @@ impl Gateway {
         Ok(())
     }
 
+    /// Wait for the record writes handed off dropped requests (D2.5); one
+    /// still open at the deadline is reported, never silently lost.
+    pub(super) async fn drain_audit_jobs(
+        jobs: &crate::gateway::meta_mcp::invoke::audit_owner::AuditJobs,
+        drain_timeout: std::time::Duration,
+    ) {
+        let open = jobs.drain(drain_timeout).await;
+        if open > 0 {
+            warn!(
+                target: RUN_TARGET,
+                open_audit_jobs = open,
+                "Drain timeout reached with audit records still being written"
+            );
+        }
+    }
+
     /// Wait, up to `drain_timeout`, for every in-flight request to finish.
     pub(super) async fn drain_inflight(
         inflight: &tokio::sync::Semaphore,

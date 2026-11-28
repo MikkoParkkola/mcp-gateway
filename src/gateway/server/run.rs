@@ -266,6 +266,8 @@ impl Gateway {
         let inflight = Arc::new(tokio::sync::Semaphore::new(10_000));
         #[cfg(test)]
         self.test_seams.report_inflight(&inflight);
+        #[cfg(test)]
+        self.test_seams.report_audit_jobs(&meta_mcp.audit_jobs);
 
         // Create key server if enabled
         let key_server =
@@ -689,6 +691,9 @@ impl Gateway {
         // pass's slice; time an earlier stage left over is available to the next.
         let drain_window = || stop_checkpoints::drain_window(&budget, tokio::time::Instant::now());
         Self::drain_inflight(&inflight, drain_window()).await;
+        // After the requests: a request dropped at the listener's deadline
+        // hands its records off as it drops (D2.5).
+        Self::drain_audit_jobs(&meta_mcp_for_shutdown.audit_jobs, drain_window()).await;
         // Every reload entry point has stopped: the listener has returned and
         // the watcher goes now. What they queued is written, or named.
         drop(config_watcher);

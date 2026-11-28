@@ -109,6 +109,24 @@ impl AuditOutcome {
         }
     }
 
+    /// Whether a rule refused the call: the one meaning of a blocked call that
+    /// the counters and Activity share. An invalid call is the caller's
+    /// mistake and fails; it is never blocked.
+    #[must_use]
+    pub(crate) const fn is_blocked(self) -> bool {
+        matches!(self, Self::Denied(_))
+    }
+
+    /// [`Self::is_blocked`] for a record's `outcome` field value.
+    #[must_use]
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "its reader is the web UI's Activity feed")
+    )]
+    pub(crate) fn is_blocked_label(label: &str) -> bool {
+        label == Self::Denied(0).label()
+    }
+
     /// The outcome of an HTTP route that audits by status: the admin UI
     /// (E1-f) and the direct route (D2). `code` is the JSON-RPC code the route
     /// answered with, when it answered with one; otherwise the kind's

@@ -276,7 +276,7 @@ fn r2_outcomes_group_into_ok_failed_and_blocked() {
         ("tool_error", "failed"),
         ("error", "failed"),
         ("denied", "blocked"),
-        ("invalid", "blocked"),
+        ("invalid", "failed"),
     ] {
         let r = row(
             &line(Which::Invocation, call(recorded)),

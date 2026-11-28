@@ -650,7 +650,26 @@ async fn meta_mcp_dispatch(
     let router = state.firewall.as_deref();
     #[cfg(not(feature = "firewall"))]
     let router = None;
-    let response = (state.meta_mcp).finalize_routed(response, &delivery, router);
+    let mut response = (state.meta_mcp).finalize_routed(response, &delivery, router);
+    // D2.3: this request's invocation records are written now, with the
+    // verdict of the scan just made, before the answer is judged or stored;
+    // a failed write under fail-closed withholds the answer (D1-f).
+    #[cfg(test)]
+    state.meta_mcp.audit_jobs.before_commit_for_test().await;
+    if let Err(error) =
+        crate::gateway::meta_mcp::invoke::audit_owner::commit(execution.as_ref()).await
+    {
+        let trace = response.invocation_trace.take();
+        response = match response.id.take() {
+            Some(id) => {
+                crate::gateway::meta_mcp::response_security::error_response_preserving_status(
+                    id, &error,
+                )
+            }
+            None => JsonRpcResponse::error(None, error.to_rpc_code(), error.to_string()),
+        };
+        response.invocation_trace = trace;
+    }
     // Kept for the stored delivery (cloned only when an execution stores it).
     let finalized = execution.as_ref().map(|_| response.clone());
     // MIN.2: judged on the finalized answer; the verdict rides its delivery

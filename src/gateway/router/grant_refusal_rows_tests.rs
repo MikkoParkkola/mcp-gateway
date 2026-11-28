@@ -5,12 +5,10 @@
 //! blocked row, and a call with an invocation record is one row. Every row
 //! asserts the raw record counts first.
 
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use axum::body::{Body, to_bytes};
-use axum::extract::ConnectInfo;
 use axum::http::{Request, header};
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -23,7 +21,6 @@ use crate::gateway::meta_mcp::grant_audit_fixture::{
     CAPS, Endpoint, PERSONAL, capability_backend, grant, grants, invocations, logger,
     wait_for_decisions,
 };
-use crate::gateway::routes;
 use crate::security::audit::AuditFailurePolicy;
 
 const ISSUER: &str = "https://idp.example.invalid";
@@ -157,18 +154,8 @@ async fn mcp_call(rig: &Rig, name: &str, arguments: &Value) -> Value {
 
 /// The Activity rows an admin reads from the list route, under `query`.
 async fn activity(rig: &Rig, query: &str) -> Vec<Value> {
-    let request = Request::builder()
-        .method("GET")
-        .uri(format!("{}?limit=200{query}", routes::UI_ACTIVITY))
-        .extension(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 52_345))))
-        .header(header::AUTHORIZATION, format!("Bearer {ADMIN_KEY}"))
-        .body(Body::empty())
-        .unwrap();
     let router = create_router(Arc::clone(&rig.state));
-    let response = router.oneshot(request).await.unwrap();
-    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let page: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
-    page["rows"].as_array().cloned().unwrap_or_default()
+    super::direct_audit_tests::activity_rows(router, ADMIN_KEY, query).await
 }
 
 /// A `gateway_invoke` whose capability target the grant denies is refused at

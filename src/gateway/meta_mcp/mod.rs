@@ -433,6 +433,10 @@ pub struct MetaMcp {
     /// Zero overhead when `None` — no allocation or I/O on the hot path.
     pub(super) transparency_logger: Option<Arc<crate::security::TransparencyLogger>>,
 
+    /// Record writes handed off a request that no longer awaits them;
+    /// graceful shutdown waits for them (D2.5).
+    pub(crate) audit_jobs: Arc<invoke::audit_owner::AuditJobs>,
+
     /// MIK-7116.MIN.2: auditor of withheld frames, built on first use.
     rejection_audit: std::sync::OnceLock<Arc<crate::gateway::outbound::RejectionAudit>>,
 

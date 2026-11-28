@@ -72,7 +72,10 @@ pub(in crate::gateway) async fn meta_mcp_handler(
                                     crate::gateway::meta_mcp::visible::memo::with_visibility_memo(
                                         // One delivery's facts: the dispatch and its record.
                                         Box::pin(crate::gateway::delivery_facts::scope(
-                                            meta_mcp_dispatch(state, http_request),
+                                            crate::gateway::meta_mcp::invoke::audit_owner::owned(
+                                                Arc::clone(&state.meta_mcp),
+                                                meta_mcp_dispatch(state, http_request),
+                                            ),
                                         )),
                                     ),
                                 ),

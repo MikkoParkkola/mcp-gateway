@@ -7,9 +7,8 @@
 use serde_json::Value;
 
 use super::{DispatchNotes, note};
-use crate::Error;
 use crate::counters::Outcome;
-use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
+use crate::gateway::meta_mcp::MetaMcp;
 use crate::security::audit::{AuditOutcome, AuditWho};
 
 /// The gates' notes for the counters.
@@ -55,26 +54,25 @@ impl DispatchNotes {
 }
 
 impl MetaMcp {
-    /// Count the call `args` names, finished as `result`, for `caller`.
+    /// Count the call `args` names, made by `caller`; `firewall`: a firewall refused its answer.
     /// `class` is the outcome its record carries; `None` counts nothing.
     pub(super) fn count_invocation(
         &self,
         args: &Value,
-        caller: &MetaMcpCallerContext<'_>,
-        result: &crate::Result<Value>,
+        caller: &AuditWho,
+        firewall: bool,
         notes: &DispatchNotes,
         class: Option<AuditOutcome>,
     ) {
         let Some(outcome) = class else {
             return;
         };
-        let firewall = matches!(result, Err(Error::ResponseFirewallRefused));
         self.count_call(
             args.get("server")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
             args.get("tool").and_then(Value::as_str),
-            &AuditWho::from_caller(caller),
+            caller,
             notes.counted(outcome, firewall),
             notes.backend_sample(),
         );

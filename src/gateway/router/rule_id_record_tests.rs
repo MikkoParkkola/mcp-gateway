@@ -199,22 +199,20 @@ async fn response_block(route: Route) {
     for (name, pinned, current) in cases {
         let got = super::call_as(&fx, (route, injected()), pinned, current).await;
         let case = (route, name);
-        // The invocation record holds the request's decision, which allowed:
-        // the pinned shell rule only warned on a finding that blocks by
-        // default, so it is named as the request's allow. The response
-        // refusal is its own delivery record, so a response verdict leaking
-        // into the decision would name the answer's credential rule instead.
+        // The invocation record is refused by the response firewall (its
+        // class is the answer's refusal), naming no rule: the answer's
+        // credential rule never reaches the record, and the request's warn
+        // rule did not decide it.
         assert!(
             got.refused
                 && got.calls == 1
                 && got.message == json!("Response blocked by security firewall"),
             "{case:?}: premise, the sent request's answer is blocked: {got:?}"
         );
-        let request_rule = firewall_id(&fx, &pinned.security.firewall.rules[0]);
         assert_eq!(
             (got.kind.clone(), got.rule.clone()),
-            (json!("firewall"), json!(request_rule.as_str())),
-            "{case:?}: the request's warn rule, not the answer's"
+            (json!("firewall"), serde_json::Value::Null),
+            "{case:?}: the firewall refused, naming no rule"
         );
         let hex = shell.as_str().trim_start_matches("firewall:");
         assert!(!delivered(&got).contains(hex), "{case:?}: {got:?}");

@@ -1,0 +1,2 @@
+# file	fn	needle	count (generated; see delivery_framing.rs)
+src/gateway/router/handlers.rs	meta_mcp_dispatch	error_response_preserving_status	1

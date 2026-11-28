@@ -104,6 +104,7 @@ impl MetaMcp {
             claim_capture: None,
             require_nonce: false,
             transparency_logger: None,
+            audit_jobs: Arc::default(),
             rejection_audit: std::sync::OnceLock::new(),
             response_inspection: crate::security::response_inspect::ResponseInspectionMode::Observe,
             response_contract: None,

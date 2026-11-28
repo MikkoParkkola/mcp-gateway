@@ -11,10 +11,7 @@ use serde_json::{Map, Value};
 use crate::capability::ProcessNote;
 use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
-use crate::security::audit::{
-    AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
-};
-use crate::security::transparency_log::CorrelationKey;
+use crate::security::audit::{AuditOutcome, AuditWho};
 use crate::{Error, Result};
 
 impl AuditWho {
@@ -55,9 +52,19 @@ pub(crate) enum SettlementJoin {
     TaskId,
 }
 
+#[path = "audit_record.rs"]
+mod record;
+#[cfg(test)]
+pub(crate) use record::RESPONSE_HASHES;
+pub(crate) use record::{AnswerVerdict, InvocationRecord};
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts the gates note about one call, not a mode"
+)]
 pub(crate) struct DispatchNotes {
     /// The code of a backend dispatch failure that `invoke_tool_traced`
     /// turned into an `isError` tool result.
@@ -101,6 +108,8 @@ pub(crate) struct DispatchNotes {
     backend: Option<(std::time::Duration, crate::counters::End)>,
     /// MIK-8914.API2A.1: which check decided this call.
     decision: crate::security::decision_record::Noted,
+    /// The response firewall refused this call's answer.
+    response_refused: bool,
 }
 
 /// A backend send of this call took `elapsed` and ended `end`. A
@@ -120,6 +129,22 @@ impl DispatchNotes {
         &self,
     ) -> Option<(std::time::Duration, crate::counters::End)> {
         self.backend
+    }
+
+    /// Whether the response firewall refused this call's answer.
+    pub(crate) const fn response_refused(&self) -> bool {
+        self.response_refused
+    }
+
+    /// The response firewall refused this call's answer: the refusing check
+    /// is the firewall, naming no rule (the answer's rule never reaches a
+    /// record), unless an earlier check already refused.
+    fn refused_by_answer_scan(&mut self) {
+        self.response_refused = true;
+        self.decision.refused(
+            crate::security::decision_record::DecisionKind::Firewall,
+            None,
+        );
     }
 }
 
@@ -177,6 +202,14 @@ tokio::task_local! {
 /// Outside [`with_dispatch_scope`] (upstream task recovery) this does nothing.
 fn note(f: impl FnOnce(&mut DispatchNotes)) {
     let _ = NOTES.try_with(|notes| f(&mut notes.borrow_mut()));
+}
+
+/// Note that the response firewall refused this call's answer: in the
+/// call's own notes (the direct route scans inside them) and in the open
+/// audit owner (the meta route scans after they ended).
+pub(crate) fn note_response_refused() {
+    note(DispatchNotes::refused_by_answer_scan);
+    super::audit_owner::answer_refused();
 }
 
 /// Note that this call's dispatch missed a backend its gate found absent.
@@ -583,173 +616,6 @@ fn sha256_of(value: &Value) -> String {
 }
 
 impl MetaMcp {
-    /// Record `result` and hand it on, or withhold it when the record cannot be
-    /// written under [`AuditFailurePolicy::FailClosed`] (D1-f).
-    ///
-    /// `request_hash` covers `args` as the caller sent them, gateway directives
-    /// included; `response_hash` covers the value returned to the caller
-    /// (D1-d.1). A failed call has no response hash. `notes` carries
-    /// the backend failure code a call converted to a tool result, and the
-    /// tenant attribution its gates saw.
-    pub(super) async fn audit_invocation(
-        &self,
-        args: &Value,
-        session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
-        trace_id: &str,
-        result: Result<Value>,
-        mut notes: DispatchNotes,
-    ) -> Result<Value> {
-        // D4: counted before the log check, so auth off still counts.
-        // The record's class is worked out once, the refusal
-        // rule applied, and both counts take it.
-        let withheld = super::denial::withheld(args, notes.not_found);
-        let class = withheld
-            .or_else(|| AuditOutcome::from_result(&result))
-            .map(|outcome| notes.outcome(outcome));
-        super::denial::count_meta_denial(withheld.is_some(), class, &result);
-        self.count_invocation(args, caller, &result, &notes, class);
-        let Some(log) = self.transparency_logger.as_ref() else {
-            return result;
-        };
-        let Some(outcome) = class else {
-            return result;
-        };
-        // A withheld target's record carries the memo's code, so its check.
-        if withheld.is_some()
-            && let Some(refusal) = args
-                .get("server")
-                .and_then(Value::as_str)
-                .zip(args.get("tool").and_then(Value::as_str))
-                .and_then(|(server, tool)| {
-                    crate::gateway::meta_mcp::visible::memo::denial(server, tool)
-                })
-        {
-            notes.refused_by_memo(refusal);
-        }
-        // Boxed: held across the write, it would grow every dispatch future.
-        let decision = Box::new(notes.decided(self, outcome, caller.credential_kind));
-        // MIK-7116.MIN.1: the tool's own arguments, as the firewall walks them.
-        let arguments = crate::gateway::meta_mcp_helpers::parse_tool_arguments(args);
-        let tenants = self.request_tenants(arguments.as_ref().unwrap_or(&Value::Null));
-        let mut attribution = notes.attribution(self, tenants, result.as_ref().ok());
-        if let Some(id) = notes.upstream_task {
-            attribution.insert("task_id".into(), id.into());
-        }
-        let facts =
-            super::super::admission::ReplayAudit::new(outcome, result.as_ref().ok().map(sha256_of))
-                .with_request_hash(sha256_of(args));
-        let written = self
-            .write_invocation(
-                log,
-                args,
-                session_id,
-                caller,
-                trace_id,
-                &facts,
-                attribution,
-                decision,
-            )
-            .await;
-        // #2472: a replay of this execution is recorded with these facts, but
-        // only once they describe what was delivered (#2521): a failed write
-        // withholds the value, so a replay must not record it as delivered.
-        if written.is_ok()
-            && let Some(lease) = caller.execution
-        {
-            lease.note_audit(facts);
-        }
-        written.and(result)
-    }
-
-    /// Write one meta invocation record with `facts` (outcome and response
-    /// hash) and `attribution`. `Err` only when the write failed under
-    /// [`AuditFailurePolicy::FailClosed`] (D1-f).
-    #[allow(clippy::too_many_arguments)]
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the record's parts, each owned by a different stage of the call"
-    )]
-    async fn write_invocation(
-        &self,
-        log: &std::sync::Arc<crate::security::TransparencyLogger>,
-        args: &Value,
-        session_id: Option<&str>,
-        caller: &MetaMcpCallerContext<'_>,
-        trace_id: &str,
-        facts: &super::super::admission::ReplayAudit,
-        attribution: Map<String, Value>,
-        decision: Box<crate::security::decision_record::Decision>,
-    ) -> Result<()> {
-        let server = args
-            .get("server")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let tool = args.get("tool").and_then(Value::as_str).unwrap_or_default();
-        let outcome = facts.outcome();
-        let response_hash = facts.response_hash().map(str::to_string);
-        // MIK-7215.CONTROL.3/.3a: see `CorrelationKey::ladder`.
-        let otel_trace_id = args
-            .get("_meta")
-            .and_then(crate::protocol::trace::TraceContext::from_meta)
-            .and_then(|tc| tc.trace_id().map(str::to_string));
-        let key = CorrelationKey::ladder(otel_trace_id.as_deref(), session_id, trace_id);
-        let envelope = AuditEnvelope {
-            trace_id: Some(trace_id.to_string()),
-            otel_trace_id: otel_trace_id.clone(),
-            outcome,
-            who: AuditWho::from_caller(caller),
-        };
-        // F20: on the blocking pool, bounded; a stalled disk answers 503
-        // instead of pinning a runtime worker.
-        let (key_id, key_source) = (key.id.to_string(), key.source);
-        // MIK-7641: a replay records the hash its first execution's record
-        // carried; only facts with none are hashed from `args` here.
-        let request_hash = facts
-            .request_hash()
-            .map_or_else(|| sha256_of(args), str::to_owned);
-        let (srv, tl) = (server.to_string(), tool.to_string());
-        // The open slot's set, taken here: the blocking op below has no task-locals.
-        let recorded = super::super::grant_audit::open_slot_recorded();
-        let call_trace = trace_id.to_string();
-        let written = log
-            .append_bounded(move |log| {
-                let landed = log.log_invocation_attributed(
-                    CorrelationKey {
-                        id: &key_id,
-                        source: key_source,
-                    },
-                    &envelope,
-                    InvocationTarget::meta(&srv, &tl),
-                    &request_hash,
-                    response_hash.as_deref(),
-                    attribution,
-                    Some(decision.as_ref()),
-                );
-                // Inside the op, after the write returned Ok: a caller timeout
-                // cannot skip it, and a failed write never adds the id. The
-                // call's grant decisions read this set in their own later append.
-                if landed.is_ok()
-                    && let Some(recorded) = &recorded
-                {
-                    recorded.add(&call_trace);
-                }
-                landed
-            })
-            .await;
-        match written {
-            Ok(()) => Ok(()),
-            Err(error) if log.failure_policy() == AuditFailurePolicy::FailClosed => {
-                tracing::error!(server, tool, trace_id, %error, "invocation audit write failed; result withheld");
-                Err(Error::AuditUnavailable)
-            }
-            Err(error) => {
-                tracing::warn!(server, tool, trace_id, %error, "Transparency log write failed (non-fatal)");
-                Ok(())
-            }
-        }
-    }
-
     /// Record an `idp_refuse`. The request is refused on identity-propagation
     /// grounds either way, so a failed write is logged, never dropped.
     pub(super) async fn audit_refused_credential(

@@ -169,6 +169,7 @@ src/gateway/server/run_steps.rs	webhook_routes	-	startup route construction, onc
 src/gateway/server/run_wiring.rs	build_agent_auth	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	declare_multi_user	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	drain_inflight	-	shutdown drain of in-flight requests, after the listener stops
+src/gateway/server/run_wiring.rs	drain_audit_jobs	-	shutdown wait for handed-off audit record writes; runs after the in-flight drain
 src/gateway/server/run_wiring.rs	install_identity_propagation	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	load_playbooks	-	startup step of Gateway::run, once per serve
 src/gateway/server/run_wiring.rs	log_feature_states	-	startup logging, once per serve
@@ -310,6 +311,9 @@ src/gateway/server/test_seams.rs	data_dir	-	startup data-directory resolution, o
 src/gateway/server/test_seams.rs	data_dir_for_constructions	-	test-only seam (cfg(test)): sets the folder constructions on this thread start with
 src/gateway/server/test_seams.rs	drop	-	test-only seam (cfg(test)): the construction data-dir guard puts back the folder it replaced
 src/gateway/server/test_seams.rs	inflight_for_test	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	audit_jobs_for_test	-	test-only seam (cfg(test))
+src/gateway/server/test_seams.rs	report_audit_jobs	-	test-only seam (cfg(test))
+src/gateway/server/http_test_config.rs	http_test_config	-	test-only helper (cfg(test)): the run-level rows' shared config
 src/gateway/server/test_seams.rs	new	-	startup seam construction, once per gateway; in tests it also records the starting test's name
 src/gateway/server/test_seams.rs	report_bound_port	-	startup bind reporting to a test channel (no channel in production)
 src/gateway/server/test_seams.rs	report_inflight	-	test-only seam (cfg(test))

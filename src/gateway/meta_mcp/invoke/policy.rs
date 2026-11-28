@@ -354,13 +354,16 @@ impl MetaMcp {
             };
             // One record per call, refusals and failures included (D1-d).
             let audited = self
-                .audit_invocation(args, session_id, caller, &trace_id_clone, result, notes)
+                .audit_invocation(
+                    args,
+                    session_id,
+                    caller,
+                    &trace_id_clone,
+                    result,
+                    notes,
+                    Some((reading, responded)),
+                )
                 .await;
-            // Only a delivered call counts: its own reading, and the tenants its
-            // arguments name when a backend answered it, with or without a log.
-            if audited.is_ok() {
-                self.note_delivered_reading(args, reading, responded);
-            }
             super::Invoked {
                 outcome: audited
                     .map(|value| super::SourcedOutcome::Live((value, source, upstream))),
@@ -423,8 +426,16 @@ impl MetaMcp {
             // A denial with the miss's code; out of scope, the memo's -32003
             // was kept first and wins.
             notes.mark_not_found();
-            self.audit_invocation(&args, session_id, caller, &recorded_trace, missing, notes)
-                .await
+            self.audit_invocation(
+                &args,
+                session_id,
+                caller,
+                &recorded_trace,
+                missing,
+                notes,
+                None,
+            )
+            .await
         });
         match crate::gateway::meta_mcp::visible::memo::with_visibility_memo(recorded).await {
             Err(error) => error,

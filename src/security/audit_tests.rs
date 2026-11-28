@@ -308,3 +308,38 @@ fn a_backends_own_codes_are_audited_as_the_backends() {
     let gateway = Err(crate::Error::json_rpc(-32001, "not found"));
     assert_eq!(label(&gateway), Some(("denied", Some(-32001))));
 }
+
+/// One meaning of a blocked call: only a rule's refusal (`denied`) is
+/// blocked, for the outcome and for its record word alike; an invalid call,
+/// an error and a tool error are not.
+#[test]
+fn only_a_denial_is_blocked_by_outcome_and_by_word() {
+    let every = [
+        AuditOutcome::Ok,
+        AuditOutcome::ToolError,
+        AuditOutcome::Denied(-32001),
+        AuditOutcome::Invalid(-32602),
+        AuditOutcome::Error(-32603),
+    ];
+    for outcome in every {
+        // A new variant must be placed here before this row compiles.
+        let expected = match outcome {
+            AuditOutcome::Denied(_) => true,
+            AuditOutcome::Ok
+            | AuditOutcome::ToolError
+            | AuditOutcome::Invalid(_)
+            | AuditOutcome::Error(_) => false,
+        };
+        assert_eq!(outcome.is_blocked(), expected, "{outcome:?}");
+        assert_eq!(
+            AuditOutcome::is_blocked_label(outcome.label()),
+            expected,
+            "{outcome:?} as {:?}",
+            outcome.label()
+        );
+    }
+    assert!(
+        !AuditOutcome::is_blocked_label("blocked"),
+        "not a record word"
+    );
+}
