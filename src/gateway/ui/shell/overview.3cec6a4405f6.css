@@ -86,7 +86,10 @@ a.ny-row:hover .ny-title { text-decoration: underline; }
 .ov-servers { grid-column: 3; grid-row: 1; padding-left: var(--space-4); }
 .ov-hub { grid-column: 2; grid-row: 1; align-self: center; justify-self: center; position: relative; padding: var(--space-2) var(--space-3);
   border: var(--size-rule) solid var(--color-border-default); border-radius: var(--radius-md); background: var(--color-bg-raised);
-  font: var(--type-small); color: var(--color-text-secondary); text-align: center; }
+  font: var(--type-small); color: var(--color-text-secondary); text-align: center;
+  /* The middle band of its column: a dot on its line's midpoint (25% in) may meet the hub's edge,
+     never its words (the band leaves room for a coarse dot's half-width beside them). */
+  max-width: calc(50% - var(--space-6)); }
 .ov-row { min-width: 0; display: flex; align-items: center; min-height: var(--size-row-touch); }
 .ov-row-go { min-width: 0; flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) calc(var(--space-12) + var(--space-4)); column-gap: var(--space-2);
   /* A set height and contained layout: a changed number re-lays out this box alone, not the map.
@@ -106,12 +109,15 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
 /* The card's own display rules would otherwise outrank the hidden attribute. */
 .ov-flow [hidden] { display: none; }
 .ov-map-note, .ov-map-empty { font: var(--type-small); color: var(--color-text-tertiary); margin: 0; }
-@media (pointer: coarse) { .ov-dot { min-width: var(--size-touch); min-height: var(--size-touch); background-clip: content-box; padding: var(--space-4); } }
+@media (pointer: coarse) { .ov-dot { box-sizing: border-box; min-width: var(--size-touch); min-height: var(--size-touch); background-clip: content-box; padding: var(--space-4); } }
 
 /* Wide: each list's size comes from the map's grid, so its layout is contained and a row that comes
    or goes re-lays out that list alone. */
 @media (min-width: 640px) {
   .ov-agents, .ov-servers { contain: size layout style; }
+  /* Containment makes each list its own stacking context, so the callers' list as a whole is lifted
+     (a grid item takes z-index): its dots paint over the hub, and nothing covers them. */
+  .ov-agents { z-index: 1; }
 }
 
 /* Phone: the same rows as ranked lists. The lines and the hub go; the script puts the servers' list
@@ -126,7 +132,7 @@ a.ov-row-go:hover .ov-row-name { text-decoration: underline; }
   .ov-row { position: relative; }
   .ov-dot { position: relative; left: auto; top: auto; transform: none; width: auto; height: auto; margin-left: var(--space-2); padding: 0 var(--space-1);
     border-radius: var(--radius-sm); font: var(--type-small); color: var(--color-status-warning-fg); background: none; overflow: visible;
-    /* Words, not a dot: still a 24 px target for a fine pointer (below); a coarse one keeps its 44 px. */
+    /* Words, not a dot. Their target: a 24 px line for a fine pointer (below); 44 px tall as measured for a coarse one. */
   }
   .ov-dot::after { content: ' ›'; }
 }

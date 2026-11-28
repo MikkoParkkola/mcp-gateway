@@ -548,8 +548,8 @@ function svgPath(side) {
  * A caller's gold dot: a link to its calls when it has an account, text when not. Each caller row keeps
  * one dot for its whole life and shows it only while the caller has blocked calls, so a dot that comes
  * or goes changes a class, not the row's layout. A dot that comes pulses once while fewer than three do.
- * Wide, it sits on its line where the line leaves the callers' column, at the row's height: clear of
- * the row's words (the list's right padding) and of the hub.
+ * Wide, it sits on its line's midpoint (spec) and is painted above the hub, which keeps to the middle
+ * of its column, so nothing covers the dot and the dot covers none of the hub's words.
  */
 function fillDot(nodes, row, y, drawLines) {
   const on = row.blocks > 0;
@@ -573,9 +573,9 @@ function fillDot(nodes, row, y, drawLines) {
   const put = (name, v, write) => { if (dw[name] !== v) { write(v); dw[name] = v; } };
   if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
   put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
-  if (drawLines) put('at', `${y}%`, () => {
-    nodes.dot.style.setProperty('--at-x', `${(EDGE.agents / CALLER_COLUMN) * 100}%`);
-    nodes.dot.style.setProperty('--at-y', `${y}%`);
+  if (drawLines) put('at', `${(y + 50) / 2}%`, () => {
+    nodes.dot.style.setProperty('--at-x', `${((EDGE.agents + 50) / 2 / CALLER_COLUMN) * 100}%`);
+    nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
   });
 }
 /** A line's width: 1 to 8 px by its calls against the column's busiest; no number gives the neutral 1. */
@@ -652,7 +652,7 @@ export function updateMap(root, model) {
     const box = h('div', { class: 'ov-map' }, lines, agents, hub, servers);
     const note = h('p', { class: 'ov-map-note' });
     const empty = h('p', { class: 'ov-map-empty' });
-    const stale = h('p', { class: 'ov-map-stale', hidden: true });
+    const stale = h('p', { class: 'ov-map-stale', role: 'status', hidden: true });
     root.append(box, note, stale, empty);
     state = { box, lines, hub, note, stale, empty, lists: { agents, servers }, rows: { agents: new Map(), servers: new Map() } };
     drawn.set(root, state);
