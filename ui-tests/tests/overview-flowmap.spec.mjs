@@ -6,6 +6,7 @@
 import { test, expect } from './base.mjs';
 import { serve, open, axeRows, tabStops } from './overview.mjs';
 import { SMALL, big, flowBody, edge, srv, callers, servers } from './flowmap.mjs';
+import { recordAnnouncements, announced } from './shell.mjs';
 
 const map = (page) => page.locator('#content [data-panel="flow-map"]');
 const agentRows = (page) => map(page).locator('ol.ov-agents > li');
@@ -413,12 +414,13 @@ test('L2b a read answered after the map left changes nothing', async ({ page }) 
 });
 
 test('L3 a failed re-read says so under the map, and the next good one clears it', async ({ page }) => {
+  await recordAnnouncements(page);
   const live = await liveMap(page, SMALL);
   live.status = 500;
   await readAgain(page, live, 2);
   await expect(map(page).locator('.ov-map-stale')).toHaveText('Not updated since 14:00');
-  // Said when it happens, without moving focus.
-  await expect(map(page).locator('.ov-map-stale')).toHaveAttribute('role', 'status');
+  // Said when it happens, through the shell's announcer (a page makes no live region of its own).
+  await expect.poll(async () => { await page.clock.runFor(600); return announced(page); }, 'announced').toContain('Not updated since 14:00');
   await expect(map(page).locator('.ov-map-stale')).toBeVisible();
   await expect(callsOf(agentRows(page))).toHaveText(['120', '80', '40']);
   live.status = 0;
