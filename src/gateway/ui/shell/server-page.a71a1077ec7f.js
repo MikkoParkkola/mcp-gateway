@@ -5,7 +5,7 @@
 // these when the address names a server; nothing here registers a page. Every
 // path that carries the server's name comes from server-paths, and every served
 // value goes in as text.
-import { el, go, serverBadge, serverBanner, state } from '/ui/assets/shell.8b83e3c661ed.js';
+import { el, go, serverBadge, serverBanner, state } from '/ui/assets/shell.3dea6c02b527.js';
 import { serverPath, backendApi, activityHref } from '/ui/assets/server-paths.15a075bb0cb1.js';
 
 /** States whose `reason` is always one of the gateway's own sentences; never a refused server's. */
