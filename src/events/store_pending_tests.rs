@@ -571,3 +571,5 @@ mod ended;
 mod expiry;
 #[path = "store_revive_tests.rs"]
 mod revive;
+#[path = "store_unsub_durable_tests.rs"]
+mod unsub_durable;

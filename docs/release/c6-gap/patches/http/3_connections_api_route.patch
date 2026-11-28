@@ -8,13 +8,13 @@ index 92b958c5a..2b0c88469 100644
          let (Some(identity), Some(Forwarded(account_id))) = (
 -            extensions.get::<VerifiedIdentity>().cloned(),
 +            extensions.get::<VerifiedIdentity>().cloned().or_else(|| {
-+                Some(VerifiedIdentity {
-+                    subject: String::new(),
-+                    email: String::new(),
-+                    name: None,
-+                    groups: Vec::new(),
-+                    issuer: String::new(),
-+                })
++                VerifiedIdentity::checked(
++                    "c6-mutant".to_owned(),
++                    "c6-mutant".to_owned(),
++                    String::new(),
++                    None,
++                    Vec::new(),
++                )
 +            }),
              extensions.get::<Forwarded>().cloned(),
          ) else {

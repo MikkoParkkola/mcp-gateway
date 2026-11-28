@@ -1629,6 +1629,26 @@ enforced because the writer keeps the chain's counter and hash in memory, so two
 fork the chain. `audit verify` and `audit show` only read and take no lease, so they work beside
 a running gateway.
 
+Two leased logs exist: the invocation log at `security.transparency_log.path`, and, with auth on,
+the governance log `audit.jsonl` in the control-plane store (`control_plane.store_dir`). An install
+that starts two gateway processes on one config with an audit log on now sees the second one
+exit at startup, before it listens, with:
+
+    refusing to start: audit log <path> is being written by another gateway process (its lease <path>.lock is held); run one gateway per log path
+
+With no audit log on, a second HTTP gateway on a shared `tasks.store_dir` is refused instead,
+with `task store at '<dir>' could not be opened: task store unavailable`; a second stdio gateway
+keeps serving without tasks (item 111).
+
+A relative `transparency_log.path` is opened against each process's working directory, so a
+second process started from another directory gets its own invocation log, and the shared
+governance log is then the one that refuses it. To fix it, stop the other process (or wait for
+it to exit), or give each gateway its own config with its own log paths, its own
+`control_plane.store_dir` and its own `tasks.store_dir`: the task store holds a lease of its own
+too, so a shared one refuses the second gateway once the logs no longer do.
+Do not delete the `.lock` file while a gateway runs: the running writer keeps its lock on the
+deleted file, so a new process would create and lock a fresh one and both would write.
+
 A restart where the supervisor starts the new process before the old one has exited waits for
 the lease for up to 10 seconds, then refuses; the wait is not configurable in 4.0. Stop the old
 gateway first when its shutdown can take longer. Replicas
