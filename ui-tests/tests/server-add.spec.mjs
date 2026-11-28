@@ -632,6 +632,18 @@ test.describe('X2 Override goes through the confirm (UI4.2)', () => {
     expect(seen.adds.filter((b) => 'allow_cleartext_credentials' in b)).toHaveLength(1);
   });
 
+  test('after a Cancel, and on Retry after a failed add, the plain add goes out without the flag', async ({ page }) => {
+    const seen = await toRefused(page, (b, n) => (n === 1 ? cleartext() : n === 2 ? { code: 500, body: { error: 'write failed' } } : created(b.name)));
+    await card(page).getByRole('button', { name: 'Send unencrypted anyway…' }).click();
+    await dialog(page).getByRole('button', { name: 'Cancel crm' }).click();
+    await field(page).fill(PLAIN);
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Add without a preview' }).click();
+    await card(page).getByRole('region', { name: 'Not confirmed' }).getByRole('button', { name: 'Retry' }).click();
+    await expect.poll(() => seen.adds.length).toBe(3);
+    expect(seen.adds.map((b) => 'allow_cleartext_credentials' in b)).toEqual([false, false, false]);
+  });
+
   test('a refusal inside the dialog shows the gateway\'s sentence; in progress first', async ({ page }) => {
     const hold = gate();
     await toRefused(page, (b, n) => (n === 1 ? cleartext() : { code: 422, body: { error: 'that host is not allowed' }, hold: hold.shut }));
