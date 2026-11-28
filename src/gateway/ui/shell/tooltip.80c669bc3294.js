@@ -13,7 +13,7 @@
 // on hover and focus again. Building and filling markup is not controller work
 // and goes on after that.
 
-const COPY_URL = '/ui/assets/tips.7bd78d375214.json';
+const COPY_URL = '/ui/assets/tips.d40823230cb5.json';
 
 // The stylesheet comes with the module, not with the document: only pages that draw a
 // tooltip need it, and a render-blocking link would hold up every page's first paint.

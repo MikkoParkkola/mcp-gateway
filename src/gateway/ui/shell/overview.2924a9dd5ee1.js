@@ -11,8 +11,8 @@
 // read: the first-run checklist, Needs you and Last actions. The 24 h calls chart
 // draws from the calls series and the markers with the shared chart module. The
 // flow map is its own slice; every panel takes its place through place().
-import { register, go, el as h } from '/ui/assets/shell.e63f1a7eeb83.js';
-import { chart, spark } from '/ui/assets/chart.5c35e063333e.js';
+import { register, go, el as h } from '/ui/assets/shell.879d1aa460b2.js';
+import { chart, spark } from '/ui/assets/chart.e032787e99a7.js';
 
 const NOT_YET = 'Not available yet';
 const CLOCK = "Not available right now: the counter clock can't be read";
