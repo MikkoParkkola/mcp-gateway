@@ -86,11 +86,15 @@ fn spent(state: &State, enforcer: &BudgetEnforcer, key: &str, usd: f64) {
 }
 
 async fn costs(state: &State) -> Value {
+    admin_get(state, "/ui/api/costs").await
+}
+
+async fn admin_get(state: &State, uri: &str) -> Value {
     let response = create_router(Arc::clone(state))
         .oneshot(
             Request::builder()
                 .method("GET")
-                .uri("/ui/api/costs")
+                .uri(uri)
                 .header("authorization", "Bearer scoped-key")
                 .body(Body::empty())
                 .unwrap(),
@@ -246,4 +250,57 @@ async fn s2f_unordered_rules_are_said_in_the_route_answer() {
     assert_eq!(costs(&state).await["alert_rules"], "unordered");
     reload(&state, governance(&[("ci", 25.0)], default_rules()));
     assert!(costs(&state).await.get("alert_rules").is_none());
+}
+
+/// The keys the overview's needs-you list warns about at its limit.
+async fn overview_warned(state: &State) -> Vec<String> {
+    let body = admin_get(state, "/ui/api/overview").await;
+    body["needs_you"]["rows"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no needs-you rows: {body}"))
+        .iter()
+        .filter(|row| row["kind"] == "limit_80")
+        .filter_map(|row| row["subject"].as_str().map(str::to_owned))
+        .collect()
+}
+
+/// The Costs list warns at the overview's own threshold.
+/// The answer's `warn_at_percent` is the lowest Notify rule's percent, 80
+/// with no Notify rule, and null with no enforcer; the overview warns at the
+/// same percent from the same rules.
+#[tokio::test]
+async fn s14_warn_at_percent_is_the_overviews_threshold() {
+    let _clock = test_clock::at_secs(NOW);
+    let limits = [("near", 10.0), ("low", 10.0), ("high", 10.0)];
+    let at_70 = vec![rule(70, AlertAction::Notify), rule(100, AlertAction::Block)];
+    let (state, _dir, enforcer) = governed(governance(&limits, at_70)).await;
+    spent(&state, &enforcer, "near", 7.2);
+    spent(&state, &enforcer, "low", 6.9);
+    spent(&state, &enforcer, "high", 8.5);
+    assert_eq!(costs(&state).await["warn_at_percent"], json!(70.0));
+    assert_eq!(overview_warned(&state).await, ["key:high", "key:near"]);
+
+    reload(
+        &state,
+        governance(&limits, vec![rule(100, AlertAction::Block)]),
+    );
+    assert_eq!(costs(&state).await["warn_at_percent"], json!(80.0));
+    assert_eq!(overview_warned(&state).await, ["key:high"]);
+
+    let config = crate::config::Config {
+        cost_governance: governance(&limits, default_rules()),
+        ..crate::config::Config::default()
+    };
+    let (bare, _bare_dir) =
+        test_router_app_state_with_auth_and_config(&full_admin_auth_config(), config).await;
+    assert!(
+        bare.meta_mcp.budget_enforcer.is_none(),
+        "premise: no enforcer"
+    );
+    let body = costs(&bare).await;
+    assert!(
+        body.get("warn_at_percent").is_some(),
+        "the member is sent: {body}"
+    );
+    assert_eq!(body["warn_at_percent"], Value::Null, "{body}");
 }

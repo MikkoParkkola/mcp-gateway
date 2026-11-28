@@ -1,0 +1,19 @@
+/* SPDX-FileCopyrightText: 2026 Mikko Parkkola */
+/* SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 */
+/* Costs › Status. Tokens and components (.tk, table.t) are the shell's; this file only lays out the key list. */
+
+.cost-card { margin-bottom: var(--space-4); }
+.cost-table td { vertical-align: top; }
+.cost-table td:first-child { overflow-wrap: anywhere; }
+.cost-warn { color: var(--color-status-warning-fg); white-space: nowrap; }
+.cost-blocked { margin: var(--space-0-5) 0 0; color: var(--color-status-danger-fg); }
+.cost-unordered { margin: 0 0 var(--space-2); }
+
+/* A phone (the shell's own breakpoint): one card per key, each value under its column's name. */
+@media (max-width: 640px) {
+  .cost-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .cost-table, .cost-table tbody, .cost-table tr, .cost-table td { display: block; width: 100%; }
+  .cost-table tr { padding: var(--space-2) 0; border-bottom: 1px solid var(--color-border-subtle); }
+  .cost-table td { height: auto; padding: var(--space-0-5) 0; }
+  .cost-table td::before { content: attr(data-label); display: block; color: var(--color-text-secondary); font: var(--type-caption); }
+}
