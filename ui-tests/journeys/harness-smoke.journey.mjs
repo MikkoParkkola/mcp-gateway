@@ -4,23 +4,18 @@
 // Row K1, the harness smoke (not J1): through the UI only, sign in with the seed's admin key, open Tools, try
 // tide_table, and see its answer; then two reads outside the browser prove the call really happened: the gateway's
 // Activity row carrying the trace id this call's own response returned, and the stub server's own log.
-import { test, expect, activityRowFor } from './gateway.mjs';
+import { test, expect, activityRowFor, signIn } from './gateway.mjs';
 
 test.use({ seed: 'populated' });
 
 test('harness smoke: try a tool', async ({ page, gw }) => {
-  // The 4.0 shell lives under /ui/<route> (routes.rs UI_SHELL); /ui itself still serves the classic page until the
-  // cutover. A page without the shell's sign-in fails here, by name, not at a fill that waits out the test.
-  await page.goto('/ui/overview/status');
-  await page.locator('#signin').waitFor({ state: 'visible', timeout: 15_000 });
-  await page.locator('#signin-form input').first().fill(gw.adminKey);
-  await page.getByRole('button', { name: 'Sign in' }).click();
+  await signIn(page, gw.adminKey);
   await page.getByRole('link', { name: 'Tools' }).first().click();
   // Tools opens on its Status tab; trying a tool is on the Actions tab (/ui/tools/actions).
   await page.getByRole('navigation', { name: 'Tabs' }).getByRole('link', { name: 'Actions' }).click();
 
   const picker = page.locator('#try-tool');
-  // Both stubs serve tide_table; the option label is "<tool> <server> · ...", so pick tide's own.
+  // Each stub's tools carry its server's name; the option label is "<tool> <server> · ...", so pick tide's own.
   const label = await picker.locator('option').filter({ hasText: /^tide_table tide · / }).textContent();
   await picker.selectOption({ label: label.trim() });
   const tideCalls = async () => (await gw.stubLog('tide')).split('\n')
