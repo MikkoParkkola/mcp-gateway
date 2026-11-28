@@ -30,6 +30,8 @@ test('C9 Tools draws its Status note, and Run as is no longer pending (it moved 
   const copy = readCopy();
   expect(copy._pending.tools).toBeUndefined();
   expect(copy._pending_later['tools.actions.run-as']).toBeUndefined();
+  expect(copy['tools.actions.run-as']).toBeUndefined();
+  expect(copy._pending_rows).not.toContain('tools.actions.run-as');
 });
 
 test('S1 the tooltip module imports nothing from the shell', () => {
