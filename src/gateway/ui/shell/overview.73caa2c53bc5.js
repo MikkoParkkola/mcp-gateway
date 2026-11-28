@@ -443,6 +443,15 @@ function fillChart(section, data, read) {
 /** Rows drawn per column: the motion budget's fixed count, so an update's cost never grows with the fleet. */
 const AGENT_ROWS = 6;
 const SERVER_ROWS = 11;
+/**
+ * Write an element's words. When it holds one text node, that node's characters change in place: a
+ * smaller mutation than textContent, which drops the node and makes a new one on every write.
+ */
+function write(el, v) {
+  const t = el.firstChild;
+  if (t && t.nodeType === Node.TEXT_NODE && !t.nextSibling) t.data = v;
+  else el.textContent = v;
+}
 /** The second line of a caller by the kind before its colon; a kind not listed shows none. */
 const CALLER_KIND = { key: 'API key', oidc: 'OIDC sign-in', session: 'MCP session', token: 'Token' };
 /** Callers with no colon in their label: their name in words. */
@@ -572,7 +581,7 @@ function fillDot(nodes, row, y, drawLines) {
   const dw = nodes.dw ?? (nodes.dw = {});
   const put = (name, v, write) => { if (dw[name] !== v) { write(v); dw[name] = v; } };
   if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
-  put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
+  put('words', `${n(row.blocks)} blocked`, (v) => { write(nodes.dot, v); });
   if (drawLines) put('at', `${(y + 50) / 2}%`, () => {
     nodes.dot.style.setProperty('--at-x', `${((EDGE.agents + 50) / 2 / CALLER_COLUMN) * 100}%`);
     nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
@@ -625,7 +634,7 @@ function fillRow(nodes, row, side, i, count, max, drawLines) {
   set('name', row.name, (v) => { nodes.name.textContent = v; nodes.name.title = v; });
   if (side === 'servers' && !row.fold) set('state', row.state, (v) => nodes.sub.replaceChildren(serverBadge(v, { plain: true })));
   else set('sub', row.sub, (v) => { was.state = undefined; nodes.sub.textContent = v; });
-  set('calls', row.calls === null ? '' : n(row.calls), (v) => { nodes.calls.textContent = v; });
+  set('calls', row.calls === null ? '' : n(row.calls), (v) => { write(nodes.calls, v); });
   const y = ((i + 0.5) / count) * 100;
   const x0 = side === 'agents' ? 0 : 100;
   const mid = (EDGE[side] + 50) / 2;
@@ -660,7 +669,7 @@ export function updateMap(root, model) {
   // Kept so a phone that widens draws the lines it skipped from the last model.
   state.model = model;
   // Each element is written only when its own value changed: a same-value write still costs a relayout.
-  const text = (el, v) => { if (el.textContent !== v) el.textContent = v; };
+  const text = (el, v) => { if (el.textContent !== v) write(el, v); };
   const hide = (el, v) => { if (el.hidden !== v) el.hidden = v; };
   text(state.empty, model.empty ?? '');
   hide(state.empty, !model.empty);
