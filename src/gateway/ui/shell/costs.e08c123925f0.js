@@ -107,6 +107,8 @@ function ordered(rows, dated) {
   });
 }
 
+/** Said above the table when the gateway's alert rules are not in severity order (wording confirmed by review). */
+const UNORDERED = 'Your alert rules are out of severity order, so a key shown as blocking can still have some calls let through. Give the higher percent the stricter action.';
 const COLUMNS = ['Key', 'Today', '7 days', '30 days', 'At the limit'];
 
 const cell = (label, ...content) => h('td', { 'data-label': label }, ...content);
@@ -146,7 +148,7 @@ async function statusTab(body, ctx) {
     h('caption', { class: 'sr-only' }, 'Spend by key against its daily limit'),
     h('thead', {}, h('tr', {}, ...COLUMNS.map((c) => h('th', { scope: 'col' }, c)))),
     h('tbody', {}, ...ordered(rows, dated).map((row) => keyRow(row, answer, nowSecs, dated))));
-  // The line for alert rules that are not ordered by severity waits for its sentence's confirm.
+  if (answer.alert_rules === 'unordered') body.append(h('p', { class: 'cost-unordered' }, UNORDERED));
   body.append(h('section', { class: 'tk cost-card' }, table));
 }
 
