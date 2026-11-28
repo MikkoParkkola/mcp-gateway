@@ -188,6 +188,10 @@ fn stamp(line: &str) -> &str {
 
 /// Now, stamped as both gateways stamp their log lines (RFC 3339 UTC with
 /// microseconds), so the row's own instants order against theirs as text.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock: the stamps must match the gateways' own log clock"
+)]
 fn now_stamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
 }
