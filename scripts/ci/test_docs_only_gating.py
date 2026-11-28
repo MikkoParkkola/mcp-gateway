@@ -711,6 +711,11 @@ def main() -> int:
     on = workflow.get(True) or workflow.get("on") or {}
     if RELEASE_LINE not in (on.get("push") or {}).get("branches", []):
         errors.append(f"ci.yml does not run on a push to {RELEASE_LINE}")
+    errors += pr_trigger_errors(on)
+    for label, types in (("no types list", None), ("ready_for_review dropped", ["opened", "synchronize", "reopened"]),
+                         ("an extra type", ["opened", "synchronize", "reopened", "ready_for_review", "edited"])):
+        if not pr_trigger_errors({"pull_request": {} if types is None else {"types": types}}):
+            errors.append(f"pull_request trigger self-test: '{label}' was not caught")
     # A newer release-line tip cancels the push runs of older tips (lead decision 2026-11-09,
     # superseding the post-merge rule "every merge keeps its own run, so a red one names its merge
     # commit"):
@@ -724,6 +729,15 @@ def main() -> int:
     if not errors:
         print(f"docs-gating: {len(cases)} scope outcomes route {len(SKIPPED)} skippable and {len(KEPT)} kept jobs as expected")
     return 1 if errors else 0
+
+
+def pr_trigger_errors(on: dict) -> list[str]:
+    """Marking a draft ready for review must start a CI run at the same head: without the type, undrafting a PR
+    starts nothing and the full set waits for the next push. The list stays exactly GitHub's three default types plus
+    this one, so no other activity (an edited title, a label) starts a run."""
+    want = ["opened", "synchronize", "reopened", "ready_for_review"]
+    got = (on.get("pull_request") or {}).get("types")
+    return [] if got == want else [f"ci.yml pull_request types are {got!r}, expected {want!r}"]
 
 
 if __name__ == "__main__":
