@@ -419,8 +419,9 @@ test('L3 a failed re-read says so under the map, and the next good one clears it
   live.status = 500;
   await readAgain(page, live, 2);
   await expect(map(page).locator('.ov-map-stale')).toHaveText('Not updated since 14:00');
-  // Said when it happens, through the shell's announcer (a page makes no live region of its own).
-  await expect.poll(async () => { await page.clock.runFor(600); return announced(page); }, 'announced').toContain('Not updated since 14:00');
+  // Said when it happens, through the shell's announcer (a page makes no live region of its own; the
+  // announcer ends a sentence with a full stop).
+  await expect.poll(async () => { await page.clock.runFor(600); return announced(page); }, 'announced').toContain('Not updated since 14:00.');
   await expect(map(page).locator('.ov-map-stale')).toBeVisible();
   await expect(callsOf(agentRows(page))).toHaveText(['120', '80', '40']);
   live.status = 0;
