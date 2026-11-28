@@ -62,9 +62,29 @@ fn a8_an_unlocked_item_is_searched_then_looked_up() {
     );
     assert_eq!(
         lines[1],
-        format!("secret-tool lookup service {NAME}"),
+        format!("secret-tool lookup -- service {NAME}"),
         "{log}"
     );
+}
+
+/// A name may start with `-` (ADR-028's grammar allows it). secret-tool must
+/// read it as the `service` value, not as an option: `--help` there would make
+/// `lookup` print its help text, which `read` would hand back as the secret.
+#[test]
+fn f887_a_leading_dash_name_is_looked_up_as_a_value() {
+    for name in ["--help", "-x"] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let keychain = keychain(dir.path(), UNLOCKED, "printf 'stored'");
+        let bytes = keychain.read(name).expect("an unlocked item reads");
+        assert_eq!(bytes.as_bytes(), b"stored", "{name}");
+        let log = calls(dir.path());
+        let last = log.lines().last().unwrap_or_default();
+        assert_eq!(
+            last,
+            format!("secret-tool lookup -- service {name}"),
+            "{name}: {log}"
+        );
+    }
 }
 
 #[test]

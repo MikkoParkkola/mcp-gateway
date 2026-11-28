@@ -28,6 +28,20 @@ const BOUND: Duration = Duration::from_secs(2);
 /// The largest value the Secret Service store takes (ADR-028 rule 2).
 const LIMIT: usize = 8_192;
 
+/// The one refusal for a name outside ADR-028's grammar. It never repeats the
+/// name: a mistyped literal secret would otherwise reach a log.
+const INVALID_NAME: &str = "the keychain name is not valid (1-128 of A-Z, a-z, 0-9, '.', '_', '-')";
+
+/// A name in ADR-028's grammar, checked by each entry point before anything
+/// is spawned: a quote could end the `GVariant` string `search` builds.
+fn checked(name: &str) -> Result<(), KeychainError> {
+    if super::secret_ref::is_keychain_name(name) {
+        Ok(())
+    } else {
+        Err(KeychainError::Unavailable(INVALID_NAME.into()))
+    }
+}
+
 /// The Secret Service through its command-line tools.
 pub(crate) struct LinuxKeychain {
     gdbus: Option<PathBuf>,
@@ -57,9 +71,10 @@ impl LinuxKeychain {
 
     /// `(unlocked, locked)` item counts for `name`, from `SearchItems`.
     fn search(&self, name: &str) -> Result<(usize, usize), KeychainError> {
+        checked(name)?;
         let gdbus = self.gdbus()?;
-        // The name is ADR-028's grammar, so it needs no quoting beyond the
-        // GVariant string's own quotes.
+        // Checked above against ADR-028's grammar, so the name needs no quoting
+        // beyond the GVariant string's own quotes.
         // `SearchItems` takes `a{ss}`: a plain string value, not a variant.
         let attributes = format!("{{'service': '{name}'}}");
         let output = run(
@@ -152,6 +167,9 @@ impl SecretStore for LinuxKeychain {
     }
 
     fn create(&self, name: &str, value: &[u8]) -> Result<String, StoreError> {
+        if checked(name).is_err() {
+            return Err(StoreError::Failed(INVALID_NAME.into()));
+        }
         let secret_tool = self.secret_tool().map_err(store_error)?;
         self.default_unlocked().map_err(store_error)?;
         // `secret-tool store` replaces an item with the same attributes, so
@@ -162,7 +180,9 @@ impl SecretStore for LinuxKeychain {
         let label = format!("--label={name}");
         let output = run(
             secret_tool,
-            &["store", &label, "service", name],
+            // "--": a name may start with `-`; after it, secret-tool reads the
+            // name as the attribute value, never as an option.
+            &["store", &label, "--", "service", name],
             Some(value),
             self.bound,
         )
@@ -174,6 +194,9 @@ impl SecretStore for LinuxKeychain {
     }
 
     fn delete(&self, name: &str) -> Result<(), StoreError> {
+        if checked(name).is_err() {
+            return Err(StoreError::Failed(INVALID_NAME.into()));
+        }
         match self.search(name).map_err(store_error)? {
             (0, 0) => return Ok(()),
             // Any locked match could make `clear` ask to unlock: refused.
@@ -187,8 +210,13 @@ impl SecretStore for LinuxKeychain {
         let secret_tool = self.secret_tool().map_err(store_error)?;
         // The same gate as every other spawn.
         self.default_unlocked().map_err(store_error)?;
-        let output =
-            run(secret_tool, &["clear", "service", name], None, self.bound).map_err(store_error)?;
+        let output = run(
+            secret_tool,
+            &["clear", "--", "service", name],
+            None,
+            self.bound,
+        )
+        .map_err(store_error)?;
         // Durable means gone: the search, not the exit status, decides.
         match (output.success, self.search(name).map_err(store_error)?) {
             (true, (0, 0)) => Ok(()),
@@ -223,13 +251,19 @@ fn store_error(error: KeychainError) -> StoreError {
 
 impl KeychainRead for LinuxKeychain {
     fn read(&self, name: &str) -> Result<WipedBytes, KeychainError> {
+        checked(name)?;
         match self.search(name)? {
             (0, 0) => return Err(KeychainError::Missing),
             (0, _) => return Err(KeychainError::Locked),
             _ => {}
         }
         let secret_tool = self.secret_tool()?;
-        let output = run(secret_tool, &["lookup", "service", name], None, self.bound)?;
+        let output = run(
+            secret_tool,
+            &["lookup", "--", "service", name],
+            None,
+            self.bound,
+        )?;
         // An exit status cannot tell "not found" from a bus failure, and the
         // search already said the item exists, so a failure here is the store's.
         if !output.success {
