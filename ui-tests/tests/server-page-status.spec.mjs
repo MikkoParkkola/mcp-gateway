@@ -116,7 +116,7 @@ test.describe('T2 the page follows the live status', () => {
     await fakeServerGateway(page, { status: fullView(entry('a b', 'running')) });
     await open(page, '/ui/servers/a%20b/status');
     await expect(page.locator('a[href="/ui/servers/a%20b/actions"]').first()).toBeVisible();
-    await expect(page.locator('a[href="/ui/servers/a%20b/settings"]')).toHaveCount(0);
+    await expect(page.locator('a[href="/ui/servers/a%20b/settings"]').first()).toBeVisible();
   });
   test('T2a a status event redraws from its own body, with no new read', async ({ page }) => {
     const seen = await fakeServerGateway(page, { status: fullView(entry('svc', 'paused', { running: false })) });

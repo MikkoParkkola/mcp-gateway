@@ -84,7 +84,7 @@ test.describe('not-built pages', () => {
   });
 
   test('F5 the classic link leaves the shell', async ({ page }) => {
-    await page.goto('/ui/servers/status');
+    await page.goto('/ui/costs/status');
     await shellReady(page);
     await page.locator('#content a[href="/ui/classic"]').click();
     await expect(page).toHaveURL('/ui/classic');

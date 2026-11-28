@@ -9,9 +9,10 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.23eb92bf6df3.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.3dea6c02b527.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.8abcae2314bd.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.a71a1077ec7f.js';
+import { addCard } from '/ui/assets/server-add.2796e5d82a48.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -281,7 +282,7 @@ function statusTab(body, ctx) {
     ctx.show(null);
     const parts = [];
     if (!servers.length) {
-      const add = el('a', { class: 'btn', href: '/ui/classic' }, 'Add a server');
+      const add = el('a', { class: 'btn', href: '/ui/servers/settings' }, 'Add a server');
       parts.push(ctx.state('empty', { title: 'No servers behind the gateway yet', body: 'Add one and it shows here with its state.', action: add }));
     }
     // Turned-off servers sit apart: never counted as answering, never a thing to look at.
@@ -353,7 +354,7 @@ register('servers', {
   tabs: {
     status: tab(serverStatus, statusTab),
     actions: tab(serverActions, (body, ctx) => body.append(ctx.state('not-built'))),
-    settings: null,
+    settings: tab((body, ctx) => body.append(ctx.state('not-built')), addCard),
   },
   entries: [],
 });

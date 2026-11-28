@@ -73,7 +73,7 @@ test.describe('source rows', () => {
   // prefix kept in a variable and joined to a name later cannot pass where the patterns above look.
   const FIXED = {
     page: ['/ui/api/keys', '/ui/api/status', '/ui/servers/status'],
-    servers: ['/ui/api/discovery', '/ui/api/registry', '/ui/api/status', '/ui/classic'],
+    servers: ['/ui/api/discovery', '/ui/api/registry', '/ui/api/status', '/ui/servers/settings'],
   };
   const ASSET = /^\/ui\/assets\/[a-z-]+\.[0-9a-f]{12}\.js$/;
   const uiStrings = (text) => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')

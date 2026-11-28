@@ -38,3 +38,17 @@
 .sp-card .acts { display: flex; flex-wrap: wrap; gap: var(--space-2, .5rem); }
 .sp-warn { color: var(--color-status-warning-fg); }
 .sp-error { color: var(--color-status-danger-fg); }
+/* "Add a server" reuses .sp, .sp-card and .sp-facts; these are its own parts. Narrow screens give each button the full width. */
+.add-server h2 { margin: 0; font-size: 1rem; }
+.add-server .segmented button { min-height: 2.25rem; padding: 0 .875rem; }
+.add-server input[type="text"], .add-server input[type="password"] { width: 100%; box-sizing: border-box; }
+.add-row { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-1, .25rem) var(--space-3, .75rem); align-items: center; }
+.add-row .add-err { grid-column: 1 / -1; }
+.add-err { color: var(--color-status-danger-fg); margin: 0; }
+.add-warn { color: var(--color-status-warning-fg); margin: 0; }
+.add-out { color: var(--color-text-secondary); }
+.add-panel h3 { margin: 0; font-size: .875rem; letter-spacing: .04em; }
+@media (max-width: 600px) {
+  .add-server .acts .btn { width: 100%; }
+  .add-row { grid-template-columns: minmax(0, 1fr); }
+}

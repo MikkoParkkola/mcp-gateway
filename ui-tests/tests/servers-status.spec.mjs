@@ -146,7 +146,7 @@ test.describe('precedence: one screen per status answer', () => {
     await openScreen(page);
     const empty = content(page).locator('[data-state="empty"]');
     await expect(empty).toBeVisible();
-    await expect(empty.getByRole('link', { name: 'Add a server' })).toHaveAttribute('href', '/ui/classic');
+    await expect(empty.getByRole('link', { name: 'Add a server' })).toHaveAttribute('href', '/ui/servers/settings');
     await expect(statusRow(block(page, 'Not behind the gateway'), 'stray claude_desktop')).toBeVisible();
     expect(reads).toEqual({ status: 1, registry: 1, discovery: 1 });
   });
@@ -614,7 +614,7 @@ const DRAWN_TIPS = ['servers.status.answering-24-grouped-by-the', 'servers.statu
 
 test('the status tab draws its three tips; no servers.status copy waits as unbuilt', () => {
   const scan = scanScreens(readScreens());
-  expect(scan.tabs.servers).toEqual({ status: true, actions: true, settings: false });
+  expect(scan.tabs.servers).toEqual({ status: true, actions: true, settings: true });
   for (const id of DRAWN_TIPS) expect(scan.drawn.has(id), id).toBe(true);
   const copy = readCopy();
   expect((copy._pending.servers ?? []).filter((id) => id.startsWith('servers.status.'))).toEqual([]);
