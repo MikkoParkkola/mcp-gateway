@@ -362,3 +362,31 @@ async fn p4_3_an_anonymous_cancel_is_dropped_and_the_call_records_once() {
     };
     assert_eq!(record["outcome"], "ok", "{record}");
 }
+
+/// The record's response hash is taken only when a log will write it: a
+/// delivered `/mcp` call takes none with no log, and one with a log.
+#[tokio::test]
+async fn a_delivered_meta_call_hashes_its_response_only_with_a_log() {
+    use crate::gateway::meta_mcp::invoke::audit::RESPONSE_HASHES;
+    let mut taken = Vec::new();
+    for log in [Log::Off, Log::On] {
+        let fx = fixture(Setup {
+            log,
+            ..Setup::default()
+        })
+        .await;
+        let before = RESPONSE_HASHES.with(std::cell::Cell::get);
+        let call = meta_invoke("alpha", "t", &json!({}));
+        let (_, answer) = post_to(&fx, "/mcp", &call, &Caller::Anonymous).await;
+        assert!(
+            answer.get("result").is_some(),
+            "premise: delivered: {answer}"
+        );
+        taken.push(RESPONSE_HASHES.with(std::cell::Cell::get) - before);
+    }
+    assert_eq!(
+        taken,
+        [0, 1],
+        "response hashes taken with the log off, then on"
+    );
+}

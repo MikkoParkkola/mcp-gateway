@@ -14,6 +14,20 @@ use crate::security::audit::{
 use crate::security::transparency_log::CorrelationKey;
 use crate::{Error, Result};
 
+#[cfg(test)]
+thread_local! {
+    /// How many response hashes the record builder took on this thread: a
+    /// row pins that a call with no log takes none.
+    pub(crate) static RESPONSE_HASHES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The delivered value's hash for its record; counted in tests.
+fn response_hash(delivered: &Value) -> String {
+    #[cfg(test)]
+    RESPONSE_HASHES.with(|taken| taken.set(taken.get() + 1));
+    sha256_of(delivered)
+}
+
 /// What a delivered call notes about its reads once its record is written:
 /// the dispatch's reading and whether a backend answered. `None` notes nothing.
 pub(crate) type DeliveredReading =
@@ -143,7 +157,7 @@ impl MetaMcp {
                 .transparency_logger
                 .as_ref()
                 .and(result.as_ref().ok())
-                .map(sha256_of),
+                .map(response_hash),
             delivered: notes.cached.and(result.as_ref().ok()).cloned(),
             succeeded: result.is_ok(),
             args: args.clone(),

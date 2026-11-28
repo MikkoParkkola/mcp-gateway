@@ -145,6 +145,7 @@ src/gateway/meta_mcp/invoke/audit_record.rs	settle_record	http_invoke_tiny	on th
 src/gateway/meta_mcp/invoke/audit_record.rs	note_reading	http_invoke_tiny	on the HTTP gateway_invoke path: a delivered call notes its reading
 src/gateway/meta_mcp/invoke/audit_record.rs	unwritten	http_invoke_tiny	on the HTTP gateway_invoke path: the no-log record the harness takes
 src/gateway/meta_mcp/invoke/audit_record.rs	write_record	-	on-path, untimed: the inline write of a call with no open audit owner (stdio, nested steps); the timed HTTP call commits through its owner
+src/gateway/meta_mcp/invoke/audit_record.rs	response_hash	-	on-path, untimed: a delivered value's record hash, taken only with a transparency logger
 src/gateway/meta_mcp/invoke/audit.rs	note_response_refused	-	on-path, untimed: only when the response firewall refuses an answer; the timed answers pass
 src/gateway/meta_mcp/invoke/audit.rs	refused_by_answer_scan	-	on-path, untimed: only for an answer the response firewall refused
 src/gateway/meta_mcp/invoke/audit.rs	response_refused	-	on-path, untimed: read by the direct writer only, off the timed meta path

@@ -54,6 +54,8 @@ pub(crate) enum SettlementJoin {
 
 #[path = "audit_record.rs"]
 mod record;
+#[cfg(test)]
+pub(crate) use record::RESPONSE_HASHES;
 pub(crate) use record::{AnswerVerdict, InvocationRecord};
 
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
