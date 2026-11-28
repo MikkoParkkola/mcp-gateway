@@ -128,7 +128,7 @@ test.describe('N1 name and kind are worked out and can be changed', () => {
     const seen = await addPage(page, { preview: () => described() });
     await field(page).fill(HTTPS);
     await card(page).getByRole('button', { name: 'Change' }).click();
-    await card(page).getByRole('textbox', { name: 'Name' }).fill('crm-prod');
+    await card(page).getByRole('textbox', { name: 'Name', exact: true }).fill('crm-prod');
     await previewButton(page).click();
     await expect.poll(() => seen.previews.length).toBe(1);
     expect(seen.previews[0].name).toBe('crm-prod');
@@ -148,11 +148,11 @@ test.describe('N1 name and kind are worked out and can be changed', () => {
     await addPage(page, { preview: (body) => ('confirm' in body ? listed : described()) });
     await field(page).fill(HTTPS);
     await card(page).getByRole('button', { name: 'Change' }).click();
-    await card(page).getByRole('textbox', { name: 'Name' }).fill('crm-prod');
+    await card(page).getByRole('textbox', { name: 'Name', exact: true }).fill('crm-prod');
     await previewButton(page).click();
     await card(page).getByRole('button', { name: 'Start once' }).click();
     await expect(card(page).getByText('Started once: 0 tools took 0.9 s')).toBeVisible();
-    await expect(card(page).getByRole('textbox', { name: 'Name' })).toHaveValue('crm-prod');
+    await expect(card(page).getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('crm-prod');
   });
 });
 
@@ -385,7 +385,7 @@ test.describe('K4 a changed input throws the preview away', () => {
     await previewButton(page).click();
     await card(page).getByRole('button', { name: 'Change' }).click();
     await expect(card(page).getByRole('region', { name: 'Nothing has run yet' })).toBeVisible();
-    await card(page).getByRole('textbox', { name: 'Name' }).fill('crm-two');
+    await card(page).getByRole('textbox', { name: 'Name', exact: true }).fill('crm-two');
     await expect(card(page).getByRole('region', { name: 'Nothing has run yet' })).toHaveCount(0);
   });
 
@@ -430,7 +430,7 @@ test.describe('D1 the add sends the reading tools and lands with the notice (UI4
     await recordAnnouncements(page);
     const seen = await toListed(page, (b) => created(b.name));
     await card(page).getByRole('button', { name: 'Change' }).click();
-    await card(page).getByRole('textbox', { name: 'Name' }).fill('crm/a b');
+    await card(page).getByRole('textbox', { name: 'Name', exact: true }).fill('crm/a b');
     await previewButton(page).click();
     await card(page).getByRole('button', { name: 'Start once' }).click();
     await card(page).getByRole('button', { name: 'Add crm/a b with 1 tool' }).click();
@@ -460,7 +460,7 @@ test.describe('D2 D3 a refused or unconfirmed add', () => {
     await toListed(page, () => ({ code: 409, body: { error: "Backend 'crm' already exists" } }));
     await card(page).getByRole('button', { name: 'Add crm with 1 tool' }).click();
     await expect(card(page)).toContainText("Backend 'crm' already exists");
-    await expect(card(page).getByRole('textbox', { name: 'Name' })).toBeFocused();
+    await expect(card(page).getByRole('textbox', { name: 'Name', exact: true })).toBeFocused();
   });
 
   for (const [label, answer] of [['a 500', { code: 500, body: { error: 'write failed' } }], ['a dropped connection', { drop: true }]]) {

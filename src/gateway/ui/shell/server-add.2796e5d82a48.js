@@ -138,7 +138,13 @@ export function addCard(body, ctx) {
     nameLine.hidden = !st.name;
   };
 
-  const drawLegend = () => { legend.textContent = kind() === 'url' ? 'Headers' : 'Environment variables'; };
+  // Row labels follow the kind too, so no row input shares the server's "Name" (one accessible name each).
+  const rowWords = () => (kind() === 'url' ? ['Header name', 'Header value'] : ['Variable name', 'Variable value']);
+  const drawLegend = () => {
+    legend.textContent = kind() === 'url' ? 'Headers' : 'Environment variables';
+    const [n, v] = rowWords();
+    for (const r of rows) { r.nameLabel.textContent = n; r.valueLabel.textContent = v; }
+  };
   const newRow = () => {
     const n = rows.length + 1;
     const r = {
@@ -146,8 +152,10 @@ export function addCard(body, ctx) {
       value: el('input', { type: 'password', id: `${uid}-r${n}-value`, autocomplete: 'off' }),
       err: el('p', { class: 'add-err', id: `${uid}-r${n}-err`, hidden: true }),
     };
-    r.node = el('div', { class: 'add-row' },
-      el('label', { for: r.name.id }, 'Name'), r.name, el('label', { for: r.value.id }, 'Value'), r.value, r.err);
+    const [nameWord, valueWord] = rowWords();
+    r.nameLabel = el('label', { for: r.name.id }, nameWord);
+    r.valueLabel = el('label', { for: r.value.id }, valueWord);
+    r.node = el('div', { class: 'add-row' }, r.nameLabel, r.name, r.valueLabel, r.value, r.err);
     r.name.addEventListener('input', changed);
     r.value.addEventListener('input', changed);
     rows.push(r);
