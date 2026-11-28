@@ -9,7 +9,7 @@
 // Its stylesheet, chart.css, is imported by each charting screen's own stylesheet,
 // which the shell loads before the screen draws: a sheet the module linked itself
 // would land after the first paint and move the chart under the reader.
-import { el as h } from '/ui/assets/shell.23eb92bf6df3.js';
+import { el as h } from '/ui/assets/shell.39368b8518c0.js';
 
 /** The unit's words, or a TypeError: a chart that cannot say what it counts is not drawn. */
 function unitWords(unit, who) {

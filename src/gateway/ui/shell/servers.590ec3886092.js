@@ -9,9 +9,9 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.23eb92bf6df3.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.39368b8518c0.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.8abcae2314bd.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.9b4238a734ca.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {

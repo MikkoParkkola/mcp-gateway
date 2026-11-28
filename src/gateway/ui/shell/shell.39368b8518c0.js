@@ -432,7 +432,7 @@ const REFUSAL_BODY_MS = 2000;
 
 /**
  * A JSON refusal's words: `{error: code, message: sentence}`, or a flat
- * `{error: sentence}`. `body` is the parsed JSON object, or null when there
+ * `{error: sentence}` (a flat `{error: code}` gives the code and no sentence). `body` is the parsed JSON object, or null when there
  * is none or it cannot be read. Any other body, or one that cannot be read,
  * gives no code or sentence.
  */
@@ -448,7 +448,11 @@ async function refusalWords(reply) {
     if (!body || typeof body !== 'object') return { body: null };
     const message = text(body.message);
     if (message) return { code: text(body.error), serverMessage: message, body };
-    return body.message === undefined ? { serverMessage: text(body.error), body } : { body };
+    if (body.message !== undefined) return { body };
+    // A flat `error` is a sentence only if it reads as one: a bare identifier (state_uncertain) is a
+    // code, never words for a person, so it is kept as the code and the screen's own sentence stands.
+    const flat = text(body.error);
+    return flat && /^[a-z][a-z0-9_]*$/.test(flat) ? { code: flat, body } : { serverMessage: flat, body };
   } catch (err) {
     if (err?.name === 'AbortError') throw err; // the caller's own cancel stays a cancel
     return { body: null }; // an unreadable refusal body: its status still says what happened
