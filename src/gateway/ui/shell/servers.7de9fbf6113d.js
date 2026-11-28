@@ -9,9 +9,9 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.23eb92bf6df3.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.e63f1a7eeb83.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.8abcae2314bd.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.ccd997dc44a2.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -94,7 +94,7 @@ function memberBadge(state) {
 // fails, the headings stand without their (i). Each caller names its id literally.
 let tipModule = null;
 function withTip(node, make) {
-  (tipModule ??= import('/ui/assets/tooltip.7d5614b14a79.js'))
+  (tipModule ??= import('/ui/assets/tooltip.4e3c719e630f.js'))
     .then((mod) => node.append(' ', make(mod.tip)), () => {});
   return node;
 }
