@@ -138,6 +138,10 @@ pub(crate) struct Entry {
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "independent facts the gates note about one call, not a mode"
+)]
 pub(crate) struct DispatchNotes {
     /// The code of a backend dispatch failure that `invoke_tool_traced`
     /// turned into an `isError` tool result.
@@ -747,7 +751,8 @@ impl MetaMcp {
         let Some(record) = super::audit_owner::defer(record) else {
             return result;
         };
-        self.write_record(record, AnswerVerdict::Delivered, caller.execution)
+        // Boxed: the record and its write would grow every dispatch future.
+        Box::pin(self.write_record(record, AnswerVerdict::Delivered, caller.execution))
             .await
             .and(result)
     }

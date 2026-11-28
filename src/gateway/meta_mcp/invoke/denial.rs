@@ -56,7 +56,7 @@ pub(super) fn count_meta_denial(
         // not one the reason table knows (a spend refusal's -32003 would read
         // as `backend_scope`), so it is `other`; the record names the check.
         Some(AuditOutcome::Denied(_)) => {
-            denied(DenialRoute::Meta, reason.unwrap_or(DenialReason::Other))
+            denied(DenialRoute::Meta, reason.unwrap_or(DenialReason::Other));
         }
         _ => {}
     }

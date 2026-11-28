@@ -266,21 +266,20 @@ pub(crate) async fn commit(lease: Option<&SyncLease>) -> crate::Result<()> {
         Arc::clone(&meta.audit_jobs).spawn(async move {
             let _ = sent.send(job.append_prepared(prepared).await);
         });
-        let landed = match received.await {
-            Ok(appended) => meta.settle_record(appended, lease),
+        let landed = if let Ok(appended) = received.await {
+            meta.settle_record(appended, lease)
+        } else {
             // The job ended with no verdict (it panicked, or no runtime ran
             // it): the record is not known to have landed, which each
             // failure policy treats as it treats a failed write.
-            Err(_) => {
-                tracing::error!("an invocation record's write ended with no verdict");
-                let closed = meta.transparency_logger.as_ref().is_some_and(|log| {
-                    log.failure_policy() == crate::security::audit::AuditFailurePolicy::FailClosed
-                });
-                if closed {
-                    Err(crate::Error::AuditUnavailable)
-                } else {
-                    Ok(())
-                }
+            tracing::error!("an invocation record's write ended with no verdict");
+            let closed = meta.transparency_logger.as_ref().is_some_and(|log| {
+                log.failure_policy() == crate::security::audit::AuditFailurePolicy::FailClosed
+            });
+            if closed {
+                Err(crate::Error::AuditUnavailable)
+            } else {
+                Ok(())
             }
         };
         written = written.and(landed);

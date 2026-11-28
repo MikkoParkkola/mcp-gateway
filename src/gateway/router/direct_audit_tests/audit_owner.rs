@@ -311,7 +311,7 @@ async fn p4_3_a_request_dropped_mid_append_still_lands_one_record() {
 
 /// P4 (3), the anonymous side of the client-cancel return: an anonymous
 /// `/mcp` caller has no owner to cancel by, so its `notifications/cancelled`
-/// is dropped (as specced: inflight_calls.rs, "A caller with neither is never
+/// is dropped (as specced: `inflight_calls.rs`, "A caller with neither is never
 /// registered"); the held call completes and writes its one record.
 #[tokio::test]
 async fn p4_3_an_anonymous_cancel_is_dropped_and_the_call_records_once() {

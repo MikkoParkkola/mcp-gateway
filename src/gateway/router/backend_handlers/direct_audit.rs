@@ -111,6 +111,15 @@ fn answered_outcome(status: StatusCode, body: &Value, notes: &DispatchNotes) -> 
     direct_outcome(status, body)
 }
 
+/// Whether a firewall refused this call's answer: noted at the scan, or (a
+/// stored replay) marked in the answer's body.
+fn firewall_refused(notes: &DispatchNotes, body: &Value) -> bool {
+    notes.response_refused()
+        || body
+            .get("error")
+            .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal)
+}
+
 /// What the inner handler learns that the read verdict needs (MIK-7116.MIN.2):
 /// the caller, formed only when the verdict is on, and the request params.
 /// Also the caller's name and the tool the delivery record names (MIK-7669),
@@ -380,10 +389,7 @@ pub(super) async fn record(
     let answered = outcome;
     let outcome = notes.outcome(outcome);
     // D4: counted before the log check, so auth off still counts.
-    let firewall = notes.response_refused()
-        || body
-            .get("error")
-            .is_some_and(crate::gateway::meta_mcp::invoke::dispatch_guards::is_firewall_refusal);
+    let firewall = firewall_refused(&notes, body);
     if let Some(reason) = crate::security::security_metrics::direct_denial(outcome, body, firewall)
     {
         use crate::security::security_metrics::{DenialReason, DenialRoute, denied};
