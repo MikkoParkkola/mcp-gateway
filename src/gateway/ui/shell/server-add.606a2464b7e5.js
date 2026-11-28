@@ -67,6 +67,17 @@ export const WORDS = {
   hint: 'The gateway works out the name, transport and secrets when the server first starts.',
   rowsNote: 'Values that look like secrets go to the secret store, never into gateway.yaml.',
   ranWithout: 'A preview never sends what you typed in these rows, so a server that needs those values can refuse it.',
+  /** Rule 7's confirm: what the button does, and the line while it runs. */
+  overrideVerb: 'Send the key in plain text to',
+  overrideProgress: (name) => `Adding ${name} without encryption…`,
+  /** Rule 7's consequences of sending a key unencrypted; the first names the destination. */
+  override: (host) => [
+    `Your key travels readable on every call to ${host}.`,
+    'Anyone who can watch the traffic between the gateway and that host can read the key.',
+    'To stop it later, you replace the key at the server itself.',
+    'The server keeps a warning on its row until its address uses https.',
+    'It is recorded in Activity under your name.',
+  ],
 };
 
 /** The by-field refusal, recognised from the parsed body only: `[{reason, field}]`, else null. */
@@ -378,6 +389,7 @@ export function addCard(body, ctx) {
     const refusals = fieldRefusals(err);
     if (refusals) return putRefusals(refusals);
     const s = err instanceof ApiError ? err.status : 0;
+    if (s === 422 && err.body?.error === 'cleartext_credentials') return refused(err.body, payload, count);
     if (s === 409) {
       say(nameErr, failWords(err));
       if (!st.manual) nameLine.querySelector('button')?.click();
@@ -388,6 +400,53 @@ export function addCard(body, ctx) {
     retry.addEventListener('click', () => add(withTools));
     st.phase = 'failed';
     panel('Not confirmed', el('p', {}, 'The gateway did not confirm the add.'), el('div', { class: 'acts' }, retry));
+  };
+
+  /** Rule 7: the add was refused for sending a key over plain http (or ws); the cause and fix are the gateway's. */
+  const refused = (body, payload, count) => {
+    st.phase = 'refused';
+    let u = null;
+    try { u = new URL(payload.url); } catch { /* the card still shows the cause */ }
+    const secure = u?.protocol === 'ws:' ? 'wss:' : 'https:';
+    const lines = [el('p', {}, typeof body.message === 'string' ? body.message : '')];
+    if (typeof body.fix === 'string' && body.fix) lines.push(el('p', {}, 'Fix: ', body.fix));
+    const tryBtn = el('button', { type: 'button', class: 'btn primary' }, `Try ${secure}//${u?.host ?? ''}`);
+    tryBtn.addEventListener('click', () => {
+      field.value = `${secure}//${st.text.trim().replace(/^[a-z]+:\/\//i, '')}`;
+      field.dispatchEvent(new Event('input')); // the same as typing it: the card returns to its input state
+      field.focus();
+    });
+    const override = el('button', { type: 'button', class: 'btn quiet' }, 'Send unencrypted anyway…');
+    override.addEventListener('click', () => sendAnyway(override, payload, count, u?.host ?? ''));
+    panel('Not added', ...lines, el('div', { class: 'acts' }, tryBtn),
+      el('p', { class: 't3' }, 'A test network you control? ', override));
+    acts.replaceChildren();
+  };
+
+  /** The Override: the add with `allow_cleartext_credentials`, only from inside the shell's confirm (rule 7). */
+  const sendAnyway = async (opener, payload, count, host) => {
+    const snapshot = { ...payload, allow_cleartext_credentials: true }; // the page behind the dialog is inert
+    const name = snapshot.name;
+    const epoch = sessionNow();
+    const res = await ctx.confirm({
+      opener, key: `add-cleartext:${name}`, verb: WORDS.overrideVerb, object: name,
+      progress: WORDS.overrideProgress(name), consequences: WORDS.override(host),
+      run: () => {
+        const stop = new AbortController();
+        const timer = setTimeout(() => stop.abort(), ADD_MS);
+        return ctx.api('/ui/api/backends', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(snapshot), signal: stop.signal })
+          .finally(() => clearTimeout(timer));
+      },
+      failed: (err) => (err instanceof ApiError && err.serverMessage && !fieldRefusals(err)
+        ? { reason: err.serverMessage, next: 'Check the address and the values, then try again.' } : null),
+      done: (v) => {
+        for (const r of rows) r.value.value = ''; // no typed value stays on the page
+        return { path: `/ui/servers/${encodeURIComponent(name)}/status`, notice: noticeOf(name, count, v) };
+      },
+    });
+    if (!sessionHolds(epoch)) return;
+    const refusals = res?.outcome === 'failed' ? fieldRefusals(res.error) : null;
+    if (refusals) putRefusals(refusals);
   };
 
   const addWithout = () => {
