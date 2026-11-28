@@ -46,7 +46,10 @@ CI_ONLY: dict[tuple[str, tuple[str, ...]], str] = {
     ("scripts/ci/ignored-integration-rows.sh", ()):
         "cargo: runs the ignored integration rows against the gateway the int-a shard built",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "lib-b", "--build", "<TMP>/parts")):
-        "cargo: builds and runs macOS lib test parts 1-4, one at a time",
+        "cargo: builds and runs macOS lib test parts 1 and 3, one at a time",
+    ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "lib-c", "--build", "<TMP>/parts")):
+        "cargo: builds and runs macOS lib test parts 2 and 4, one at a time",
+    ("scripts/ci/check_needs.py", ("macos-shards",)): "ci-env: reads NEEDS from ${{ toJSON(needs) }}",
     ("scripts/ci/shard_tests.py", ("run-prebuilt-parts", "macos", "int-lib", "--build", "<TMP>/parts")):
         "cargo: builds and runs macOS lib test part 5",
     ("scripts/ci/lib-parts.sh", ("export", "$PART", "<TMP>/lib-bin")): "cargo: builds one part of the Linux lib test binary",

@@ -246,6 +246,10 @@ const SECRET_FILE_POPULATION: &[(&str, &str)] = &[
         "the descendant sweep's Linux process table: reads /proc/<pid>/stat (pid, parent, state, start time); no file of the operator's, nothing secret",
     ),
     (
+        "src/transport/stdio_sweep_linux_pinned.rs",
+        "the descendant sweep's walk: opens /proc/<pid> as a directory and reads its task list, task stat and children files through it; no file of the operator's, nothing secret",
+    ),
+    (
         "src/gateway/meta_mcp/boundary_pins/packaged.rs",
         "cfg(test) helper reading the repo files the MIK-8387/MIK-8481 pins check (registry-ban clippy.toml, pre-push.sh, the CI workflow); no secret",
     ),

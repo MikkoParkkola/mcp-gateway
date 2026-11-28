@@ -57,8 +57,11 @@ fn an_unreadable_member_is_a_residual_counted_as_unknown() {
     assert!(fake.clock >= cfg().freeze_slice, "ran {:?}", fake.clock);
 }
 
-/// A complete listing still prunes: the dead are not signalled.
-/// Red if completeness is ignored and nothing is ever pruned.
+/// A complete listing still prunes, and nothing reaches the dead member.
+/// Freeze-first (design r5, Change 2) tries its Stop before any reading; the
+/// identity check refuses it, and the first reading prunes the member, so no
+/// Kill is ever tried on it. Red if completeness is ignored (nothing pruned)
+/// or a signal is delivered to the dead pid.
 #[test]
 fn a_complete_listing_still_prunes_the_dead() {
     let mut fake = Fake::new(&[(10, 1), (11, 10), (12, 11)]);
@@ -66,12 +69,58 @@ fn a_complete_listing_still_prunes_the_dead() {
     sweep.snapshot(&mut fake);
     fake.proc(12).state = ProcState::Gone;
     let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
-    assert!(fake.attempted(12).is_empty(), "{:?}", fake.attempts);
+    assert!(fake.delivered(12).is_empty(), "{:?}", fake.log);
+    assert!(
+        !fake.attempted(12).contains(&Sig::Kill),
+        "{:?}",
+        fake.attempts
+    );
     assert_eq!(report.incomplete_reads, 0);
     // And the sweep acted: the live members and the root were killed.
     for pid in [10, 11] {
         assert!(report.killed.contains(&id(pid)), "pid {pid}: {report:?}");
     }
+}
+
+/// The reuse leg of the row above: member 22 exits after the snapshot and an
+/// unrelated process (start 9999, parent 1) takes pid 22 before the freeze.
+/// The freeze-first Stop names the old identity, so the fake refuses it as a
+/// mismatch; the reading prunes the member; the stranger is never signalled,
+/// stays running and is not reported killed. Red if the identity check is
+/// skipped on any path (a delivered signal on pid 22). Run on both signalling
+/// paths the fake models: a held handle and a bare pid.
+#[test]
+fn a_member_pid_taken_by_a_stranger_is_never_signalled() {
+    for pidfd in [true, false] {
+        stranger_leg(pidfd);
+    }
+}
+
+fn stranger_leg(pidfd: bool) {
+    eprintln!("leg: pidfd={pidfd}");
+    let stranger = Identity {
+        pid: 22,
+        start: 9_999,
+    };
+    let mut fake = Fake::new(&[(20, 1), (21, 20), (22, 21)]);
+    fake.pidfd = pidfd;
+    let mut sweep = Sweep::new(id(20), cfg());
+    sweep.snapshot(&mut fake);
+    let taken = fake.proc(22);
+    taken.id = stranger;
+    taken.ppid = 1;
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    assert!(fake.delivered(22).is_empty(), "delivered: {:?}", fake.log);
+    assert_eq!(
+        fake.attempted(22),
+        vec![Sig::Stop],
+        "exactly the one refused freeze Stop: {:?}",
+        fake.attempts
+    );
+    assert_eq!(fake.state_of(22), ProcState::Running, "stranger touched");
+    assert!(!report.killed.contains(&stranger), "{report:?}");
+    assert!(report.killed.contains(&id(21)), "{report:?}");
+    assert_eq!(report.incomplete_reads, 0);
 }
 
 /// The gate itself: a by-pid Kill goes only to a stopped or zombie process.
@@ -375,4 +424,219 @@ fn only_a_stopped_later_process_at_the_pid_is_a_stray_stop() {
         !is_stray_stop(member, id_at(12, 501), ProcState::Stopped),
         "another pid"
     );
+}
+
+/// Option 4 (a): a snapshot whose first reading is cut (the host stalled past
+/// the slice) reads again and records the whole tree, the deepest member too.
+/// Red if a cut reading is taken as the snapshot (nothing recorded).
+#[test]
+fn a_cut_snapshot_reads_again_and_records_the_tree() {
+    let mut fake = Fake::new(&[(40, 1), (41, 40), (42, 41)]);
+    fake.cut_reads = 1;
+    let mut sweep = Sweep::new(id(40), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 2, "one cut reading, then one complete");
+    for pid in [41, 42] {
+        assert!(sweep.members.contains_key(&id(pid)), "member {pid} missing");
+    }
+}
+
+/// Option 4 (b): a reading incomplete for another reason than the slice (here
+/// every read fails, and time is left) is not read again: it would fail the
+/// same way, and a stop must not spend the whole cap on it at every step.
+/// Red if any incomplete reading is retried.
+#[test]
+fn an_incomplete_snapshot_with_time_left_is_not_read_again() {
+    let mut fake = Fake::new(&[(50, 1), (51, 50)]);
+    fake.blind = true;
+    let mut sweep = Sweep::new(id(50), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 1, "an uncut incomplete reading was retried");
+}
+
+/// Option 4 (d), lead 11-27: a retry also needs a whole slice of the stop's
+/// remaining time. With 3 ms left (less than one 5 ms slice) a cut reading is
+/// not read again: one reading, and the snapshot keeps what it has. Red if
+/// the retries ignore the time the stop has left.
+#[test]
+fn a_snapshot_with_less_than_a_slice_left_reads_once() {
+    let mut fake = Fake::new(&[(70, 1), (71, 70)]);
+    fake.cut_reads = 100;
+    let mut sweep = Sweep::new(id(70), cfg());
+    sweep.snapshot_within(&mut fake, ms(3));
+    assert_eq!(
+        fake.reads, 1,
+        "a cut reading was retried past the stop's budget"
+    );
+    // Code review r3 (T3): the first reading always has one whole slice, so
+    // a stop with less left overspends, by at most that one slice.
+    assert!(
+        fake.clock > ms(3),
+        "premise: the slice outran the 3 ms left"
+    );
+    assert!(fake.clock <= SNAPSHOT_SLICE, "spent {:?}", fake.clock);
+}
+
+/// Code review r3 (both seats): a cut reading's finds are kept. The cut
+/// reading saw 81 and 82 under 81; by the complete reading after it 82 was
+/// reparented to pid 1, outside the tree (listed alive, so never named
+/// gone). Red if a later reading replaces what an earlier slice collected
+/// (82 lost).
+#[test]
+fn what_a_cut_reading_found_survives_the_next_reading() {
+    let mut fake = Fake::new(&[(80, 1), (81, 80), (82, 1)]);
+    fake.cut_reads = 1;
+    fake.cut_rows = vec![(id(81), 80), (id(82), 81)];
+    let mut sweep = Sweep::new(id(80), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 2, "premise: one cut reading, one complete");
+    for pid in [81, 82] {
+        assert!(sweep.members.contains_key(&id(pid)), "member {pid} lost");
+    }
+}
+
+/// Option 4 (c): readings that keep being cut stop at `SNAPSHOT_SLICES` (4); the
+/// snapshot then keeps what it has and counts each short reading. Red if the
+/// cap is missing or different.
+#[test]
+fn a_snapshot_that_keeps_being_cut_stops_after_four_readings() {
+    let mut fake = Fake::new(&[(60, 1), (61, 60)]);
+    fake.cut_reads = 100;
+    let mut sweep = Sweep::new(id(60), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 4, "the snapshot read past its cap");
+    assert_eq!(sweep.incomplete_reads, 4, "every cut reading is counted");
+}
+
+/// Lead ruling (the cap is reachable: two runs in 80 on Spark were cut three
+/// times in a row): a full stop after a snapshot whose four readings were ALL
+/// cut. They saw 91 and 92 below the root; by the stop's own readings both
+/// were reparented to pid 1, outside the tree (alive, so never named gone),
+/// so only the cut readings' finds can get them killed. Both are killed, and
+/// the report carries the short readings the stop's warning is raised on.
+/// Red if a snapshot that hit the cap drops what its cut readings found
+/// (mutant M21). It covers killing what the cut readings recorded, not finding
+/// a descendant none of them recorded that was reparented before the stop's
+/// first reading: that one escapes, warned only by the count.
+#[test]
+fn a_stop_after_four_cut_readings_still_kills_what_they_found() {
+    let mut fake = Fake::new(&[(90, 1), (91, 1), (92, 1)]);
+    fake.cut_reads = 4;
+    fake.cut_rows = vec![(id(91), 90), (id(92), 91)];
+    let mut sweep = Sweep::new(id(90), cfg());
+    sweep.snapshot(&mut fake);
+    assert_eq!(fake.reads, 4, "premise: four readings, all cut");
+    let report = sweep.run(&mut fake, &PidfdBudget::new(4096));
+    for pid in [91, 92] {
+        assert!(
+            report.killed.contains(&id(pid)),
+            "{pid} not killed: {report:?}"
+        );
+        assert_eq!(fake.state_of(pid), ProcState::Gone, "pid {pid}");
+    }
+    assert!(
+        report.incomplete_reads >= 4,
+        "shortfall not reported: {report:?}"
+    );
+    assert!(report.needs_warn(), "the stop would not warn: {report:?}");
+}
+
+/// The stop's warn decision (`SweepReport::needs_warn`, read by the child
+/// tree's sweep): each reason alone raises it, a clean report does not. Red
+/// if any one reason is dropped from the decision (mutant M22 drops the short
+/// readings).
+#[test]
+fn each_reason_alone_makes_the_stop_warn_and_a_clean_report_does_not() {
+    assert!(
+        !SweepReport::default().needs_warn(),
+        "a clean report warned"
+    );
+    let done = SweepReport {
+        killed: vec![id(5)],
+        continued: vec![id(6)],
+        passes: 3,
+        ..SweepReport::default()
+    };
+    assert!(!done.needs_warn(), "a successful sweep warned: {done:?}");
+    let reasons: [(&str, SweepReport); 6] = [
+        (
+            "a residual member",
+            SweepReport {
+                residual: vec![id(5)],
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a short reading",
+            SweepReport {
+                incomplete_reads: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "an unconfirmed kill",
+            SweepReport {
+                unconfirmed: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a stuck stop",
+            SweepReport {
+                stuck_stopped: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a rescue",
+            SweepReport {
+                rescued: 1,
+                ..SweepReport::default()
+            },
+        ),
+        (
+            "a stop mismatch",
+            SweepReport {
+                stop_mismatch: 1,
+                ..SweepReport::default()
+            },
+        ),
+    ];
+    for (reason, report) in reasons {
+        assert!(report.needs_warn(), "{reason} alone did not warn");
+    }
+}
+
+/// E5 (D5''''): between unsettled readings the sweep pauses 1, 2, 4, 8, then
+/// 16 ms (the cap), not at all before the first reading, and back to 1 ms after
+/// a pass that froze a new member (pid 900, appearing at the fourth freeze
+/// reading; the snapshot is table read 1). No pause
+/// runs past the slice. Red under a re-read with no pause (no pauses recorded)
+/// or without the cap or the reset.
+#[test]
+fn unsettled_readings_back_off_from_1_to_16_ms_within_the_slice() {
+    let slice = ms(200);
+    let mut fake = Fake::new(&[(1, 0)]);
+    fake.settling = Settling::Never;
+    fake.appear_at_read = Some(5);
+    let config = SweepConfig {
+        freeze_slice: slice,
+        cap: 4096,
+    };
+    let report = run_with(&mut fake, 1, config, &PidfdBudget::new(4096));
+    let pauses: Vec<u128> = fake.idles.iter().map(Duration::as_millis).collect();
+    let (ladder, rest) = pauses.split_at(9);
+    assert_eq!(ladder, [1, 2, 4, 1, 2, 4, 8, 16, 16], "pauses: {pauses:?}");
+    let (last, middle) = rest.split_last().expect("pauses after the ladder");
+    assert!(middle.iter().all(|&p| p == 16), "pauses: {pauses:?}");
+    assert!((1..=16).contains(last), "the last pause: {pauses:?}");
+    assert!(
+        fake.idles.iter().sum::<Duration>() < slice,
+        "the pauses ran past the slice: {pauses:?}"
+    );
+    assert!(
+        fake.delivered(900).contains(&Sig::Stop),
+        "premise: the new member was frozen"
+    );
+    assert!(report.passes <= 25, "passes {}", report.passes);
 }
