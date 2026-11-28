@@ -187,8 +187,10 @@ test('D1 a dot only on callers with blocked calls, linking to their calls by acc
   // Every caller form: four kinds carry an account, the rest (and cut labels) read as text.
   const cut = (prefix, fill, size) => `${prefix}${fill.repeat(Math.ceil((size - prefix.length - 9) / new TextEncoder().encode(fill).length))}`;
   const label128 = (() => { let s = cut('key:', 'a', 128); while (new TextEncoder().encode(`${s}~0123abcd`).length > 128) s = s.slice(0, -1); return `${s}~0123abcd`; })();
-  const label126 = (() => { let s = cut('key:', 'é', 126); while (new TextEncoder().encode(`${s}~0123abcd`).length > 126) s = s.slice(0, -1); return `${s}~0123abcd`; })();
+  const label126 = (() => { let s = cut('key:a', 'é', 126); while (new TextEncoder().encode(`${s}~0123abcd`).length > 126) s = s.slice(0, -1); return `${s}~0123abcd`; })();
   const plain128 = 'key:' + 'b'.repeat(124);
+  // The cut cases at their exact sizes (one ASCII byte evens out the two-byte characters).
+  for (const [label, size] of [[label128, 128], [label126, 126], [plain128, 128]]) expect(new TextEncoder().encode(label).length).toBe(size);
   const forms = ['oidc:u1', 'session:s1', 'token:t1', 'bearer', 'local', 'anonymous', 'key:', label128, label126, plain128, 'key:a&b#c%d é', 'key:alice', 'oidc:alice'];
   await page.unrouteAll({ behavior: 'ignoreErrors' });
   await showMap(page, flowBody({ edges: forms.slice(0, 6).map((f, i) => edge(f, 's', 60 - i, 1)), servers: [srv('s')] }));
@@ -217,17 +219,31 @@ test('D1 a dot only on callers with blocked calls, linking to their calls by acc
   await showMap(page, flowBody({ edges: callers(8, (i) => (i > 5 ? 2 : 0)), servers: [srv('github')] }));
   await expect(agentRows(page).last().locator('.ov-dot')).toHaveText('4 blocked');
   await expect(agentRows(page).last().locator('a')).toHaveCount(0);
+  // A caller named a"]b\c keeps its row across two reads (its probe survives).
+  await page.unrouteAll({ behavior: 'ignoreErrors' });
+  const odd = (calls) => flowBody({ edges: [edge('key:a"]b\\c', 's', calls, 1)], servers: [srv('s')] });
+  const live = await liveMap(page, odd(9));
+  await probe(page);
+  live.body = odd(12);
+  await readAgain(page, live, 2);
+  await expect(callsOf(agentRows(page))).toHaveText(['12']);
+  expect(await probes(agentRows(page))).toEqual(['a"]b\\c']);
 });
 
-test('D2 the dot is 44 px under a coarse pointer', async ({ browser }) => {
-  const context = await browser.newContext({ hasTouch: true, viewport: { width: 1440, height: 1100 } });
+for (const width of [1440, 390]) test(`D2 the dot is 44 px under a coarse pointer, ${width} px`, async ({ browser }) => {
+  const context = await browser.newContext({ hasTouch: true, viewport: { width, height: 1100 } });
   const page = await context.newPage();
   expect(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), 'a coarse pointer in this context').toBe(true);
   await serve(page, { body: flowBody({ edges: [edge('key:b2', 's', 20, 3)], servers: [srv('s')] }) });
-  await open(page);
+  await open(page, width);
   const box = await map(page).locator('a.ov-dot').boundingBox();
   expect(box.width).toBeGreaterThanOrEqual(44);
   expect(box.height).toBeGreaterThanOrEqual(44);
+  // The target is 44 px (its padding inside it, so the painted dot stays small) and clears its row's number.
+  // Wide the dot is a dot, so its target is 44 px; narrow it is words, as wide as they are.
+  if (width >= 640) expect(box.width, 'a 44 px target').toBeLessThanOrEqual(46);
+  const calls = await map(page).locator('.ov-row-calls').first().boundingBox();
+  expect(box.x, 'the target starts after its row\'s number').toBeGreaterThanOrEqual(calls.x + calls.width);
   await context.close();
 });
 
@@ -269,8 +285,8 @@ async function liveMap(page, body) {
 }
 const fire = (page, name = 'gateway-status') => page.evaluate((e) => dispatchEvent(new CustomEvent(e)), name);
 /** A status event, then the paused clock runs on until the overview has been read `n` times. */
-async function readAgain(page, live, n) {
-  await fire(page);
+async function readAgain(page, live, n, name) {
+  await fire(page, name);
   await expect.poll(async () => { await page.clock.runFor(300); return live.reads; }).toBe(n);
 }
 const probe = (page) => map(page).locator('li.ov-row').evaluateAll((ls) => ls.forEach((l) => { l.dataset.probe = l.querySelector('.ov-row-name').textContent; }));
@@ -282,7 +298,7 @@ test('L1 a status event re-reads once and updates the rows in place', async ({ p
   live.body = flowBody({ edges: [edge('key:alice', 'github', 300), edge('oidc:bob', 'github', 80), edge('session:s1', 'linear', 40)], servers: SMALL.servers.rows, kpi: { servers_total: 5, tools_total: 20 } });
   await fire(page);
   await page.clock.runFor(50);
-  await fire(page, 'gateway-reload');
+  await fire(page);
   await page.clock.runFor(1100);
   await expect(callsOf(agentRows(page)).first()).toHaveText('300');
   await expect(map(page).locator('.ov-hub')).toHaveText('5 servers, 20 tools');
@@ -311,6 +327,8 @@ test('L1 a status event re-reads once and updates the rows in place', async ({ p
   await fire(page);
   await page.clock.runFor(1100);
   await expect(map(page).locator('.ov-dot:visible')).toHaveCount(0);
+  // The stream's reload event reads again too.
+  await readAgain(page, live, live.reads + 1, 'gateway-reload');
 });
 
 test('L1c steady events do not put the read off for ever', async ({ page }) => {
@@ -397,6 +415,8 @@ test('L3 a failed re-read says so under the map, and the next good one clears it
   live.status = 500;
   await readAgain(page, live, 2);
   await expect(map(page).locator('.ov-map-stale')).toHaveText('Not updated since 14:00');
+  // Said when it happens, without moving focus.
+  await expect(map(page).locator('.ov-map-stale')).toHaveAttribute('role', 'status');
   await expect(map(page).locator('.ov-map-stale')).toBeVisible();
   await expect(callsOf(agentRows(page))).toHaveText(['120', '80', '40']);
   live.status = 0;
@@ -484,8 +504,9 @@ test('A2 Tab reaches every row link and dot of the map, in page order', async ({
   expect(await tabStops(page, links.length)).toEqual(links);
 });
 
-for (const [where, body] of [['a low row', WITH_DOT], ['a lone caller, level with the hub', flowBody({ edges: [edge('key:x', 'github', 5, 2)], servers: [srv('github')] })]]) test(`G1 on a wide screen the dot sits on its line where it leaves the callers' column, covered by nothing: ${where}`, async ({ page }) => {
-  await showMap(page, body, 1440);
+const LONE = flowBody({ edges: [edge('key:x', 'github', 5, 2)], servers: [srv('github')] });
+for (const [where, body, width] of [['a low row', WITH_DOT, 1440], ['a lone caller, level with the hub', LONE, 1440], ['a lone caller at the narrowest wide layout', LONE, 700]]) test(`G1 on a wide screen the dot sits on its line's midpoint, covered by nothing and overlapping nothing: ${where}`, async ({ page }) => {
+  await showMap(page, body, width);
   const off = await map(page).locator('.ov-map').evaluate((box) => {
     const rows = [...box.querySelectorAll('ol.ov-agents > li')];
     const i = rows.findIndex((li) => li.querySelector('.ov-dot:not(.ov-dot-off)'));
@@ -497,12 +518,18 @@ for (const [where, body] of [['a low row', WITH_DOT], ['a lone caller, level wit
     const y = ((i + 0.5) / rows.length) * 100;
     const cx = d.left + d.width / 2;
     const cy = d.top + d.height / 2;
-    // Where the line leaves the callers' column (37.5 of the map's 100), at the row's centre.
-    return { x: cx - (m.left + m.width * 0.375), y: cy - (m.top + (m.height * y) / 100), top: document.elementFromPoint(cx, cy)?.closest('.ov-dot') === dot };
+    // The line's midpoint (spec): x halfway from the callers' edge (37.5) to the hub (50), y halfway to 50.
+    return { x: cx - (m.left + m.width * 0.4375), y: cy - (m.top + (m.height * (y + 50)) / 200), top: document.elementFromPoint(cx, cy)?.closest('.ov-dot') === dot,
+      // The dot's whole box, not only its centre, stays off the hub and off its row's number.
+      clear: [box.querySelector('.ov-hub'), rows[i].querySelector('.ov-row-calls')].every((e) => {
+        const r = e.getBoundingClientRect();
+        return r.right <= d.left || r.left >= d.right || r.bottom <= d.top || r.top >= d.bottom;
+      }) };
   });
   expect(Math.abs(off.x), 'across').toBeLessThanOrEqual(2);
   expect(Math.abs(off.y), 'down').toBeLessThanOrEqual(2);
   expect(off.top, 'nothing covers the dot').toBe(true);
+  expect(off.clear, 'the dot overlaps neither the hub nor its row\'s number').toBe(true);
 });
 
 test('G2 no line is wider than 8 px, the callers fold row included', async ({ page }) => {
