@@ -652,7 +652,7 @@ export function updateMap(root, model) {
     const box = h('div', { class: 'ov-map' }, lines, agents, hub, servers);
     const note = h('p', { class: 'ov-map-note' });
     const empty = h('p', { class: 'ov-map-empty' });
-    const stale = h('p', { class: 'ov-map-stale', role: 'status', hidden: true });
+    const stale = h('p', { class: 'ov-map-stale', hidden: true });
     root.append(box, note, stale, empty);
     state = { box, lines, hub, note, stale, empty, lists: { agents, servers }, rows: { agents: new Map(), servers: new Map() } };
     drawn.set(root, state);
@@ -760,6 +760,8 @@ function keepLive(root, ctx) {
       if (line) line.hidden = true;
     } else if (line) {
       line.textContent = `Not updated since ${clock(lastGood)}`;
+      // Said once when the map goes stale, through the shell's one announcer (no live region of its own).
+      if (line.hidden) ctx.announce?.(line.textContent);
       line.hidden = false;
     }
     if (again) {
