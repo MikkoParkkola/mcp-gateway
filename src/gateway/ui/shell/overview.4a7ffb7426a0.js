@@ -443,6 +443,9 @@ function fillChart(section, data, read) {
 /** Rows drawn per column: the motion budget's fixed count, so an update's cost never grows with the fleet. */
 const AGENT_ROWS = 6;
 const SERVER_ROWS = 11;
+/** A pulse's length (overview.css: five slow durations, 1.2 s) and each map's live pulses. */
+const PULSE_MS = 1200;
+const pulses = new WeakMap();
 /** The second line of a caller by the kind before its colon; a kind not listed shows none. */
 const CALLER_KIND = { key: 'API key', oidc: 'OIDC sign-in', session: 'MCP session', token: 'Token' };
 /** Callers with no colon in their label: their name in words. */
@@ -561,11 +564,17 @@ function fillDot(nodes, row, y, drawLines) {
   if (nodes.dotOn !== on) {
     nodes.dotOn = on;
     nodes.dot.classList.toggle('ov-dot-off', !on);
-    const map = on ? nodes.box : null;
-    if (map && map.querySelectorAll('.ov-pulse').length < 3) {
+    // The map's pulses, kept in its state: no page query and no listener per dot. A pulse counts until
+    // its 1.2 s are up; a dot that goes takes its pulse with it, so it can pulse again when it comes back.
+    const now = Date.now();
+    const all = pulses.get(nodes.box) ?? [];
+    const live = all.filter((p) => p.until > now && p.dot !== nodes.dot);
+    for (const p of all) if (!live.includes(p)) p.dot.classList.remove('ov-pulse');
+    if (on && live.length < 3) {
       nodes.dot.classList.add('ov-pulse');
-      nodes.dot.addEventListener('animationend', () => nodes.dot?.classList.remove('ov-pulse'), { once: true });
+      live.push({ dot: nodes.dot, until: now + PULSE_MS });
     }
+    pulses.set(nodes.box, live);
   }
   if (!on) return;
   const want = nodes.dot.localName;
