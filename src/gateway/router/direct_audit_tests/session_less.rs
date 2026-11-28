@@ -32,25 +32,37 @@ async fn invoke_as(
     if let Some(session) = session {
         builder = builder.header("mcp-session-id", session);
     }
-    if let Some(bearer) = bearer {
-        builder = builder.header("authorization", format!("Bearer {bearer}"));
-    }
+    builder = with_bearer(builder, bearer);
     let request = builder
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     fx.router.clone().oneshot(request).await.unwrap().status()
 }
 
-/// A legacy session the gateway established, by its `mcp-session-id`.
-async fn open_session(fx: &Fixture) -> String {
+/// `builder`, presenting `bearer` as its credential when given.
+fn with_bearer(
+    mut builder: axum::http::request::Builder,
+    bearer: Option<&str>,
+) -> axum::http::request::Builder {
+    if let Some(bearer) = bearer {
+        builder = builder.header("authorization", format!("Bearer {bearer}"));
+    }
+    builder
+}
+
+/// A legacy session the gateway established, by its `mcp-session-id`;
+/// opened presenting `bearer` as its credential when given.
+pub(super) async fn open_session(fx: &Fixture, bearer: Option<&str>) -> String {
     let body = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                       "params": {"protocolVersion": "2025-06-18", "capabilities": {},
                                  "clientInfo": {"name": "t", "version": "1"}}});
-    let request = axum::http::Request::builder()
+    let mut builder = axum::http::Request::builder()
         .method("POST")
         .uri("/mcp")
         .header("content-type", "application/json")
-        .header("accept", "application/json, text/event-stream")
+        .header("accept", "application/json, text/event-stream");
+    builder = with_bearer(builder, bearer);
+    let request = builder
         .body(axum::body::Body::from(body.to_string()))
         .unwrap();
     let response = fx.router.clone().oneshot(request).await.unwrap();
@@ -102,7 +114,7 @@ async fn an_unestablished_session_id_shares_the_same_window() {
 #[tokio::test]
 async fn an_established_session_keeps_its_own_window() {
     let fx = guarded().await;
-    let (a, b) = (open_session(&fx).await, open_session(&fx).await);
+    let (a, b) = (open_session(&fx, None).await, open_session(&fx, None).await);
     assert_ne!(a, b);
     assert_eq!(invoke(&fx, None, "cust-1").await, StatusCode::OK);
     assert_eq!(invoke(&fx, Some(&a), "cust-2").await, StatusCode::OK);

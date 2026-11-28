@@ -525,6 +525,8 @@ enum Caller {
     /// The static bearer token of [`bearer_auth`] (MIK-8672 C1/C2): the client
     /// `bearer`, as is the API key that fixture also holds.
     Bearer,
+    /// [`Caller::Key`] on the established session it names.
+    KeyOn(String),
 }
 
 /// Put the verified identity a `Caller` stands for on `request`.
@@ -606,8 +608,11 @@ async fn post_to_raw_named(
         .method("POST")
         .uri(uri)
         .header("content-type", "application/json");
-    if matches!(caller, Caller::Key) {
+    if matches!(caller, Caller::Key | Caller::KeyOn(_)) {
         builder = builder.header("authorization", "Bearer k");
+    }
+    if let Caller::KeyOn(session) = caller {
+        builder = builder.header("mcp-session-id", session.as_str());
     }
     if matches!(caller, Caller::Bearer) {
         builder = builder.header("authorization", format!("Bearer {BEARER_TOKEN}"));

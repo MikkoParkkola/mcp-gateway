@@ -222,8 +222,11 @@ async fn p4_3_a_cancelled_meta_call_keeps_todays_record_and_counts() {
     })
     .await;
     let store = attach(&fx);
+    // The cancel is matched by owner, session and id: both requests carry the
+    // session the key opened (without one, each request gets its own).
+    let on_session = Caller::KeyOn(super::session_less::open_session(&fx, Some("k")).await);
     let call = meta_invoke("alpha", "t", &json!({}));
-    let request = post_to(&fx, "/mcp", &call, &Caller::Key);
+    let request = post_to(&fx, "/mcp", &call, &on_session);
     tokio::pin!(request);
     let held = tokio::time::timeout(std::time::Duration::from_secs(30), async {
         loop {
@@ -242,7 +245,7 @@ async fn p4_3_a_cancelled_meta_call_keeps_todays_record_and_counts() {
                         "params": {"requestId": 5}})
     .to_string();
     let ((_, answer), _) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
-        tokio::join!(&mut request, post_to(&fx, "/mcp", &cancel, &Caller::Key))
+        tokio::join!(&mut request, post_to(&fx, "/mcp", &cancel, &on_session))
     })
     .await
     .expect("the cancel ends the held call");
