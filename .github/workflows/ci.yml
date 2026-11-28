@@ -672,8 +672,14 @@ jobs:
       # MIK-8490: codeql.yml skips test-only paths by name. Fail if a file the
       # product build compiles (rustc dep-info, lib and bins, three feature
       # sets) matches one of those globs, so no product code leaves the scan.
+      # It also checks codeql.yml's Rust cfg setting, read with PyYAML, which
+      # is installed every run and only from the hashes pinned in the file:
+      # --ignore-installed so a copy already present cannot skip the hash
+      # check (--force-reinstall would try to remove the system package).
       - name: CodeQL paths-ignore hides no product file (MIK-8490)
-        run: python3 scripts/ci/check-codeql-ignore.py
+        run: |
+          python3 -m pip install --user --quiet --ignore-installed --require-hashes -r scripts/ci/pyyaml-requirements.txt
+          python3 scripts/ci/check-codeql-ignore.py
 
   # Feature combinations run on every release-line push (feature-combos.yml)
   # and, before a change lands, on its pull request into the release line, lane

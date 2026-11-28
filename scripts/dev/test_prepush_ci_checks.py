@@ -1365,5 +1365,100 @@ class Repository(unittest.TestCase):
             self.assertTrue(any("cli_surface_inventory" in p for p in found), found)
 
 
+CFG_NAME = "CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES"
+CFG_JOB_ENV = f'    env:\n      {CFG_NAME}: "-test"\n'
+MISSING, OUTSIDE, VALUE = "it is missing", "outside the analyze job's own env", f"{CFG_NAME} is "
+
+
+class CodeqlCfg(unittest.TestCase):
+    """G1, G2: check-codeql-ignore.py refuses a codeql.yml whose Analyze job does not set the
+    Rust extractor's cfg override to exactly "-test" in its own job-level env. Each row runs the script on an edited
+    copy of the real workflow; `--cargo false` stops it at the build, so a refusal printed before that is this check's."""
+
+    def setUp(self):
+        real = (REPO / ".github/workflows/codeql.yml").read_text(encoding="utf-8")
+        self.real = real
+        # The real file without the job's setting: the base every copy below edits.
+        self.base = real.replace(CFG_JOB_ENV, "")
+        self.assertNotIn(CFG_NAME, self.base)
+
+    def run_on(self, text):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = pathlib.Path(tmp, ".github/workflows/codeql.yml")
+            wf.parent.mkdir(parents=True)
+            wf.write_text(text, encoding="utf-8")
+            proc = subprocess.run([sys.executable, str(REPO / "scripts/ci/check-codeql-ignore.py"), "--cargo", "false"],
+                                  cwd=tmp, capture_output=True, text=True)
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def insert(self, anchor, lines, text=None):
+        text = self.base if text is None else text
+        self.assertEqual(text.count(anchor), 1, anchor)
+        return text.replace(anchor, anchor + lines)
+
+    def with_job_env(self):
+        return self.insert("    runs-on: ubuntu-latest\n", CFG_JOB_ENV)
+
+    def refused(self, text, why, refusal):
+        code, out = self.run_on(text)
+        self.assertNotEqual(code, 0, f"accepted: {why}\n{out}")
+        self.assertIn(CFG_NAME, out, f"{why}: the refusal does not name the setting\n{out}")
+        self.assertIn(refusal, out, f"{why}: refused, but not as {refusal!r}\n{out}")
+        self.assertNotIn("`false check", out, f"{why}: reached the build, so the check did not refuse\n{out}")
+
+    # G1
+    def test_g1_the_real_file_passes_the_setting_check(self):
+        code, out = self.run_on(self.real)
+        self.assertNotIn(CFG_NAME, out)
+        self.assertIn("`false check", out, f"stopped before the build\n{out}")
+
+    def test_g1_the_job_level_setting_alone_passes(self):
+        code, out = self.run_on(self.with_job_env())
+        self.assertNotIn(CFG_NAME, out)
+        self.assertIn("`false check", out, f"stopped before the build\n{out}")
+
+    def test_g1_absent_is_refused(self):
+        self.refused(self.base, "no setting", MISSING)
+
+    # G2
+    def test_g2_another_value_is_refused(self):
+        # '-test"' is the string -test" to YAML; a quote-stripping line match read it as -test.
+        for value in ('"test"', "-test,foo", '""', "'-test\"'"):
+            with self.subTest(value=value):
+                self.refused(self.insert("    runs-on: ubuntu-latest\n", f"    env:\n      {CFG_NAME}: {value}\n"), value, VALUE)
+
+    def test_g2_initialize_step_only_is_refused(self):
+        init = next(line for line in self.base.splitlines(keepends=True) if "codeql-action/init@" in line)
+        self.refused(self.insert(init, f'        env:\n          {CFG_NAME}: "-test"\n'), "Initialize step only", OUTSIDE)
+
+    def test_g2_workflow_level_only_is_refused(self):
+        self.refused(self.insert("\npermissions:\n  contents: read\n", f'env:\n  {CFG_NAME}: "-test"\n'),
+                     "workflow env only", OUTSIDE)
+
+    def test_g2_the_name_in_the_config_block_is_refused(self):
+        self.refused(self.insert("          config: |\n", f"            {CFG_NAME}: -test\n"), "inside config:", OUTSIDE)
+
+    def test_g2_a_step_override_beside_the_job_value_is_refused(self):
+        # A step's env wins over the job's, so a step-level copy can turn test back on for that step.
+        analyze = next(line for line in self.base.splitlines(keepends=True) if "codeql-action/analyze@" in line)
+        self.refused(self.insert(analyze, f'        env:\n          {CFG_NAME}: ""\n', self.with_job_env()),
+                     "Analyze step beside the job", OUTSIDE)
+
+    def test_g2_a_key_spelled_with_escapes_is_refused(self):
+        # YAML reads "\x43ODEQL..." as the variable's name, though the line never spells it.
+        analyze = next(line for line in self.base.splitlines(keepends=True) if "codeql-action/analyze@" in line)
+        hidden = '"\\x43' + CFG_NAME[1:] + '"'
+        self.refused(self.insert(analyze, f'        env:\n          {hidden}: ""\n', self.with_job_env()),
+                     "escaped key on the Analyze step", OUTSIDE)
+
+    def test_g2_an_env_built_by_an_expression_is_refused(self):
+        # GitHub expands the expression into the step's env at run time; the JSON escape hides the name from a search.
+        analyze = next(line for line in self.base.splitlines(keepends=True) if "codeql-action/analyze@" in line)
+        expr = "${{ fromJSON('{\"\\u0043" + CFG_NAME[1:] + "\":\"\"}') }}"
+        self.refused(self.insert(analyze, f"        env: {expr}\n", self.with_job_env()),
+                     "env expression on the Analyze step", "is not a plain mapping")
+
+
 if __name__ == "__main__":
     unittest.main()

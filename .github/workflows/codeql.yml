@@ -35,6 +35,13 @@ jobs:
     name: Analyze (${{ matrix.language }})
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # Scan Rust as the product build compiles it: the Rust extractor turns the
+    # `test` cfg on by default, which reads test-only items and skips every
+    # `#[cfg(not(test))]` one. Job level, because extraction runs in the Analyze
+    # step and inherits the job's environment; other extractors ignore it.
+    # scripts/ci/check-codeql-ignore.py fails if it moves or changes.
+    env:
+      CODEQL_EXTRACTOR_RUST_OPTION_CARGO_CFG_OVERRIDES: "-test"
     permissions:
       contents: read
       security-events: write
