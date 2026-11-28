@@ -517,6 +517,11 @@ pub(super) async fn tools_call(
         Ok(crate::gateway::meta_mcp::admission::SyncAdmission::Unprotected) => (None, None),
         Err(error) => {
             delivery_facts::outlet(&error);
+            // Written before it is answered; the answer below is today's.
+            let error = match refused.admission(state, tool_name, id.clone(), error).await {
+                std::ops::ControlFlow::Continue(error) => error,
+                std::ops::ControlFlow::Break(unavailable) => return Err(unavailable),
+            };
             let status = match &error {
                 crate::Error::Forbidden { status, .. } => {
                     StatusCode::from_u16(*status).unwrap_or(StatusCode::FORBIDDEN)

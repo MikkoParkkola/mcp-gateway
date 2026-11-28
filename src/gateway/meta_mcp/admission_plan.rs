@@ -14,8 +14,14 @@ use crate::{Error, Result};
 use super::super::{MetaMcp, MetaMcpCallerContext};
 
 /// Each plan step the caller cannot see, as `(server, tool)`, with its
-/// refusal, in plan order; empty when every step is visible.
-pub(super) type Withheld = Vec<((String, String), Error)>;
+/// refusal, in plan order; empty when every step is visible. Each refusal
+/// keeps the pair of the check that refused it, unnoted: only the refusal a
+/// replay meets is noted, so a deferred one never labels another refusal
+/// (`None`: its check passed, and nothing is noted for it).
+pub(super) type Withheld = Vec<(
+    (String, String),
+    (Error, Option<crate::security::decision_record::Refusal>),
+)>;
 
 impl MetaMcp {
     /// The backend targets a `gateway_run_playbook` call will reach, one per
@@ -153,7 +159,8 @@ impl MetaMcp {
             } else {
                 parse_tool_arguments(step)?
             };
-            let checked = self.check_invocation_policy(
+            // The explained form: a deferred refusal keeps its pair unnoted.
+            let checked = self.check_invocation_policy_explained(
                 &json!({"server": server, "tool": tool, "arguments": arguments}),
                 session,
                 caller,
@@ -162,14 +169,17 @@ impl MetaMcp {
                 // MIK-8387 S2b′: a scoped key's absent step is the per-step
                 // gate's on a fresh call; a replay meets the backend miss, the
                 // same for all three cells. Its policy check above has already
-                // written the scope refusal's audit line; no kill switch is
-                // judged for it by name.
-                _ if self
-                    .scoped(caller.scope().authorizer.backend_grant())
-                    .absent_step(server, tool) =>
+                // written the scope refusal's audit line; the miss keeps that
+                // check's pair, noted only if the miss is the refusal returned.
+                // No kill switch is judged for it by name.
+                checked
+                    if self
+                        .scoped(caller.scope().authorizer.backend_grant())
+                        .absent_step(server, tool) =>
                 {
                     let missing = Error::BackendNotFound(server.to_owned());
-                    deferred.push(((server.to_owned(), tool.to_owned()), missing));
+                    let pair = checked.err().map(|(_, pair)| pair);
+                    deferred.push(((server.to_owned(), tool.to_owned()), (missing, pair)));
                 }
                 Ok(()) => {}
                 // A step the caller cannot see, by the shared judgement or
@@ -177,15 +187,17 @@ impl MetaMcp {
                 // the per-step gate's on a fresh call; only a replay meets its
                 // refusal, which a replayed key's holder was already shown
                 // (SUB.4, ruling A).
-                Err(refusal) if self.step_is_hidden(caller, (server, tool), session) => {
+                Err((refusal, pair)) if self.step_is_hidden(caller, (server, tool), session) => {
                     // The kill switch speaks about the backend, not the
                     // name: it refuses the whole call
                     // here, as a missing step's policy check does, rather
                     // than letting earlier steps run (#3872 FIX 2).
                     self.admit_backend_wide(server)?;
-                    deferred.push(((server.to_owned(), tool.to_owned()), refusal));
+                    deferred.push(((server.to_owned(), tool.to_owned()), (refusal, Some(pair))));
                 }
-                Err(refusal) => return Err(refusal),
+                Err(refused) => {
+                    return Err(crate::gateway::meta_mcp::invoke::audit::noted(refused));
+                }
             }
         }
         Ok(deferred)

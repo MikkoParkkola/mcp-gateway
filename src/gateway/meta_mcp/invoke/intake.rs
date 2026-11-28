@@ -17,7 +17,7 @@ use super::projection::extract_client_claim;
 use super::stored_proof::TracedOutcome;
 use crate::Result;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
-use crate::gateway::meta_mcp_helpers::{extract_required_str, parse_tool_arguments};
+use crate::gateway::meta_mcp_helpers::{parse_tool_arguments, refuse_missing_str};
 use crate::gateway::recovery::MetaSurface;
 use crate::identity_propagation::CallerProof;
 use crate::key_server::oidc::VerifiedIdentity;
@@ -112,8 +112,8 @@ impl MetaMcp {
         // earlier plan step's in the same delivery; stored with its answer.
         let writes_mark = gateway_writes::mark();
 
-        let server = extract_required_str(args, "server")?;
-        let tool = extract_required_str(args, "tool")?;
+        let server = refuse_missing_str(args, "server")?;
+        let tool = refuse_missing_str(args, "tool")?;
         if let Some(answer) = self.gated(args, (server, tool), caller, session_id).await {
             return answer
                 .map(TracedOutcome::Live)

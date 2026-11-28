@@ -274,3 +274,40 @@ async fn o2m_a_mixed_chain_answers_an_unreachable_step_as_an_absent_one() {
         "O2m: unpinned answer"
     );
 }
+
+/// d1, first case, on `/mcp`: a keyed chain whose first step is absent for
+/// the key (its scope refusal deferred), whose second is visible (so the
+/// route's all-invisible gate does not answer the call before admission,
+/// gate.rs:111-129) and whose third is malformed. Admission returns the
+/// parse refusal; its one record carries no deferred pair: kind `unrecorded`
+/// (the parse refusal notes none), no rule id. The answer is the parse
+/// refusal's, as before.
+#[tokio::test]
+async fn d1_a_deferred_step_does_not_label_a_later_refusal_on_mcp() {
+    let fx = scoped_fixture(code_mode()).await;
+    let chain = json!([{"tool": format!("{WITHHELD}:t"), "arguments": {}},
+                       {"tool": "alpha:t", "arguments": {}},
+                       {"tool": "no_prefix", "arguments": {}}]);
+    let (status, body) = call(
+        &fx,
+        ("gateway_execute", json!({ "chain": chain })),
+        Some("k-d1"),
+        WITHHELD,
+    )
+    .await;
+    let refusal = crate::Error::json_rpc(
+        crate::error::rpc_codes::INVALID_PARAMS,
+        "Tool reference requires a server:tool_name prefix",
+    );
+    let answer = sse_or_json(body.as_bytes());
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(answer["error"]["code"], refusal.to_rpc_code(), "{body}");
+    assert_eq!(answer["error"]["message"], refusal.to_string(), "{body}");
+    let all = invocations(&fx);
+    let [entry] = all.as_slice() else {
+        panic!("exactly one record (HTTP {status}): {all:?}; answer {body}");
+    };
+    assert_eq!(entry["decision"]["kind"], "unrecorded", "{entry}");
+    assert_eq!(entry["decision"].get("rule_id"), None, "{entry}");
+    assert_eq!(fx.calls.load(Ordering::SeqCst), 0, "never sent");
+}

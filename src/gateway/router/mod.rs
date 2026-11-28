@@ -50,9 +50,11 @@ mod hardened_identity;
 mod identity;
 pub(crate) mod inflight_calls;
 mod meta_refusal_audit;
-// Stdio records its signing refusals with the same writer as `/mcp`.
+// Stdio records its signing, malformed-retry and admission refusals with the
+// same writer as `/mcp`.
 pub(crate) use meta_refusal_audit::{
-    AnswerId, SigningSite, answer_stdio_signing_refusal, call_name_and_arguments,
+    AnswerId, SigningSite, answer_stdio_malformed, answer_stdio_signing_refusal,
+    call_name_and_arguments, settle_stdio_admission,
 };
 // Re-exported rather than widening `mod handlers` itself, so exactly one item
 // becomes crate-visible. The `MIK-7334.CATALOGUE.1` C10a/C10b cells drive the

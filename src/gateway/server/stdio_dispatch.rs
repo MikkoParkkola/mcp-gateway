@@ -13,12 +13,12 @@ use super::StdioNonce;
 use super::first_list_wait;
 use super::stdio_route_stage::RouteStage;
 use super::{
-    STDIO_CREDENTIAL_PRINCIPAL, StdioClient, Unprepared, answer_unprepared, stdio_catalogue,
-    stdio_delivery, stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
+    StdioClient, Unprepared, answer_unprepared, stdio_catalogue, stdio_delivery,
+    stdio_routing_keys_only, stdio_take_merged_client_meta, stdio_tasks,
 };
 use crate::gateway::authz::ToolPolicyAuthorizer;
 use crate::gateway::meta_mcp::refund_witness::RefundWitness;
-use crate::gateway::meta_mcp::{InvokeScope, MetaMcp, MetaMcpCallerContext};
+use crate::gateway::meta_mcp::{InvokeScope, MetaMcp};
 use crate::security::sanitize::InputSanitizing;
 
 impl Gateway {
@@ -429,96 +429,6 @@ impl Gateway {
         Ok((id, method, params, request_shape))
     }
 
-    /// Handle `tools/call`: policy, signing, admission/replay, then dispatch.
-    ///
-    /// Ownership of `arguments` is taken only past every refusal — signing,
-    /// nonce, admission, replay — because only an executing call needs to
-    /// own its payload. `params` is re-derived from `request` here (already
-    /// validated by the caller) so the immutable borrow it needs can end
-    /// before the one branch below that needs `request` mutably.
-    /// Build the stdio-path `MetaMcpCallerContext`, split out of
-    /// [`Self::dispatch_tools_call`] purely to keep that function under the
-    /// line budget — every field and its rationale are unchanged.
-    pub(super) fn build_stdio_caller_context<'a>(
-        is_modern: bool,
-        protocol_revision: Option<&'a str>,
-        stdio_authorizer: &'a crate::gateway::authz::ToolPolicyAuthorizer<'a>,
-        retry: &'a crate::protocol::mrtr::RetryFields,
-        request_shape: &crate::protocol::meta::RequestShape,
-        client: StdioClient<'a>,
-        // The record key, and the generation this message is judged by.
-        (record_key, generation): (
-            &crate::gateway::record_principal::RecordPrincipalKey,
-            Option<&'a crate::config_reload::Generation>,
-        ),
-    ) -> MetaMcpCallerContext<'a> {
-        MetaMcpCallerContext {
-            // Filled after the route stage, by the task intent, when the
-            // session serves `tasks/*` (its store is open) and the call asked
-            // for a task; X14 has decided a destructive one before that.
-            task: None,
-            execution: None,
-            signing: None,
-            is_modern,
-            protocol_revision,
-            credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL),
-            // The stdio constant, keyed like any principal (MIK-8697 §16.11).
-            record_principal: super::stdio_record_principal(record_key),
-            authentication: crate::gateway::meta_mcp::Authentication::Authenticated,
-            credential_kind: crate::security::audit::CredentialKind::LocalTransport,
-            authorizer: stdio_authorizer,
-            // Stdio has no network surface: the client SPAWNED
-            // this process and holds what the operator holds.
-            // Withholding admin would disarm the single-user setup
-            // the origin gate protects, and protect nothing.
-            //
-            // Explicit since the admin gate moved to the
-            // dispatcher: it previously lived on the HTTP path
-            // alone, so stdio was never checked and the default
-            // non-admin context went unnoticed.
-            admin: crate::gateway::authz::AdminStanding::Gateway,
-            surface_request: crate::gateway::recovery::SurfaceRequest::Configured,
-            // MRTR.9 declares capabilities per request, in the same `_meta`
-            // this shape was classified from, so a modern call is read there.
-            //
-            // A legacy or malformed shape carries no `_meta` to read, and on a
-            // session transport that does not mean the client declared
-            // nothing — it declared once, on the handshake. Falling back to it
-            // is what lets a legacy stdio client be asked for the input it
-            // announced; the bridge still refuses anything the handshake did
-            // not name.
-            input_capabilities: if is_modern {
-                request_shape.declared_capabilities()
-            } else {
-                client.handshake_capabilities
-            },
-            retry,
-            api_key_name: None,
-            agent_id: None,
-            agent_declared: None,
-            grant_subject: None,
-            verified_identity: None,
-            // The one client this process serves, for binding continuations.
-            stdio_nonce: Some(StdioNonce::process()),
-            caller_key: None,
-            // Same `RequestShape` the `initialize` arm advertises against.
-            era: request_shape.era(),
-            // The serve loop's own channel: a stdio client reads the same
-            // pipe an outbound request is written to, so it can be asked.
-            // Non-serve-loop callers still pass `NoClientChannel`.
-            channel: client.channel,
-            // stdio speaks to one process over two pipes and
-            // has no elicitation channel: there is no operator
-            // this transport can reach, so a destructive call
-            // it cannot confirm is refused rather than asked
-            // about. Not "found no session" -- no asker can
-            // exist here at all.
-            confirmation:
-                crate::gateway::destructive_confirmation::ConfirmationChannel::Unavailable,
-            generation,
-        }
-    }
-
     /// Long by construction: the single place a `tools/call` is admitted,
     /// dispatched and accounted for, and splitting it would put the policy
     /// checks and the outcome they gate in different functions.
@@ -582,11 +492,17 @@ impl Gateway {
             // replay protection it does not have, and for a destructive tool
             // that is the duplicate side effect it asked to be spared.
             if retry.is_malformed() {
-                break 'tool_call JsonRpcResponse::error(
-                    Some(id),
-                    INVALID_PARAMS,
+                // Recorded before it is answered, as on `/mcp`, by the one
+                // writer; the caller is the stdio caller every early stdio
+                // refusal names.
+                break 'tool_call crate::gateway::router::answer_stdio_malformed(
+                    meta_mcp,
+                    super::stdio_audit_who(meta_mcp.record_key()),
+                    (arguments.unwrap_or(&empty_arguments), session_id),
+                    id,
                     format!("malformed request fields: {}", retry.malformed.join(", ")),
-                );
+                )
+                .await;
             }
             // Verified evidence only: stdio echoes no header, so the session's
             // negotiated revision is the whole reading. The body is not
@@ -763,6 +679,20 @@ impl Gateway {
                 }
                 Err(error) => {
                     crate::gateway::delivery_facts::outlet(&error);
+                    // Written before it is answered, with the who the stdio
+                    // signing refusal records; the answer below is today's.
+                    let error = match crate::gateway::router::settle_stdio_admission(
+                        meta_mcp,
+                        super::stdio_audit_who(meta_mcp.record_key()),
+                        (arguments.as_ref(), &tool_name, session_id),
+                        id.clone(),
+                        error,
+                    )
+                    .await
+                    {
+                        std::ops::ControlFlow::Continue(error) => error,
+                        std::ops::ControlFlow::Break(unavailable) => break 'tool_call unavailable,
+                    };
                     // MIK-8747: gateway-authored refusal data (the cross-era
                     // replay refusal) stays on the frame.
                     if let crate::Error::JsonRpc {

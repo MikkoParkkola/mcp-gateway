@@ -88,6 +88,7 @@ pub(crate) mod signing_allocation_tests;
 #[cfg(test)]
 mod signing_writer_tests;
 mod start_checks;
+mod stdio_caller_context;
 mod stdio_catalogue;
 mod stdio_channel;
 mod stdio_delivery;

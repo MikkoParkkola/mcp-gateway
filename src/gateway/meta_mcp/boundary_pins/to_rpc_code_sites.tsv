@@ -39,10 +39,14 @@ src/gateway/router/direct_guards.rs	refusal	2	every caller passes a gate's own e
 src/gateway/router/handlers/dispatch_intake_run.rs	intake	2	chain nonce and sanitize refusals; gateway-origin frame
 src/gateway/router/handlers/dispatch_tools_call.rs	tools_call	4	admission, kill-switch and audit refusals; gateway-origin frame
 src/gateway/router/handlers/dispatch_tools_call/route_stage.rs	authorize_call_targets	1	a withheld target's refusal code (moved from tools_call); gateway-origin frame
+src/gateway/router/meta_refusal_audit.rs	admission	2	the refused-call metric's code, and the 503's code when a fail-closed log cannot take the record; gateway-origin frame
+src/gateway/router/meta_refusal_audit.rs	admission_refusal	1	the record's outcome code when the error maps to no outcome; no frame
 src/gateway/router/meta_refusal_audit.rs	answer_intake	1	audit-unavailable refusal; gateway-origin frame
 src/gateway/router/meta_refusal_audit.rs	answer_signing	1	a signing refusal's own code, for its answer and its record; gateway-origin frame
-src/gateway/router/meta_refusal_audit.rs	answer_stdio_signing_refusal	2	the stdio signing refusal's code, and the log's unavailability code when it fails closed; gateway-origin frame
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_refusal	1	the log's unavailability code when a fail-closed log cannot take a stdio record; gateway-origin frame
+src/gateway/router/meta_refusal_audit.rs	answer_stdio_signing_refusal	1	the stdio signing refusal's own code, for its answer and its metric; gateway-origin frame
 src/gateway/router/meta_refusal_audit.rs	record	1	audit outcome code; no frame
+src/gateway/router/meta_refusal_audit.rs	settle_stdio_admission	2	the refused-call metric's code, and the log's unavailability code when a fail-closed log cannot take the record; gateway-origin frame
 src/gateway/router/meta_refusal_audit.rs	signing_refusal	1	the record's outcome code when the error maps to no outcome; no frame
 src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	2	admission refusals; gateway-origin frame
 src/gateway/server/stdio_dispatch.rs	prepare_signing	2	signing refusal; gateway-origin frame

@@ -395,7 +395,7 @@ const CENSUS: &[(&str, &str, usize, Class, &str)] = &[
     ("src/events/rpc_held.rs", "credential_principal: Some(caller.credential.principal.clone())", 1, Store, "held subscription row field: the store's owner binding"),
     ("src/events/fanout.rs", "row.credential_principal == snapshot.credential_principal", 1, Store, "store row identity comparison"),
     ("src/gateway/router/handlers/session_end.rs", "c.credential_principal().is_none()", 1, Store, "presence test only"),
-    ("src/gateway/server/stdio_dispatch.rs", "credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL)", 1, Decl, "context owner key; the record field beside it is keyed"),
+    ("src/gateway/server/stdio_caller_context.rs", "credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL)", 1, Decl, "context owner key; the record field beside it is keyed"),
     ("src/gateway/server/stdio_single.rs", "credential_principal: Some(STDIO_CREDENTIAL_PRINCIPAL)", 1, Decl, "cfg(test) stdio fixture context"),
     ("src/gateway/router/handlers/dispatch_tools_call/route_stage.rs", "credential_principal: client", 1, Decl, "context owner key; record_principal beside it is keyed"),
     ("src/gateway/router/handlers/dispatch_tools_call/route_stage.rs", ".map(|client| client.principal.storage_form())", 1, Decl, "feeds the context's credential_principal (censused)"),

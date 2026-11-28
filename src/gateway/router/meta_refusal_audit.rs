@@ -197,11 +197,9 @@ pub(crate) async fn answer_stdio_signing_refusal(
     (id, site): (AnswerId, SigningSite),
     error: crate::Error,
 ) -> crate::protocol::JsonRpcResponse {
-    use crate::protocol::JsonRpcResponse;
     let code = error.to_rpc_code();
     let message = crate::gateway::meta_mcp::signing::wire_error_message(&error);
     let refusal = signing_refusal(error, request_target(arguments, called), (id, site));
-    let id = refusal.context.id.clone().frame_id();
     crate::security::security_metrics::meta_refused(code);
     let refused = Refused {
         arguments,
@@ -211,6 +209,43 @@ pub(crate) async fn answer_stdio_signing_refusal(
         trace: None,
     }
     .traced_for_grant();
+    answer_stdio_refusal(meta, refused, refusal, (code, message)).await
+}
+
+/// A stdio call refused for malformed retry fields, recorded the way `/mcp`
+/// records it ([`malformed_refusal`]) and answered -32602 with `message`.
+/// No grant decision exists for it, so it carries no grant trace.
+pub(crate) async fn answer_stdio_malformed(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    who: AuditWho,
+    (arguments, session_id): (&Value, &str),
+    id: RequestId,
+    message: String,
+) -> crate::protocol::JsonRpcResponse {
+    crate::security::security_metrics::meta_refused(INVALID_PARAMS);
+    let refused = Refused {
+        arguments,
+        who,
+        session_id,
+        firewall: false,
+        trace: None,
+    };
+    let refusal = malformed_refusal(AnswerId::Present(id));
+    answer_stdio_refusal(meta, refused, refusal, (INVALID_PARAMS, message)).await
+}
+
+/// The one stdio settle-and-answer: `refusal` is written through the meta
+/// layer's own log, then answered with its code and words, or as the log's
+/// unavailability when the log fails closed and the record could not be
+/// written. Stdio has no router state, so the meta layer stands in for it.
+async fn answer_stdio_refusal(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    refused: Refused<'_>,
+    refusal: Refusal<'_>,
+    (code, message): (i32, String),
+) -> crate::protocol::JsonRpcResponse {
+    use crate::protocol::JsonRpcResponse;
+    let id = refusal.context.id.clone().frame_id();
     match refused
         .settle(meta, meta.transparency_logger.as_ref(), refusal)
         .await
@@ -222,6 +257,98 @@ pub(crate) async fn answer_stdio_signing_refusal(
         Settled::Recorded(_) | Settled::Unrecorded => {
             JsonRpcResponse::gateway_error(id, code, message)
         }
+    }
+}
+
+/// The record of a call refused for malformed retry fields, on either
+/// transport: `invalid` -32602 of kind `syntax`, with no target (none is
+/// resolved yet), answered as the log's unavailability when a fail-closed
+/// log could not take it.
+fn malformed_refusal(id: AnswerId) -> Refusal<'static> {
+    Refusal {
+        outcome: AuditOutcome::Invalid(INVALID_PARAMS),
+        server: "",
+        tool: None,
+        tenants: BTreeSet::new(),
+        context: RefusalContext {
+            policy: IfUnwritten::FollowLog,
+            kind: KindSource::Site(crate::security::decision_record::DecisionKind::Syntax),
+            id,
+        },
+    }
+}
+
+/// The record of an admission refusal, on either transport, and the error
+/// handed back for the route's own answer: the outcome the error maps to,
+/// the target as the request names it, and the kind admission noted, else
+/// `unrecorded` (a site kind, so no unnoted refusal reaches the writer
+/// without one). The caller adds the tenants.
+fn admission_refusal<'t>(
+    arguments: &'t Value,
+    called: &'t str,
+    id: RequestId,
+    error: crate::Error,
+) -> (Refusal<'t>, crate::Error) {
+    let code = error.to_rpc_code();
+    let result: crate::Result<Value> = Err(error);
+    let outcome = AuditOutcome::from_result(&result).unwrap_or(AuditOutcome::Error(code));
+    // Built as an error two lines up; the `Ok` arm only satisfies the match,
+    // with no panic on a request path.
+    let error = match result {
+        Err(error) => error,
+        Ok(_) => crate::Error::AuditUnavailable,
+    };
+    let (server, tool) = request_target(arguments, called);
+    let refusal = Refusal {
+        outcome,
+        server,
+        tool: Some(tool),
+        tenants: BTreeSet::new(),
+        context: RefusalContext {
+            policy: IfUnwritten::FollowLog,
+            kind: KindSource::Site(crate::security::decision_record::DecisionKind::Unrecorded),
+            id: AnswerId::Present(id),
+        },
+    };
+    (refusal, error)
+}
+
+/// An admission refusal on stdio, written as `/mcp` writes it
+/// ([`Refused::admission`]). `Continue` hands the error back for the route's
+/// own answer; `Break` is the log's unavailability.
+pub(crate) async fn settle_stdio_admission(
+    meta: &crate::gateway::meta_mcp::MetaMcp,
+    who: AuditWho,
+    (arguments, called, session_id): (&Value, &str, &str),
+    id: RequestId,
+    error: crate::Error,
+) -> std::ops::ControlFlow<crate::protocol::JsonRpcResponse, crate::Error> {
+    crate::security::security_metrics::meta_refused(error.to_rpc_code());
+    let refused = Refused {
+        arguments,
+        who,
+        session_id,
+        firewall: false,
+        trace: None,
+    };
+    let (refusal, error) = admission_refusal(arguments, called, id.clone(), error);
+    let refusal = Refusal {
+        tenants: meta.request_tenants(arguments),
+        ..refusal
+    };
+    match refused
+        .settle(meta, meta.transparency_logger.as_ref(), refusal)
+        .await
+    {
+        Settled::Unavailable => {
+            let unavailable = crate::Error::AuditUnavailable;
+            std::ops::ControlFlow::Break(crate::protocol::JsonRpcResponse::gateway_error(
+                Some(id),
+                unavailable.to_rpc_code(),
+                unavailable.to_string(),
+            ))
+        }
+        Settled::Recorded(_) | Settled::Unrecorded => std::ops::ControlFlow::Continue(error),
     }
 }
 
@@ -336,17 +463,7 @@ impl<'a> Refused<'a> {
         id: RequestId,
         message: String,
     ) -> axum::response::Response {
-        let refusal = Refusal {
-            outcome: AuditOutcome::Invalid(INVALID_PARAMS),
-            server: "",
-            tool: None,
-            tenants: BTreeSet::new(),
-            context: RefusalContext {
-                policy: IfUnwritten::FollowLog,
-                kind: KindSource::Site(crate::security::decision_record::DecisionKind::Syntax),
-                id: AnswerId::Present(id),
-            },
-        };
+        let refusal = malformed_refusal(AnswerId::Present(id));
         self.record(
             state,
             refusal,
@@ -355,6 +472,45 @@ impl<'a> Refused<'a> {
             StatusCode::BAD_REQUEST,
         )
         .await
+    }
+
+    /// An admission refusal on `/mcp`, written before it is answered: the
+    /// outcome its error maps to, the target as the request names it, the
+    /// kind admission noted (else `unrecorded`). Only the write is shared:
+    /// `Continue` hands the error back for the route's own answer, unchanged
+    /// (status, id and gateway-authored `data`); `Break` is the log's
+    /// unavailability when a fail-closed log could not take the record.
+    pub(super) async fn admission(
+        self,
+        state: &AppState,
+        called: &str,
+        id: RequestId,
+        error: crate::Error,
+    ) -> std::ops::ControlFlow<axum::response::Response, crate::Error> {
+        let code = error.to_rpc_code();
+        crate::security::security_metrics::meta_refused(code);
+        let (refusal, error) = admission_refusal(self.arguments, called, id.clone(), error);
+        let refusal = Refusal {
+            tenants: state.meta_mcp.request_tenants(self.arguments),
+            ..refusal
+        };
+        let session_id = self.session_id;
+        match self
+            .settle(&state.meta_mcp, state.transparency_log.as_ref(), refusal)
+            .await
+        {
+            Settled::Unavailable => {
+                let unavailable = crate::Error::AuditUnavailable;
+                std::ops::ControlFlow::Break(build_error_response(
+                    Some(id),
+                    unavailable.to_rpc_code(),
+                    unavailable.to_string(),
+                    session_id,
+                    StatusCode::SERVICE_UNAVAILABLE,
+                ))
+            }
+            Settled::Recorded(_) | Settled::Unrecorded => std::ops::ControlFlow::Continue(error),
+        }
     }
 
     /// MIK-8382: record a keyed call with no execution principal refused at

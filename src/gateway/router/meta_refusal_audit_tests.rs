@@ -192,3 +192,44 @@ async fn a_legacy_refusal_without_a_trace_is_keyed_on_the_session() {
         "{record}"
     );
 }
+
+/// The admission writer's own outage branch, below the route: an admission
+/// refusal a fail-closed log cannot take is the log's unavailability
+/// (`Break`, -32005), never the refusal's own answer. At the route the
+/// delivery record withholds the answer anyway (judged_answer.rs:42-57), so
+/// this row is the one that sees the writer's policy.
+#[tokio::test]
+async fn an_admission_refusal_the_log_cannot_take_breaks_as_unavailable() {
+    let dir = crate::test_dir_keep::kept_tempdir();
+    let mut meta =
+        crate::gateway::meta_mcp::MetaMcp::new(Arc::new(crate::backend::BackendRegistry::new()));
+    meta.enable_transparency_log(crate::gateway::meta_mcp::grant_audit_fixture::logger(
+        &dir,
+        AuditFailurePolicy::FailClosed,
+    ));
+    meta.transparency_log()
+        .expect("the fixture logs")
+        .set_append_failure_for_test(true);
+    let who = crate::security::audit::AuditWho {
+        credential_kind: None,
+        principal: crate::gateway::record_principal::RecordPrincipal::none(),
+        account: String::new(),
+        authority: None,
+        subject: None,
+    };
+    let arguments = json!({"profile": "p"});
+    let flow = super::settle_stdio_admission(
+        &meta,
+        who,
+        (&arguments, "gateway_set_profile", "stdio-session"),
+        crate::protocol::RequestId::Number(1),
+        crate::Error::Protocol("no session".to_string()),
+    )
+    .await;
+    let answer = match flow {
+        std::ops::ControlFlow::Break(answer) => answer,
+        std::ops::ControlFlow::Continue(error) => panic!("answered as decided: {error}"),
+    };
+    let code = answer.error.as_ref().map(|error| error.code);
+    assert_eq!(code, Some(crate::Error::AuditUnavailable.to_rpc_code()));
+}

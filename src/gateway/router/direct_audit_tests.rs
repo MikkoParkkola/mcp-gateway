@@ -51,6 +51,8 @@ mod lost_round;
 #[cfg(tp1)]
 mod meta_malformed_retry;
 #[cfg(tp1)]
+mod meta_missing_target;
+#[cfg(tp1)]
 mod meta_refusal;
 mod meta_replay;
 #[cfg(tp1)]

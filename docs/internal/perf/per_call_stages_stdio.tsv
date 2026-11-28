@@ -194,7 +194,7 @@ src/gateway/server/stdio_delivery.rs	delivered_unjudged	-	test-only (cfg(test));
 src/gateway/server/stdio_delivery.rs	finalized	stdio_invoke_tiny	every stdio tools/call answer is finalized with it
 src/gateway/server/stdio_delivery.rs	judge_and_commit	stdio_invoke_tiny	judges and settles every single stdio answer
 src/gateway/server/stdio_delivery.rs	split	stdio_invoke_tiny	splits every finalized stdio answer for judging
-src/gateway/server/stdio_dispatch.rs	build_stdio_caller_context	stdio_invoke_tiny	on the stdio single-request path
+src/gateway/server/stdio_caller_context.rs	build_stdio_caller_context	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/stdio_dispatch.rs	dispatch_relay_scoped	stdio_invoke_tiny	the stdio single-request dispatch every staged call runs
 src/gateway/server/stdio_dispatch.rs	dispatch_tools_call	stdio_invoke_tiny	on the stdio single-request path
 src/gateway/server/stdio_dispatch.rs	parse_and_observe	stdio_invoke_tiny	on the stdio single-request path

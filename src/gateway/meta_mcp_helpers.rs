@@ -635,6 +635,20 @@ pub(crate) fn parse_tool_arguments(args: &Value) -> Result<Value> {
     parse_tool_arguments_cow(args).map(std::borrow::Cow::into_owned)
 }
 
+/// The required string `key` for a call that is refused without it. On a
+/// refusal the decision is noted as `syntax` first, so the call's record
+/// says why it was turned away instead of `unrecorded`.
+///
+/// Rule (FAMILY.3, refusal-kinds ticket): use this wherever a missing string
+/// ends the call. Code that only looks a string up, and carries on without
+/// it, keeps [`extract_required_str`].
+pub(crate) fn refuse_missing_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
+    use crate::security::decision_record::DecisionKind;
+    extract_required_str(args, key).map_err(|missing| {
+        crate::gateway::meta_mcp::invoke::audit::noted((missing, (DecisionKind::Syntax, None)))
+    })
+}
+
 /// [`parse_tool_arguments`] without copying an object that is already there
 /// (MIK-8014): borrowed when `arguments` is an object, owned only when it had
 /// to be built (absent, or a JSON string parsed into an object).
