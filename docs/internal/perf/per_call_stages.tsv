@@ -106,13 +106,13 @@ src/gateway/meta_mcp/invoke/audit/settlement.rs	append_settlement	-	task settlem
 src/gateway/meta_mcp/invoke/audit.rs	answered_by	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	attributes_tenants	-	on-path, untimed: read only by the chain-refusal note (note_uninspected); the timed backend is not chained
 src/gateway/meta_mcp/invoke/audit.rs	attribution	-	on-path, untimed: invocation-record attribution, built only with a transparency logger, which the harness does not configure
-src/gateway/meta_mcp/invoke/audit.rs	audit_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
+src/gateway/meta_mcp/invoke/audit_record.rs	audit_invocation	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	audit_refused_credential	-	on-path, untimed: identity-propagation refusals only; the timed backend propagates no credential
 src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement	-	test-only shorthand (cfg(test))
 src/gateway/meta_mcp/invoke/audit/settlement.rs	audit_settlement_kept	-	upstream task settlement (tasks/get recovery) only, not a live dispatch
 src/gateway/meta_mcp/invoke/audit/settlement.rs	decided_fields	-	task settlement only (a task worker's settlement and tasks/get recovery), not a live dispatch
 src/gateway/meta_mcp/invoke/audit.rs	delivered_value	-	on-path, untimed: relay receipt rebuilds of delivered answers, with relay detection active; the harness stages no receipt
-src/gateway/meta_mcp/invoke/audit.rs	from_caller	-	on-path, untimed: invocation-record writer, only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit.rs	from_caller	http_invoke_tiny	on the HTTP gateway_invoke path: every call's record is built as an owned value, with or without a log
 src/gateway/meta_mcp/invoke/audit.rs	note	http_invoke_tiny	on the HTTP gateway_invoke path
 src/gateway/meta_mcp/invoke/audit.rs	note_cached	-	on-path, untimed: cache hits only; the timed rows dispatch fresh every round
 src/gateway/meta_mcp/invoke/audit.rs	note_cached_failure	-	on-path, untimed: idempotent replays of a stored failure only
@@ -138,7 +138,29 @@ src/gateway/meta_mcp/invoke/audit/settlement.rs	settled_outcome	-	upstream task 
 src/gateway/meta_mcp/invoke/audit.rs	sha256_of	-	on-path, untimed: audit-record hashes, only with a transparency logger, which the harness does not configure
 src/gateway/meta_mcp/invoke/audit.rs	stored_failure	-	on-path, untimed: raw-receipt chain refusals stored under an idempotency key only
 src/gateway/meta_mcp/invoke/audit.rs	with_dispatch_scope	http_invoke_tiny	on the HTTP gateway_invoke path
-src/gateway/meta_mcp/invoke/audit.rs	write_invocation	-	on-path, untimed: only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit_record.rs	write_invocation	-	on-path, untimed: only with a transparency logger, which the harness does not configure
+src/gateway/meta_mcp/invoke/audit_record.rs	prepare_record	http_invoke_tiny	on the HTTP gateway_invoke path: the commit after finalize counts every call's record
+src/gateway/meta_mcp/invoke/audit_record.rs	append_prepared	http_invoke_tiny	on the HTTP gateway_invoke path: the commit's job; with no log it returns at once
+src/gateway/meta_mcp/invoke/audit_record.rs	settle_record	http_invoke_tiny	on the HTTP gateway_invoke path: the commit settles each record
+src/gateway/meta_mcp/invoke/audit_record.rs	note_reading	http_invoke_tiny	on the HTTP gateway_invoke path: a delivered call notes its reading
+src/gateway/meta_mcp/invoke/audit_record.rs	unwritten	http_invoke_tiny	on the HTTP gateway_invoke path: the no-log record the harness takes
+src/gateway/meta_mcp/invoke/audit_record.rs	write_record	-	on-path, untimed: the inline write of a call with no open audit owner (stdio, nested steps); the timed HTTP call commits through its owner
+src/gateway/meta_mcp/invoke/audit.rs	note_response_refused	-	on-path, untimed: only when the response firewall refuses an answer; the timed answers pass
+src/gateway/meta_mcp/invoke/audit.rs	refused_by_answer_scan	-	on-path, untimed: only for an answer the response firewall refused
+src/gateway/meta_mcp/invoke/audit.rs	response_refused	-	on-path, untimed: read by the direct writer only, off the timed meta path
+src/gateway/meta_mcp/invoke/audit_owner.rs	owned	http_invoke_tiny	the HTTP /mcp request's audit owner scope
+src/gateway/meta_mcp/invoke/audit_owner.rs	defer	http_invoke_tiny	on the HTTP gateway_invoke path: the record is held for the commit
+src/gateway/meta_mcp/invoke/audit_owner.rs	commit	http_invoke_tiny	on the HTTP gateway_invoke path: right after finalize
+src/gateway/meta_mcp/invoke/audit_owner.rs	verdict	http_invoke_tiny	on the HTTP gateway_invoke path: read at the commit
+src/gateway/meta_mcp/invoke/audit_owner.rs	spawn	http_invoke_tiny	on the HTTP gateway_invoke path: each record's write is one job
+src/gateway/meta_mcp/invoke/audit_owner.rs	drop	http_invoke_tiny	on the HTTP gateway_invoke path: the owner drops at every request's end, empty after its commit
+src/gateway/meta_mcp/invoke/audit_owner.rs	inline	-	on-path, untimed: nested steps (playbooks, search, chains) only; the timed call runs none
+src/gateway/meta_mcp/invoke/audit_owner.rs	answer_refused	-	on-path, untimed: only when the response firewall refuses an answer
+src/gateway/meta_mcp/invoke/audit_owner.rs	hand_off	-	on-path, untimed: only a request dropped before its commit (its client went away)
+src/gateway/meta_mcp/invoke/audit_owner.rs	drain	-	shutdown only: the wait for handed-off record writes, after the listener stops
+src/gateway/meta_mcp/invoke/audit_owner.rs	before_commit_for_test	-	test-only seam (cfg(test))
+src/gateway/meta_mcp/invoke/audit_owner.rs	open_gate	-	test-only seam (cfg(test))
+src/gateway/meta_mcp/invoke/audit_owner.rs	wait_for_gate	-	test-only seam (cfg(test))
 src/gateway/meta_mcp/invoke/audit.rs	decision_for_test	-	test-only helper
 src/gateway/meta_mcp/invoke/audit.rs	in_dispatch_scope_for_test	-	test-only helper
 src/gateway/meta_mcp/invoke/audit.rs	preload_allow_for_test	-	test-only helper

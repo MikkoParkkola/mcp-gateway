@@ -95,6 +95,7 @@ async fn a_record_handed_off_at_the_listener_deadline_lands_before_shutdown_ends
             // The in-flight drain holds every permit but the row's: the
             // still-finishing request hands its write off, then ends. Polled,
             // as the drain gives no signal of its own.
+            // limit-under-test (absorbed-by: drain_inflight): only the poll period; a slow runner polls less often inside the in-flight drain's window
             () = tokio::time::sleep(Duration::from_millis(5)), if finishing.is_some() => {
                 if inflight.available_permits() == 0 {
                     let landed = Arc::clone(&job_b);

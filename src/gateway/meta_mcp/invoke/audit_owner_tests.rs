@@ -49,6 +49,7 @@ async fn d2_5_shutdown_waits_for_a_handed_off_record_within_its_bound() {
 async fn d2_5_a_job_past_the_bound_is_reported() {
     let jobs = Arc::new(AuditJobs::default());
     let (_gate, landed) = held_job(&jobs);
+    // limit-under-test (fires-only): the held job never ends, so this bound always runs out; the row asserts only that the drain waited it whole
     let bound = Duration::from_millis(100);
     let started = Instant::now();
     let open = jobs.drain(bound).await;
