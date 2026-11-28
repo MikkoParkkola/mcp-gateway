@@ -19,10 +19,19 @@ const ADD_MODULE = (() => {
 })();
 
 /** The card's own sentences, read from its module in the page (lead ruling 2026-11-27: written once, there). */
-const addWords = (page) => page.evaluate(async (u) => {
+const addWords = (page, host = '') => page.evaluate(async ([u, h]) => {
   const m = await import(u);
-  return { field: m.FIELD_WORDS, other: m.OTHER_FIELD_WORDS, words: m.WORDS };
-}, ADD_MODULE);
+  const { override, overrideProgress, ...words } = m.WORDS;
+  return { field: m.FIELD_WORDS, other: m.OTHER_FIELD_WORDS, words, override: override(h), progress: overrideProgress('crm') };
+}, [ADD_MODULE, host]);
+
+/** X4: every preview request body any row sends; none may carry the Override's member. */
+const PREVIEW_BODIES = [];
+test.afterEach(() => {
+  const flagged = PREVIEW_BODIES.filter((b) => b && 'allow_cleartext_credentials' in b);
+  PREVIEW_BODIES.length = 0;
+  expect(flagged, 'X4: the flag never goes to a preview').toEqual([]);
+});
 
 const HTTPS = 'https://crm.lan/mcp';
 const card = (page) => page.getByRole('region', { name: 'Add a server' });
@@ -60,6 +69,7 @@ async function addPage(page, { preview = () => ({ code: 404, body: {} }), add = 
   await page.route('**/ui/api/previews', (route) => {
     const sent = route.request().postDataJSON();
     seen.previews.push(sent);
+    PREVIEW_BODIES.push(sent);
     return settle(route, preview(sent, seen.previews.length));
   });
   await page.route(/\/ui\/api\/backends$/, (route) => {
@@ -550,3 +560,123 @@ test.describe('V3b a failed preview of a server with held-back values can still 
     });
   }
 });
+
+const PLAIN = 'http://crm.lan:8080/mcp';
+const NO_PREVIEW = { code: 422, body: { error: 'Preview refused. You can still add this server.' } };
+const cleartext = (over = {}) => ({ code: 422, body: { error: 'cleartext_credentials', message: '<i>planted</i> cause', fix: '<b>planted</b> fix', ...over } });
+
+/** A plain-http URL with one Authorization row, added without a preview; `add(body, n)` answers each add. */
+async function toRefused(page, add, text = PLAIN) {
+  let refusalsRead = 0;
+  await page.route('**/ui/api/refusals**', (route) => { refusalsRead += 1; return route.fulfill({ status: 200, json: { refusals: [] } }); });
+  const seen = await addPage(page, { preview: () => NO_PREVIEW, add });
+  await field(page).fill(text);
+  await card(page).getByRole('button', { name: 'Add a value' }).click();
+  await rows(page, 'Headers').getByRole('textbox', { name: 'Name' }).fill('Authorization');
+  await rows(page, 'Headers').getByLabel('Value').fill('Bearer x1');
+  await previewButton(page).click();
+  await card(page).getByRole('button', { name: 'Add without a preview' }).click();
+  seen.refusalsRead = () => refusalsRead;
+  return seen;
+}
+const dialog = (page) => page.locator('dialog.confirm');
+
+test.describe('X1 the plain-http refusal shows the gateway\'s cause and fix (UI4.2)', () => {
+  test('cause and fix as text; Try https rewrites the field only; no refusals read', async ({ page }) => {
+    const seen = await toRefused(page, () => cleartext());
+    const notAdded = card(page).getByRole('region', { name: 'Not added' });
+    await expect(notAdded).toContainText('<i>planted</i> cause');
+    await expect(notAdded).toContainText('Fix: <b>planted</b> fix');
+    await expect(notAdded.locator('i, b')).toHaveCount(0);
+    await expect(notAdded.getByRole('button', { name: 'Send unencrypted anyway…' })).toBeVisible();
+    expect(seen.adds[0]).not.toHaveProperty('allow_cleartext_credentials');
+    await notAdded.getByRole('button', { name: 'Try https://crm.lan:8080' }).click();
+    await expect(field(page)).toHaveValue('https://crm.lan:8080/mcp');
+    await expect(field(page)).toBeFocused();
+    expect(seen.adds).toHaveLength(1);
+    expect(seen.refusalsRead()).toBe(0);
+  });
+
+  test('without a fix: the cause alone, and both buttons', async ({ page }) => {
+    await toRefused(page, () => cleartext({ fix: undefined }));
+    const notAdded = card(page).getByRole('region', { name: 'Not added' });
+    await expect(notAdded).toContainText('<i>planted</i> cause');
+    await expect(notAdded).not.toContainText('Fix:');
+    await expect(notAdded.getByRole('button', { name: 'Try https://crm.lan:8080' })).toBeVisible();
+    await expect(notAdded.getByRole('button', { name: 'Send unencrypted anyway…' })).toBeVisible();
+  });
+
+  test('a ws URL is offered wss', async ({ page }) => {
+    await toRefused(page, () => cleartext(), 'ws://stream.lan:9000/ws');
+    await expect(card(page).getByRole('button', { name: 'Try wss://stream.lan:9000' })).toBeVisible();
+  });
+});
+
+test.describe('X2 Override goes through the confirm (UI4.2)', () => {
+  test('the five consequences; Cancel sends nothing; confirming sends the flag once, with the same headers', async ({ page }) => {
+    const seen = await toRefused(page, (b, n) => (n === 1 ? cleartext() : created(b.name)));
+    const w = await addWords(page, 'crm.lan:8080');
+    const override = card(page).getByRole('button', { name: 'Send unencrypted anyway…' });
+    await override.click();
+    await expect(dialog(page).locator('li')).toHaveText(w.override);
+    await dialog(page).getByRole('button', { name: 'Cancel crm' }).click();
+    await expect(dialog(page)).toHaveCount(0);
+    await expect(override).toBeFocused();
+    expect(seen.adds).toHaveLength(1);
+    await override.click();
+    await dialog(page).getByRole('button', { name: `${w.words.overrideVerb} crm` }).click();
+    await expect(page).toHaveURL('/ui/servers/crm/status');
+    await expect(page.locator('.done-notice .done-title')).toHaveText('✓ crm added.');
+    expect(seen.adds).toHaveLength(2);
+    expect(seen.adds[1]).toEqual({ name: 'crm', url: PLAIN, headers: { Authorization: 'Bearer x1' }, allow_cleartext_credentials: true });
+    expect(seen.adds.filter((b) => 'allow_cleartext_credentials' in b)).toHaveLength(1);
+  });
+
+  test('a refusal inside the dialog shows the gateway\'s sentence; in progress first', async ({ page }) => {
+    const hold = gate();
+    await toRefused(page, (b, n) => (n === 1 ? cleartext() : { code: 422, body: { error: 'that host is not allowed' }, hold: hold.shut }));
+    const w = await addWords(page, 'crm.lan:8080');
+    await card(page).getByRole('button', { name: 'Send unencrypted anyway…' }).click();
+    await dialog(page).getByRole('button', { name: `${w.words.overrideVerb} crm` }).click();
+    await expect(dialog(page).locator('.confirm-progress')).toHaveText(w.progress);
+    hold.open();
+    await expect(dialog(page)).toContainText('that host is not allowed');
+  });
+});
+
+test.describe('X3 by-field refusals land at their input', () => {
+  /** [reason, field, the input the sentence belongs to: field | rows | row, the text typed] */
+  const CASES = [
+    ['secret_in_url', 'url', 'field', HTTPS],
+    ['secret_in_command', 'command', 'field', 'uvx mcp-server-fetch'],
+    ['header_name', 'headers', 'rows', HTTPS],
+    ['header_value', 'headers.Authorization', 'row', HTTPS],
+    ['headers_need_url', 'headers', 'rows', HTTPS],
+    ['url_invalid', 'url', 'field', HTTPS],
+    ['a_code_nobody_listed', 'url', 'field', HTTPS],
+    ['header_value', 'headers.X-Missing', 'rows', HTTPS],
+  ];
+  for (const [reason, at, where, text] of CASES) {
+    test(`${reason} at ${at}`, async ({ page }) => {
+      await addPage(page, { preview: () => NO_PREVIEW, add: () => ({ code: 422, body: { error: 'literal_in_value', refusals: [{ reason, field: at }] } }) });
+      const w = await addWords(page);
+      await field(page).fill(text);
+      if (where !== 'field' || text === HTTPS) {
+        await card(page).getByRole('button', { name: 'Add a value' }).click();
+        const label = kindIsUrl(text) ? 'Headers' : 'Environment variables';
+        await rows(page, label).getByRole('textbox', { name: 'Name' }).fill('Authorization');
+        await rows(page, label).getByLabel('Value').fill('Bearer x3');
+      }
+      await previewButton(page).click();
+      await card(page).getByRole('button', { name: 'Add without a preview' }).click();
+      const words = w.field[reason] ?? w.other;
+      const shown = card(page).locator('p.add-err:not([hidden])');
+      await expect(shown).toHaveText([words]);
+      const id = await shown.getAttribute('id');
+      expect(id.endsWith({ field: '-field-err', rows: '-rows-err', row: '-r1-err' }[where]), id).toBe(true);
+      expect(await page.locator('body').innerText()).not.toContain('literal_in_value');
+      expect(await page.locator('body').innerText()).not.toContain(reason);
+    });
+  }
+});
+const kindIsUrl = (text) => /^(https?|wss?):\/\//.test(text);
