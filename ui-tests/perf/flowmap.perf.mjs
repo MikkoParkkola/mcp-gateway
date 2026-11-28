@@ -95,7 +95,9 @@ test('F2 a planted slow update misses the budget, two slow samples in fifty do n
 
 test('DIAG the fold against the code before it, phone, in one run', async ({ page }) => {
   // The code before the fold, and the fold with one change undone each (built by sed from its blob).
-  const variants = ['before', 'noMove', 'noFoldMax', 'noBox'];
+  // The fold-3 module (served) against the gate-cleared 4baac574d5 one; pass line set before the run:
+  // the fold's phone p95 within 10% of the baseline's.
+  const variants = ['before'];
   const code = Object.fromEntries(variants.map((v) => [v, readFileSync(new URL(`./diag-${v}.js`, import.meta.url), 'utf8')]));
   await page.route('**/ui/assets/overview.diag-*.js', (r) => r.fulfill({ body: code[/diag-(\w+)\.js$/.exec(r.request().url())[1]], contentType: 'text/javascript' }));
   await serve(page, { body: big(0) });
