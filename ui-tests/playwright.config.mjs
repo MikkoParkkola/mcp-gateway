@@ -25,6 +25,9 @@ export default defineConfig({
     { name: 'chromium', testDir: 'tests', use: { ...devices['Desktop Chrome'] } },
     { name: 'visual', testDir: 'visual', testMatch: '*.visual.mjs', use: { ...devices['Desktop Chrome'] } },
     { name: 'perf', testDir: 'perf', testMatch: '*.perf.mjs', use: { ...devices['Desktop Chrome'], trace: 'off' } },
+    // The real gateway binary per test: JOURNEYS_GATEWAY_BIN names a debug build; unset fails the run.
+    // A test's own start (two inits, the start, the home proofs) can take seconds, so it gets more than the default.
+    { name: 'journeys', testDir: 'journeys', testMatch: '*.journey.mjs', timeout: 90_000, use: { ...devices['Desktop Chrome'] } },
   ],
   webServer: {
     command: 'node server.mjs',

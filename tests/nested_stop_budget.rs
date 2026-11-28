@@ -24,6 +24,9 @@ mod pids;
 mod stdio_chain;
 #[path = "common/yaml.rs"]
 mod yaml;
+#[cfg(target_os = "linux")]
+#[path = "nested_stop_budget/zombie_inner.rs"]
+mod zombie_inner;
 const PROTOCOL_VERSION: &str = "2025-11-25";
 const READY_BOUND: Duration = Duration::from_secs(60);
 /// What the chain's last process may outlive the configured stop total by: the
@@ -121,6 +124,7 @@ fn write_chain_parent(
     child: &str,
     child_config: &Path,
     during: During,
+    child_log: Option<&str>,
 ) -> PathBuf {
     std::fs::write(
         root.join(format!("{child}.py")),
@@ -143,6 +147,11 @@ fn write_chain_parent(
             ),
         ),
     );
+    // A backend's environment is cleared, so a child's log filter is named here.
+    if let Some(filter) = child_log {
+        let child_backend = config.backends.get_mut(child).expect("the child backend");
+        child_backend.env.insert("RUST_LOG".into(), filter.into());
+    }
     save(root, &format!("{name}.yaml"), &config)
 }
 /// The outer gateway's log, then each nested gateway's own (a launcher sends its stderr to
