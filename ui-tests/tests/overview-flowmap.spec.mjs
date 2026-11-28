@@ -520,16 +520,23 @@ for (const [where, body, width] of [['a low row', WITH_DOT, 1440], ['a lone call
     const cy = d.top + d.height / 2;
     // The line's midpoint (spec): x halfway from the callers' edge (37.5) to the hub (50), y halfway to 50.
     return { x: cx - (m.left + m.width * 0.4375), y: cy - (m.top + (m.height * (y + 50)) / 200), top: document.elementFromPoint(cx, cy)?.closest('.ov-dot') === dot,
-      // The dot's whole box, not only its centre, stays off the hub and off its row's number.
-      clear: [box.querySelector('.ov-hub'), rows[i].querySelector('.ov-row-calls')].every((e) => {
-        const r = e.getBoundingClientRect();
-        return r.right <= d.left || r.left >= d.right || r.bottom <= d.top || r.top >= d.bottom;
-      }) };
+      // The dot's whole box, not only its centre: off its row's number, off the hub's words (their
+      // line boxes, by a Range), and off the hub's box where the column has room for both.
+      ...(() => {
+        const apart = (r) => r.right <= d.left || r.left >= d.right || r.bottom <= d.top || r.top >= d.bottom;
+        const hub = box.querySelector('.ov-hub');
+        const words = document.createRange();
+        words.selectNodeContents(hub);
+        return { number: apart(rows[i].querySelector('.ov-row-calls').getBoundingClientRect()), hub: apart(hub.getBoundingClientRect()), words: [...words.getClientRects()].every(apart) };
+      })() };
   });
   expect(Math.abs(off.x), 'across').toBeLessThanOrEqual(2);
   expect(Math.abs(off.y), 'down').toBeLessThanOrEqual(2);
   expect(off.top, 'nothing covers the dot').toBe(true);
-  expect(off.clear, 'the dot overlaps neither the hub nor its row\'s number').toBe(true);
+  expect(off.number, 'the dot clears its row\'s number').toBe(true);
+  expect(off.words, 'the dot covers none of the hub\'s words').toBe(true);
+  // The spec fixes the midpoint; below about 1100 px a row level with the hub meets the hub's edge.
+  if (width >= 1100) expect(off.hub, 'the dot clears the hub\'s box').toBe(true);
 });
 
 test('G2 no line is wider than 8 px, the callers fold row included', async ({ page }) => {
