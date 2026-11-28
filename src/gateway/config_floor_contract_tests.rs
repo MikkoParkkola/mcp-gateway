@@ -143,12 +143,12 @@ async fn k3_superseded_attempt_hands_nothing() {
     // it: no timeout, so the window stays open for the row's own check. The
     // row owns the only sender, so a failing row drops it and the task ends.
     let (parked_tx, parked) = channel::<u64>();
-    let (hold2, held2) = channel::<()>();
-    let (parked_tx, held2) = (Mutex::new(parked_tx), Mutex::new(held2));
+    let (unpark2, wait2) = channel::<()>();
+    let (parked_tx, wait2) = (Mutex::new(parked_tx), Mutex::new(wait2));
     floor.set_after_hand_off(Some(Arc::new(move |attempt| {
         if attempt == 2 {
             let _ = parked_tx.lock().unwrap().send(attempt);
-            let _ = held2.lock().unwrap().recv();
+            let _ = wait2.lock().unwrap().recv();
         }
     })));
     let held = Held {
@@ -208,7 +208,7 @@ async fn k3_superseded_attempt_hands_nothing() {
         !floor.settled(),
         "{ROW} a lock task still running is late work"
     );
-    hold2.send(()).expect("release attempt 2's lock task");
+    unpark2.send(()).expect("release attempt 2's lock task");
     support::wait_until("K3 settled after resume", || floor.settled());
 }
 
