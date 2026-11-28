@@ -838,7 +838,8 @@ test.describe('V3g nothing lands on another session', () => {
       await expect(page.locator('#signin')).toBeVisible();
       hold.open();
       await page.waitForTimeout(400);
-      await expect(card(page).getByRole('region', { name: step === 'describe' ? 'Nothing has run yet' : /Started once/ })).toHaveCount(0);
+      // Counted in the DOM, hidden or not: the sign-in view hides the page, so a role query would see nothing either way.
+      await expect(page.locator('section.add-server .add-panel h3', { hasText: step === 'describe' ? 'Nothing has run yet' : /Started once/ })).toHaveCount(0);
       await expect(page.locator('#signin-key')).toBeFocused();
     });
   }
