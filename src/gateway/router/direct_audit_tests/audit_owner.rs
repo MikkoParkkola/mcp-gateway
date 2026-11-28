@@ -305,3 +305,57 @@ async fn p4_3_a_request_dropped_mid_append_still_lands_one_record() {
     };
     assert_eq!(record["outcome"], "ok", "{record}");
 }
+
+/// P4 (3), the anonymous side of the client-cancel return: an anonymous
+/// `/mcp` caller has no owner to cancel by, so its `notifications/cancelled`
+/// is dropped (as specced: inflight_calls.rs, "A caller with neither is never
+/// registered"); the held call completes and writes its one record.
+#[tokio::test]
+async fn p4_3_an_anonymous_cancel_is_dropped_and_the_call_records_once() {
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    let fx = fixture(Setup {
+        extras: &[Extra::GateCall],
+        ..Setup::default()
+    })
+    .await;
+    let store = attach(&fx);
+    let call = meta_invoke("alpha", "t", &json!({}));
+    let request = post_to(&fx, "/mcp", &call, &Caller::Anonymous);
+    tokio::pin!(request);
+    let held = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            tokio::select! {
+                _ = &mut request => panic!("premise: the backend holds the call"),
+                () = tokio::time::sleep(Duration::from_millis(5)) => {
+                    if fx.calls.load(Ordering::SeqCst) > 0 {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    held.await.expect("premise: the backend receives the call");
+    let cancel = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
+                        "params": {"requestId": 5}})
+    .to_string();
+    let _ = post_to(&fx, "/mcp", &cancel, &Caller::Anonymous).await;
+    fx.gate.as_ref().expect("a gated fixture").notify_one();
+    let (_, answer) = tokio::time::timeout(Duration::from_secs(30), &mut request)
+        .await
+        .expect("the released call answers");
+    assert!(
+        answer.get("result").is_some(),
+        "the call completed: {answer}"
+    );
+    assert_eq!(
+        totals(&store),
+        [1, 0, 0, 0, 0],
+        "counted once, as delivered"
+    );
+    let records = invocations(&fx);
+    let [record] = records.as_slice() else {
+        panic!("{} records, want exactly 1", records.len());
+    };
+    assert_eq!(record["outcome"], "ok", "{record}");
+}
