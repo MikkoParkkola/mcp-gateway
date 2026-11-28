@@ -7,7 +7,7 @@
 // named after the frozen test plan (V, N, K, E, D, X, U, A); every gateway answer
 // is a literal written here, in the shapes preview.rs and add_checks.rs serve.
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady, recordAnnouncements, announced } from './shell.mjs';
+import { shellReady, recordAnnouncements, announced, gate as keyStatus, KEY } from './shell.mjs';
 import { entry, fullView, fakeServerGateway, gate, shellCall } from './server-page.mjs';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
