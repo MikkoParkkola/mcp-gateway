@@ -11,10 +11,7 @@ use serde_json::{Map, Value};
 use crate::capability::ProcessNote;
 use crate::context_integrity::ContextIntegrityEvaluation;
 use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
-use crate::security::audit::{
-    AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
-};
-use crate::security::transparency_log::CorrelationKey;
+use crate::security::audit::{AuditOutcome, AuditWho};
 use crate::{Error, Result};
 
 impl AuditWho {

@@ -4,7 +4,16 @@
 //! value, counted and its log entry built in the request's scopes, then
 //! appended (inline, or by the request's audit owner's job).
 
-use super::*;
+use serde_json::{Map, Value};
+
+use super::{DispatchNotes, sha256_of};
+use crate::gateway::meta_mcp::{MetaMcp, MetaMcpCallerContext};
+use crate::security::audit::{
+    AuditEnvelope, AuditFailurePolicy, AuditOutcome, AuditWho, InvocationTarget,
+};
+use crate::security::transparency_log::CorrelationKey;
+use crate::{Error, Result};
+
 /// What a delivered call notes about its reads once its record is written:
 /// the dispatch's reading and whether a backend answered. `None` notes nothing.
 pub(crate) type DeliveredReading =
@@ -129,7 +138,12 @@ impl MetaMcp {
             answered: AuditOutcome::from_result(&result),
             denial: crate::security::security_metrics::meta_denial(&result),
             firewall: matches!(result, Err(Error::ResponseFirewallRefused)),
-            response_hash: result.as_ref().ok().map(sha256_of),
+            // Hashed only when a log will write it, as before the record moved.
+            response_hash: self
+                .transparency_logger
+                .as_ref()
+                .and(result.as_ref().ok())
+                .map(sha256_of),
             delivered: notes.cached.and(result.as_ref().ok()).cloned(),
             succeeded: result.is_ok(),
             args: args.clone(),
