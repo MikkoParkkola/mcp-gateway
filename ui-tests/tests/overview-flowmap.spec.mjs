@@ -530,8 +530,9 @@ test('G4 a focused row keeps focus when an update moves it', async ({ page }) =>
   await expect(agentRows(page).first().locator('a.ov-row-go')).toBeFocused();
 });
 
-test('G5 on a narrow screen with a mouse the dot, shown as words, is still a 24 px target', async ({ page }) => {
-  await showMap(page, WITH_DOT, 390);
+// Wide, the dot's padding is its target (axe alone passes a small dot with room around it); narrow, its words.
+for (const width of [390, 1440]) test(`G5 with a mouse the dot is still a 24 px target, ${width} px`, async ({ page }) => {
+  await showMap(page, WITH_DOT, width);
   const box = await map(page).locator('a.ov-dot:visible').boundingBox();
   expect(box.height).toBeGreaterThanOrEqual(24);
   expect(box.width).toBeGreaterThanOrEqual(24);
