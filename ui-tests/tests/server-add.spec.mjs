@@ -8,7 +8,7 @@
 // is a literal written here, in the shapes preview.rs and add_checks.rs serve.
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { shellReady, recordAnnouncements, announced } from './shell.mjs';
-import { entry, fullView, fakeServerGateway, gate } from './server-page.mjs';
+import { entry, fullView, fakeServerGateway, gate, shellCall } from './server-page.mjs';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -680,3 +680,154 @@ test.describe('X3 by-field refusals land at their input', () => {
   }
 });
 const kindIsUrl = (text) => /^(https?|wss?):\/\//.test(text);
+
+test.describe('V3c a request that never answers still fails (the clock is the test\'s)', () => {
+  const never = () => ({ code: 200, body: {}, hold: new Promise(() => {}) });
+
+  test('the describe gives up after its limit: failed, with Retry', async ({ page }) => {
+    await page.clock.install();
+    await addPage(page, { preview: never });
+    await field(page).fill(HTTPS);
+    await previewButton(page).click();
+    await page.clock.runFor(15_500);
+    const failed = card(page).getByRole('region', { name: 'The preview did not finish' });
+    await expect(failed).toContainText('The gateway did not answer.');
+    await expect(field(page)).toBeEnabled();
+  });
+
+  test('the confirmed run gives up after its limit', async ({ page }) => {
+    await page.clock.install();
+    await addPage(page, { preview: (b) => ('confirm' in b ? never() : described()) });
+    await field(page).fill(HTTPS);
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Start once' }).click();
+    await page.clock.runFor(45_500);
+    await expect(card(page).getByRole('region', { name: 'The preview did not finish' })).toBeVisible();
+  });
+
+  test('V3d the plain add gives up at 25 s: not confirmed, with Retry and the values kept', async ({ page }) => {
+    await page.clock.install();
+    await addPage(page, { preview: () => NO_PREVIEW, add: never });
+    await field(page).fill(HTTPS);
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Add without a preview' }).click();
+    await page.clock.runFor(25_500);
+    const panel = card(page).getByRole('region', { name: 'Not confirmed' });
+    await expect(panel).toContainText('The gateway did not confirm the add.');
+    await expect(field(page)).toHaveValue(HTTPS);
+  });
+});
+
+test.describe('V3d the Override\'s add inside the dialog', () => {
+  test('a 201 held 24 s completes: the landing', async ({ page }) => {
+    await page.clock.install();
+    const hold = gate();
+    await toRefused(page, (b, n) => (n === 1 ? cleartext() : { ...created(b.name), hold: hold.shut }));
+    const w = await addWords(page, 'crm.lan:8080');
+    await card(page).getByRole('button', { name: 'Send unencrypted anyway…' }).click();
+    await dialog(page).getByRole('button', { name: `${w.words.overrideVerb} crm` }).click();
+    await page.clock.runFor(24_000);
+    hold.open();
+    await expect(page).toHaveURL('/ui/servers/crm/status');
+    await expect(page.locator('.done-notice .done-title')).toHaveText('✓ crm added.');
+  });
+
+  test('past 25 s: the shell\'s unconfirmed words, values kept, a late 201 changes nothing, Override stays declined', async ({ page }) => {
+    await page.clock.install();
+    const hold = gate();
+    await toRefused(page, (b, n) => (n === 1 ? cleartext() : { ...created(b.name), hold: hold.shut }));
+    const w = await addWords(page, 'crm.lan:8080');
+    const override = card(page).getByRole('button', { name: 'Send unencrypted anyway…' });
+    await override.click();
+    await dialog(page).getByRole('button', { name: `${w.words.overrideVerb} crm` }).click();
+    await page.clock.runFor(25_500);
+    await expect(dialog(page)).toContainText('The gateway did not confirm the outcome.');
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    hold.open();
+    await page.clock.runFor(1_000);
+    await expect(page).toHaveURL('/ui/servers/settings');
+    await expect(page.locator('.done-notice')).toHaveCount(0);
+    await expect(field(page)).toHaveValue(PLAIN);
+    await expect(rows(page, 'Headers').getByLabel('Value')).toHaveValue('Bearer x1');
+    // The shell declines the same subject until the page renders again (cite map gap c).
+    await override.click();
+    await expect(dialog(page)).toHaveCount(0);
+  });
+});
+
+test.describe('V3g nothing lands on another session', () => {
+  /** A 401 to another request of the page: the sign-in view opens, the epoch unchanged. */
+  const takeover = (page) => shellCall(page, (shell) => shell.api('/ui/api/keys').then(() => 0, () => 0));
+
+  async function heldAdd(page) {
+    const hold = gate();
+    const seen = await addPage(page, { preview: () => NO_PREVIEW, add: (b) => ({ ...created(b.name), hold: hold.shut }) });
+    await page.route('**/ui/api/keys', (route) => route.fulfill({ status: 401, json: {} }));
+    await field(page).fill(HTTPS);
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Add without a preview' }).click();
+    await expect.poll(() => seen.adds.length).toBe(1);
+    return hold;
+  }
+
+  test('the sign-in view takes over before the 201: nothing lands, focus stays in sign-in', async ({ page }) => {
+    await recordAnnouncements(page);
+    const hold = await heldAdd(page);
+    await takeover(page);
+    await expect(page.locator('#signin')).toBeVisible();
+    hold.open();
+    await page.waitForTimeout(400);
+    await expect(page).toHaveURL('/ui/servers/settings');
+    await expect(page.locator('.done-notice')).toHaveCount(0);
+    await expect(page.locator('#signin-key')).toBeFocused();
+    expect((await announced(page)).filter((t) => t.includes('added'))).toEqual([]);
+  });
+
+  test('control: with no sign-out the same held 201 lands', async ({ page }) => {
+    const hold = await heldAdd(page);
+    hold.open();
+    await expect(page).toHaveURL('/ui/servers/crm/status');
+    await expect(page.locator('.done-notice .done-title')).toHaveText('✓ crm added.');
+  });
+
+  test('landWithNotice called with a stale epoch does nothing', async ({ page }) => {
+    await addPage(page);
+    const landed = await shellCall(page, (shell) => shell.landWithNotice({ path: '/ui/servers/crm/status', notice: 'stale' }, shell.sessionNow() - 1));
+    expect(landed).toBe(false);
+    await expect(page).toHaveURL('/ui/servers/settings');
+    await expect(page.locator('.done-notice')).toHaveCount(0);
+  });
+
+  for (const step of ['describe', 'run']) {
+    test(`a ${step} answer held across the takeover draws nothing`, async ({ page }) => {
+      const hold = gate();
+      await addPage(page, {
+        preview: (b) => (step === 'describe'
+          ? { ...described(), hold: hold.shut }
+          : ('confirm' in b ? { ...listedAnswer(THREE), hold: hold.shut } : described())),
+      });
+      await page.route('**/ui/api/keys', (route) => route.fulfill({ status: 401, json: {} }));
+      await field(page).fill(HTTPS);
+      await previewButton(page).click();
+      if (step === 'run') await card(page).getByRole('button', { name: 'Start once' }).click();
+      await takeover(page);
+      await expect(page.locator('#signin')).toBeVisible();
+      hold.open();
+      await page.waitForTimeout(400);
+      await expect(card(page).getByRole('region', { name: step === 'describe' ? 'Nothing has run yet' : /Started once/ })).toHaveCount(0);
+      await expect(page.locator('#signin-key')).toBeFocused();
+    });
+  }
+
+  test('a refusal by field inside the Override dialog: no raw code; after Close the sentence is at its input', async ({ page }) => {
+    await toRefused(page, (b, n) => (n === 1 ? cleartext() : { code: 422, body: { error: 'literal_in_value', refusals: [{ reason: 'header_value', field: 'headers.Authorization' }] } }));
+    const w = await addWords(page, 'crm.lan:8080');
+    await card(page).getByRole('button', { name: 'Send unencrypted anyway…' }).click();
+    await dialog(page).getByRole('button', { name: `${w.words.overrideVerb} crm` }).click();
+    await expect(dialog(page).locator('.confirm-message')).toBeVisible();
+    await expect(dialog(page)).not.toContainText('literal_in_value');
+    await dialog(page).getByRole('button', { name: 'Close' }).click();
+    await expect(card(page).locator('p.add-err:not([hidden])')).toHaveText([w.field.header_value]);
+    expect(await page.locator('body').innerText()).not.toContain('literal_in_value');
+  });
+});
