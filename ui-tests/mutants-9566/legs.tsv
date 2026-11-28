@@ -1,3 +1,19 @@
 # id	hunks	line	row (the title text -g matches)
 CONTROL-clean	0	397	while a run is held, the field, the name control and the rows are disabled
+M-V3b-always	1	534	control: the same 502 after a describe that held nothing back offers Retry only
+M-V3b-never	1	520	a 502 after a describe that held a header back
+M-V3b-stale	2	547	a later preview of other input reads its own withheld lists
+M-V3c-nolimit	1	706	the describe gives up after its limit
+M-V3e-every	1	558	after a held-back describe shows neither the line nor the button
+M-V3e-code	1	852	a refusal by field inside the Override dialog
+M-K1-env	1	169	a URL sends the row as headers
+M-K3-nocheck	1	354	Environment variables: TOKEN
+M-K4-keep	1	372	a new field value drops the tools and the panel
+M-K4-auto	1	411	the server's own name keeps the tool list
 M-K4-enabled	1	397	while a run is held, the field, the name control and the rows are disabled
+M-X2-remember	2	644	after a Cancel, and on Retry after a failed add
+M-X2-nodialog	1	625	the five consequences; Cancel sends nothing
+M-X2-first	1	592	cause and fix as text; Try https rewrites the field only
+M-V3g-page	1	841	a describe answer held across the takeover draws nothing
+M-V3g-land	1	820	landWithNotice called with a stale epoch does nothing
+M-V3g-epoch	1	792	the sign-in view takes over before the 201
