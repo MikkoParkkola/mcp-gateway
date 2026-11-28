@@ -121,7 +121,7 @@ fn a_call_decision_has_exactly_its_known_builders() {
         (
             site(
                 "src/gateway/meta_mcp/invoke/audit.rs",
-                "write_record",
+                "prepare_record",
                 "notes.decided",
             ),
             1,

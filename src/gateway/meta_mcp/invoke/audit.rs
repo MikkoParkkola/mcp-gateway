@@ -114,6 +114,27 @@ impl Appended {
     }
 }
 
+/// A counted record, with its log entry built or with nothing to append.
+pub(crate) enum Prepared {
+    Done(Appended),
+    Append(Box<Entry>),
+}
+
+/// One invocation record's log entry, built and owned: the append needs
+/// nothing more from the request.
+pub(crate) struct Entry {
+    log: std::sync::Arc<crate::security::TransparencyLogger>,
+    args: Value,
+    session_id: Option<String>,
+    who: AuditWho,
+    trace_id: String,
+    facts: super::super::admission::ReplayAudit,
+    attribution: Map<String, Value>,
+    decision: Box<crate::security::decision_record::Decision>,
+    recorded: Option<super::super::grant_audit::RecordedSet>,
+    reading: DeliveredReading,
+}
+
 /// What one call's gates saw, handed out of [`with_dispatch_scope`] as an
 /// owned value: the scope ends before the invocation record is written.
 #[derive(Debug, Default)]
@@ -740,19 +761,22 @@ impl MetaMcp {
         verdict: AnswerVerdict,
         lease: Option<&super::super::admission::SyncLease>,
     ) -> Result<()> {
-        let appended = self.append_record(record, verdict).await;
+        let prepared = self.prepare_record(record, verdict);
+        let appended = self.append_prepared(prepared).await;
         self.settle_record(appended, lease)
     }
 
-    /// Count `record` and append it, under the verdict of the answer's scan:
-    /// the whole audit job, which needs none of the request's scopes. A
-    /// refused answer is classed as `Err(ResponseFirewallRefused)`: `denied`,
-    /// no response hash, a block and a firewall catch on the counters.
-    pub(crate) async fn append_record(
+    /// Count `record` and build its log entry, under the verdict of the
+    /// answer's scan, in the request's own context: the counters, the denial
+    /// metric and the decision read what the request's scopes hold (the
+    /// recorder, the token on the call). A refused answer is classed as
+    /// `Err(ResponseFirewallRefused)`: `denied`, no response hash, a block and
+    /// a firewall catch on the counters. Only the append is left to do.
+    pub(crate) fn prepare_record(
         &self,
         record: InvocationRecord,
         verdict: AnswerVerdict,
-    ) -> Appended {
+    ) -> Prepared {
         let InvocationRecord {
             withheld,
             mut answered,
@@ -788,10 +812,10 @@ impl MetaMcp {
         super::denial::count_meta_denial(withheld.is_some(), class, denial);
         self.count_invocation(args, &who, firewall, &notes, class);
         let Some(log) = self.transparency_logger.as_ref() else {
-            return Appended::unwritten(args, reading);
+            return Prepared::Done(Appended::unwritten(args, reading));
         };
         let Some(outcome) = class else {
-            return Appended::unwritten(args, reading);
+            return Prepared::Done(Appended::unwritten(args, reading));
         };
         // Boxed: held across the write, it would grow every dispatch future.
         let decision = Box::new(notes.decided(self, outcome, credential_kind));
@@ -804,13 +828,46 @@ impl MetaMcp {
         }
         let facts = super::super::admission::ReplayAudit::new(outcome, response_hash)
             .with_request_hash(sha256_of(args));
+        Prepared::Append(Box::new(Entry {
+            log: std::sync::Arc::clone(log),
+            args: args.clone(),
+            session_id: session_id.map(str::to_owned),
+            who,
+            trace_id: trace_id.to_owned(),
+            facts,
+            attribution,
+            decision,
+            recorded,
+            reading,
+        }))
+    }
+
+    /// Append a prepared record: the audit job, which reads none of the
+    /// request's scopes, so it can run to its end on its own.
+    pub(crate) async fn append_prepared(&self, prepared: Prepared) -> Appended {
+        let entry = match prepared {
+            Prepared::Done(appended) => return appended,
+            Prepared::Append(entry) => *entry,
+        };
+        let Entry {
+            log,
+            args,
+            session_id,
+            who,
+            trace_id,
+            facts,
+            attribution,
+            decision,
+            recorded,
+            reading,
+        } = entry;
         let written = self
             .write_invocation(
-                log,
-                args,
-                session_id,
+                &log,
+                &args,
+                session_id.as_deref(),
                 who,
-                trace_id,
+                &trace_id,
                 &facts,
                 attribution,
                 decision,
@@ -820,7 +877,7 @@ impl MetaMcp {
         Appended {
             written,
             facts: Some(facts),
-            args: args.clone(),
+            args,
             reading,
         }
     }

@@ -54,9 +54,15 @@ impl Drop for Owner {
 /// The write is one of the gateway's audit jobs, which shutdown waits for.
 fn hand_off(meta: Arc<MetaMcp>, pending: Vec<InvocationRecord>, verdict: AnswerVerdict) {
     let jobs = Arc::clone(&meta.audit_jobs);
+    // Counted and built while the request is being dropped, still inside its
+    // outer scopes; only the appends are the job's.
+    let prepared: Vec<_> = pending
+        .into_iter()
+        .map(|record| meta.prepare_record(record, verdict))
+        .collect();
     jobs.spawn(async move {
-        for record in pending {
-            let appended = meta.append_record(record, verdict).await;
+        for prepared in prepared {
+            let appended = meta.append_prepared(prepared).await;
             if let Err(error) = meta.settle_record(appended, None) {
                 tracing::error!(%error, "invocation record of a dropped request not written");
             }
@@ -254,8 +260,11 @@ pub(crate) async fn commit(lease: Option<&SyncLease>) -> crate::Result<()> {
         // or dropped while it appends, and the record still lands, once.
         let (sent, received) = tokio::sync::oneshot::channel();
         let job = Arc::clone(&meta);
+        // Counted and built here, in the request's scopes; only the append
+        // is the job's.
+        let prepared = meta.prepare_record(record, verdict);
         Arc::clone(&meta.audit_jobs).spawn(async move {
-            let _ = sent.send(job.append_record(record, verdict).await);
+            let _ = sent.send(job.append_prepared(prepared).await);
         });
         let landed = match received.await {
             Ok(appended) => meta.settle_record(appended, lease),
