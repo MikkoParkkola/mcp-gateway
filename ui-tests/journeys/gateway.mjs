@@ -6,15 +6,15 @@
 // the stub servers, both homes, the port and the teardown; no journey manages them itself.
 // Inputs: JOURNEYS_GATEWAY_BIN only. Unset, missing or not executable fails the run; nothing here ever skips.
 import { spawn, spawnSync } from 'node:child_process';
-import { constants, openSync, closeSync } from 'node:fs';
-import { access, appendFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { constants, openSync, closeSync, realpathSync } from 'node:fs';
+import { access, appendFile, chmod, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { createHash, randomBytes } from 'node:crypto';
 import net from 'node:net';
 import { tmpdir } from 'node:os';
 import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test as base, expect } from '../tests/base.mjs';
-import { applySeed } from './seeds.mjs';
+import { applySeed, mcpExchange } from './seeds.mjs';
 
 export { expect };
 
@@ -72,6 +72,69 @@ export function activityRowFor(rows, traceId) {
   return (rows || []).find((row) => traceId && row.trace_id === traceId) ?? null;
 }
 
+// Characters a bare (unquoted) word of the start command may hold; anything else outside quotes is refused.
+const BARE = /[A-Za-z0-9_./:@%+=,-]/;
+
+/**
+ * Splits the start command the gateway shows (`'<exe>' serve --config '<config>'`, restart_advice.rs) into words
+ * with no shell (R6). A word is bare characters and single-quoted runs; the only escape is the gateway's own `'\''`
+ * apostrophe between two quoted runs. Throws, naming the problem, on an unbalanced quote, any other backslash, or
+ * any character a shell would act on (`$`, `;`, `&`, `|`, a backtick, a double quote, a newline ...).
+ */
+export function parseStartCommand(text) {
+  const words = [];
+  let word = null;
+  let closedRun = false; // the previous character closed a quoted run, so `\'` may follow
+  for (let i = 0; i < text.length; i += 1) {
+    const c = text[i];
+    if (c === ' ' || c === '\t') {
+      if (word !== null) words.push(word);
+      word = null;
+      closedRun = false;
+    } else if (c === "'") {
+      const end = text.indexOf("'", i + 1);
+      if (end < 0) throw new Error(`unbalanced quote at column ${i + 1}: ${text}`);
+      word = (word ?? '') + text.slice(i + 1, end);
+      i = end;
+      closedRun = true;
+    } else if (c === '\\') {
+      if (!closedRun || text[i + 1] !== "'" || text[i + 2] !== "'") {
+        throw new Error(`refused backslash at column ${i + 1}: only the gateway's '\\'' apostrophe form is accepted`);
+      }
+      word += "'";
+      i += 1; // the next turn reads the opening quote of the following run
+      closedRun = false;
+    } else if (BARE.test(c)) {
+      word = (word ?? '') + c;
+      closedRun = false;
+    } else {
+      throw new Error(`refused character ${JSON.stringify(c)} outside quotes at column ${i + 1}`);
+    }
+  }
+  if (word !== null) words.push(word);
+  if (words.length === 0) throw new Error('no command to run');
+  return words;
+}
+
+/**
+ * The C-H1 check of a parsed start command: exactly the gateway's four words [<exe>, serve, --config, <config>],
+ * <exe> an absolute path whose real path is this test's binary, <config>'s real path this test's config. Returns the
+ * binary's real path, which is what gets spawned (never the word as written). Throws, naming the token, otherwise.
+ */
+export function checkStartArgv(argv, { bin, configPath }) {
+  const real = (p) => { try { return realpathSync(p); } catch { return null; } };
+  if (argv.length !== 4) throw new Error(`the command has ${argv.length} words, not the gateway's four: ${JSON.stringify(argv)}`);
+  const [exe, sub, flag, config] = argv;
+  if (!isAbsolute(exe)) throw new Error(`"${exe}" is not an absolute path`);
+  const exeReal = real(exe);
+  if (!exeReal || exeReal !== real(bin)) throw new Error(`"${exe}" is not this test's gateway binary`);
+  if (sub !== 'serve') throw new Error(`"${sub}" where the gateway writes "serve"`);
+  if (flag !== '--config') throw new Error(`"${flag}" where the gateway writes "--config"`);
+  const configReal = real(config);
+  if (!configReal || configReal !== real(configPath)) throw new Error(`"${config}" is not this test's config`);
+  return exeReal;
+}
+
 async function freePort() {
   const s = net.createServer();
   await new Promise((done) => s.listen(0, '127.0.0.1', done));
@@ -80,7 +143,8 @@ async function freePort() {
   return port;
 }
 
-function answers(port) {
+/** True when something accepts a TCP connection on 127.0.0.1:port. */
+export function answers(port) {
   return new Promise((resolve) => {
     const c = net.connect(port, '127.0.0.1');
     c.once('connect', () => { c.destroy(); resolve(true); });
@@ -109,6 +173,23 @@ async function fingerprint(dir) {
   return JSON.stringify(out, Object.keys(out).sort());
 }
 
+/**
+ * A directory that goes first on the child's PATH with `xdg-open` and `open` stand-ins: each appends the URL it was
+ * given to <home>/browser-opens.log and opens nothing. The gateway's OAuth start opens the authorization page through
+ * them (oauth/client/browser.rs launch_command); on the second real run the real one started a browser on the test
+ * host, which wrote into the decoy home.
+ */
+async function browserShims(home) {
+  const dir = join(home, 'jh-bin');
+  await mkdir(dir, { recursive: true });
+  for (const name of ['xdg-open', 'open']) {
+    const shim = join(dir, name);
+    await writeFile(shim, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${join(home, 'browser-opens.log')}'\n`);
+    await chmod(shim, 0o755);
+  }
+  return dir;
+}
+
 /** init's bearer: `bearer_token: "file:<path>"` in the config, the secret in that file. */
 async function bearerFrom(configPath) {
   const m = (await readFile(configPath, 'utf8')).match(/bearer_token:\s*"file:([^"]+)"/);
@@ -124,7 +205,27 @@ function runInit(bin, env, configPath) {
   if (r.status !== 0) throw new Error(`mcp-gateway init failed (exit ${r.status}): ${r.stderr || r.stdout}`);
 }
 
-async function until(deadline, what, probe) {
+/** init writes `  port: 39400` under `server:`; the test's port replaces it, so every start reads it from the config. */
+async function setPort(configPath, port) {
+  const text = await readFile(configPath, 'utf8');
+  if (!/^ {2}port: 39400$/m.test(text)) throw new Error(`${configPath} has no init "port: 39400" line to put the test's port in`);
+  await writeFile(configPath, text.replace(/^ {2}port: 39400$/m, `  port: ${port}`), { mode: 0o600 });
+}
+
+/** Closes every seed-started service; each port must refuse afterwards. */
+async function closeServices(services) {
+  // Every close runs even if one rejects; the first rejection is the one reported.
+  const closed = await Promise.allSettled(services.map((service) => service.close()));
+  const refused = closed.find((r) => r.status === 'rejected');
+  if (refused) throw refused.reason;
+  for (const service of services) {
+    if (await answers(service.port)) throw new Error(`port ${service.port} of a seed's service still answers after teardown`);
+  }
+}
+
+/** Polls `probe` until it returns something truthy (returned) or `deadline` passes (throws `what`). A probe that
+ * throws counts as "not yet", unless its error is marked `fatal`. Shared by the fixture, the seeds and the rows. */
+export async function until(deadline, what, probe) {
   for (;;) {
     const got = await probe().catch((e) => { if (e?.fatal) throw e; return null; });
     if (got) return got;
@@ -142,10 +243,13 @@ async function start({ seed, port, onSpawn }, owned) {
   const bin = await gatewayBinary();
   requireLsof();
   const t0 = Date.now();
+  owned.homes = []; // filled as each is made, so a failed second mkdtemp still removes the first
   const home = await mkdtemp(join(tmpdir(), 'jh-home-'));
+  owned.homes.push(home);
   const decoy = await mkdtemp(join(tmpdir(), 'jh-decoy-'));
-  owned.homes = [home, decoy];
-  const path = process.env.PATH;
+  owned.homes.push(decoy);
+  owned.services = []; // local services a seed started (an OAuth provider stub): closed at teardown, ports must refuse
+  const path = `${await browserShims(home)}:${process.env.PATH}`;
   const env = gatewayEnv({ home, decoy, path });
   const configPath = join(home, 'gateway.yaml');
 
@@ -164,20 +268,30 @@ async function start({ seed, port, onSpawn }, owned) {
   const marker = `jh-${randomBytes(6).toString('hex')}`;
   await mkdir(join(home, '.config', 'mcp'), { recursive: true });
   await writeFile(join(home, '.config', 'mcp', 'h-planted.json'), JSON.stringify({ mcpServers: { 'h-planted': { command: 'npx', args: ['h'] } } }));
-  const seeded = await applySeed(seed ?? 'fresh', { home, configPath, marker });
+  // The port lives in the config: the start command the gateway shows names none (part C, C-H1).
+  const chosen = port ?? await freePort();
+  await setPort(configPath, chosen);
+  const seeded = await applySeed(seed ?? 'fresh', { home, configPath, marker, bin, own: (service) => owned.services.push(service) });
   const seedMs = Date.now() - t0;
 
-  const chosen = port ?? await freePort();
   if (await answers(chosen)) throw new Error(`port ${chosen} already has a listener: refusing to start (a journey never attaches to a gateway it did not start)`);
   const logPath = join(home, 'gateway.log');
-  const logFd = openSync(logPath, 'a');
-  const t1 = Date.now();
-  const child = spawn(bin, ['-c', configPath, '-p', String(chosen), 'serve'], { env, detached: true, stdio: ['ignore', logFd, logFd] });
-  closeSync(logFd);
-  onSpawn?.();
-  live.add(child.pid);
+  const exe = realpathSync(bin);
+  let child = null;
   let exited = null;
-  child.on('exit', (code, signal) => { exited = { code, signal }; live.delete(child.pid); });
+  // One gateway process for this home: its absolute real path, no shell and so no PATH lookup, output appended.
+  const launch = (args) => {
+    const out = openSync(logPath, 'a');
+    const proc = spawn(exe, args, { env, detached: true, stdio: ['ignore', out, out] });
+    closeSync(out);
+    onSpawn?.();
+    child = proc;
+    exited = null;
+    live.add(proc.pid);
+    proc.on('exit', (code, signal) => { live.delete(proc.pid); if (child === proc) exited = { code, signal }; });
+  };
+  const t1 = Date.now();
+  launch(['serve', '--config', configPath]);
 
   const origin = `http://127.0.0.1:${chosen}`;
   const api = (p, { key = adminKey } = {}) => fetch(origin + p, { signal: AbortSignal.timeout(REQUEST_MS), headers: key ? { Authorization: `Bearer ${key}` } : {} });
@@ -191,13 +305,40 @@ async function start({ seed, port, onSpawn }, owned) {
   };
   // Every server the gateway knows by name: GET /ui/api/status servers[] (registry backends and switched-off config
   // entries). /ui/api/backends takes only POST (it adds a server), so it is no read.
-  const serverNames = async () => ((await read('/ui/api/status')).servers ?? []).map((s) => s.name);
+  const serverNames = async () => {
+    const { servers } = await read('/ui/api/status');
+    // A missing list is an error, never an empty one: the decoy check would otherwise pass without looking.
+    if (!Array.isArray(servers)) throw new Error('GET /ui/api/status carries no servers list (not the admin view?)');
+    return servers.map((s) => s.name);
+  };
   const handle = {
-    origin, port: chosen, pid: child.pid, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
+    origin, port: chosen, get pid() { return child.pid; }, home, decoy, marker, configPath, adminKey, decoyKey, logPath,
     stubs: seeded.stubs ?? [], api, read, serverNames,
+    // What a seed hands its rows beyond its stubs (keys it configured, a command line to add): seeds.mjs names each.
+    data: seeded.data ?? {},
+    mcp: (request) => mcpExchange(origin, request),
+    // One real tool call through the gateway (tools/call gateway_invoke), as gw.mcp's { status, body }.
+    invoke: (server, tool, { key = adminKey, args = {} } = {}) => mcpExchange(origin,
+      { key, method: 'tools/call', params: { name: 'gateway_invoke', arguments: { server, tool, arguments: args } } }),
+    // C-H1: restarts this test's own gateway and keeps its home. With `argv` (parseStartCommand of the command the
+    // page shows) it runs only the gateway's four words naming this test's binary and config, spawning the binary's
+    // real path; a refusal throws before anything stops or runs. Re-proves identity as the first start does and
+    // writes no timing line (the p95 bar is start+seed only).
+    restart: async ({ argv } = {}) => {
+      if (argv !== undefined) checkStartArgv(argv, { bin, configPath });
+      await handle.kill();
+      launch(argv === undefined ? ['serve', '--config', configPath] : argv.slice(1));
+      await prove();
+    },
     listenerPids: () => listenerPids(chosen),
     stubLog: (name) => readFile(join(home, `stub-${name}.log`), 'utf8').catch(() => ''),
-    stop: async () => {
+    // Every URL the gateway asked the system to open (the xdg-open/open stand-ins), one per line.
+    browserOpens: () => readFile(join(home, 'browser-opens.log'), 'utf8').catch(() => ''),
+    // C-H4: makes stub `name` stop answering (it still logs what reaches it), or answer again.
+    silence: (name, on = true) => (on ? writeFile(join(home, `stub-${name}.silent`), '')
+      : rm(join(home, `stub-${name}.silent`), { force: true })),
+    // Harness-internal (restart and stop use it): ends the current child and proves its port refuses again.
+    kill: async () => {
       if (!exited) {
         try { process.kill(-child.pid, 'SIGTERM'); } catch { /* gone */ }
         const end = Date.now() + STOP_MS;
@@ -209,9 +350,18 @@ async function start({ seed, port, onSpawn }, owned) {
       }
       live.delete(child.pid);
       if (await answers(chosen)) throw new Error(`port ${chosen} still answers after the gateway was stopped`);
-      const after = await fingerprint(decoy);
-      await rm(home, { recursive: true, force: true });
-      await rm(decoy, { recursive: true, force: true });
+    },
+    stop: async () => {
+      // Every cleanup step runs even when an earlier one fails, so a seed's service (an OAuth provider stub) never
+      // outlives a gateway whose port still answers; the first failure is the one reported.
+      let failure = null;
+      const step = async (fn) => { try { return await fn(); } catch (e) { failure ??= e; return null; } };
+      await step(() => handle.kill());
+      await step(() => closeServices(owned.services));
+      const after = await step(() => fingerprint(decoy));
+      await step(() => rm(home, { recursive: true, force: true }));
+      await step(() => rm(decoy, { recursive: true, force: true }));
+      if (failure) throw failure;
       if (after !== decoyPrint) throw new Error('the decoy home changed while the gateway ran');
     },
   };
@@ -225,22 +375,26 @@ async function start({ seed, port, onSpawn }, owned) {
     throw err;
   };
 
+  // The running child is up, serves this test's marker, is the only listener and reads H (design 6a-6d). The first
+  // start and every restart run it; it throws the harness's own diagnostic.
+  const prove = async () => {
+  const since = Date.now();
   try {
-    await until(t1 + HEALTH_MS, `gateway not healthy within ${HEALTH_MS} ms`, async () => {
+    await until(since + HEALTH_MS, `gateway not healthy within ${HEALTH_MS} ms`, async () => {
       if (exited) throw Object.assign(new Error('exited'), { fatal: true });
       return (await fetch(`${origin}/health`, { signal: AbortSignal.timeout(REQUEST_MS) })).status === 200;
     });
   } catch (e) {
-    return fail(exited ? `gateway exited before it was healthy (${JSON.stringify(exited)}); gateway not healthy within ${HEALTH_MS} ms` : e.message);
+    throw new Error(exited ? `gateway exited before it was healthy (${JSON.stringify(exited)}); gateway not healthy within ${HEALTH_MS} ms` : e.message);
   }
   const served = await (await api('/ui/api/gateway')).json().catch(() => ({}));
-  if (served?.environment?.name !== marker) return fail(`the gateway does not serve this test's marker ${marker} (got ${JSON.stringify(served?.environment)})`);
+  if (served?.environment?.name !== marker) throw new Error(`the gateway does not serve this test's marker ${marker} (got ${JSON.stringify(served?.environment)})`);
   const pids = listenerPids(chosen);
-  if (!listenerIsChild(pids, child.pid)) return fail(`the listener on ${chosen} is ${JSON.stringify(pids)}, not the child ${child.pid}`);
-  try {
-    await until(Date.now() + SETTLE_MS, 'the gateway never listed h-planted: it is not reading the test home', async () =>
+  if (!listenerIsChild(pids, child.pid)) throw new Error(`the listener on ${chosen} is ${JSON.stringify(pids)}, not the child ${child.pid}`);
+  await until(Date.now() + SETTLE_MS, 'the gateway never listed h-planted: it is not reading the test home', async () =>
       JSON.stringify(await (await api('/ui/api/discovery')).json()).includes('h-planted'));
-  } catch (e) { return fail(e.message); }
+  };
+  try { await prove(); } catch (e) { return fail(e.message); }
   const seen = JSON.stringify(await read('/ui/api/discovery')) + JSON.stringify(await serverNames());
   if (seen.includes('decoy-planted')) return fail('the gateway read the decoy home: decoy-planted is listed');
   if ((await api('/ui/api/status', { key: decoyKey })).status !== 401) return fail('the decoy home\'s key is accepted');
@@ -249,7 +403,7 @@ async function start({ seed, port, onSpawn }, owned) {
 
   const startMs = Date.now() - t1;
   await mkdir(dirname(TIMING_FILE), { recursive: true });
-  await appendFile(TIMING_FILE, `${JSON.stringify({ jh_timing: { seed_ms: seedMs, start_ms: startMs } })}\n`);
+  await appendFile(TIMING_FILE, `${JSON.stringify({ jh_timing: { seed_ms: seedMs, start_ms: startMs, marker } })}\n`);
   return handle;
 }
 
@@ -261,9 +415,20 @@ export async function startGateway(opts = {}) {
     return await start(opts, owned);
   } catch (e) {
     if (owned.handle) await owned.handle.stop().catch(() => {});
-    for (const dir of owned.homes ?? []) await rm(dir, { recursive: true, force: true });
+    else await closeServices(owned.services ?? []).catch(() => {});
+    for (const dir of owned.homes ?? []) await rm(dir, { recursive: true, force: true }).catch(() => {});
     throw e;
   }
+}
+
+/** Signs the page in to the gateway's UI with `key`, through the sign-in form as a user does. The 4.0 shell lives under
+ * /ui/<route> (routes.rs UI_SHELL); /ui itself still serves the classic page until the cutover. A page without the
+ * shell's sign-in fails here, by name, not at a fill that waits out the test. */
+export async function signIn(page, key) {
+  await page.goto('/ui/overview/status');
+  await page.locator('#signin').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.locator('#signin-form input').first().fill(key);
+  await page.getByRole('button', { name: 'Sign in' }).click();
 }
 
 export const test = base.extend({
@@ -278,7 +443,7 @@ export const test = base.extend({
     } finally {
       if (testInfo.status !== testInfo.expectedStatus) {
         await testInfo.attach('gateway.log', { path: gw.logPath }).catch(() => {});
-        for (const name of gw.stubs) await testInfo.attach(`stub-${name}.log`, { body: await gw.stubLog(name) });
+        for (const name of gw.stubs) await testInfo.attach(`stub-${name}.log`, { body: await gw.stubLog(name) }).catch(() => {});
       }
       await gw.stop();
     }
