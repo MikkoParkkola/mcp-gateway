@@ -7,7 +7,7 @@
 // named after the frozen test plan (V, N, K, E, D, X, U, A); every gateway answer
 // is a literal written here, in the shapes preview.rs and add_checks.rs serve.
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady } from './shell.mjs';
+import { shellReady, recordAnnouncements, announced } from './shell.mjs';
 import { entry, fullView, fakeServerGateway, gate } from './server-page.mjs';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -374,6 +374,8 @@ test.describe('K4 a changed input throws the preview away', () => {
     await expect(previewButton(page)).toBeVisible();
     await previewButton(page).click();
     await card(page).getByRole('button', { name: 'Change' }).click();
+    await expect(card(page).getByRole('region', { name: 'Nothing has run yet' })).toBeVisible();
+    await card(page).getByRole('textbox', { name: 'Name' }).fill('crm-two');
     await expect(card(page).getByRole('region', { name: 'Nothing has run yet' })).toHaveCount(0);
   });
 
@@ -398,4 +400,153 @@ test.describe('K4 a changed input throws the preview away', () => {
     await expect(card(page).getByRole('region', { name: /Started once: 1 tool/ })).toBeVisible();
     await expect(card(page).getByRole('button', { name: 'Add crm-suite with 1 tool' })).toBeVisible();
   });
+});
+
+/** The add's 201 as add_backend serves it (BK:265-276), with `over` merged in. */
+const created = (name, over = {}) => ({ code: 201, body: { status: 'created', name, reload: { changes: `added backends: [${name}]`, restart_required: false }, notes: [], enabled: true, secrets_stored: [], ...over } });
+
+/** Preview to the tool list with THREE (one selectable reading tool), the add answering `add`. */
+async function toListed(page, add, text = HTTPS) {
+  const seen = await addPage(page, { preview: (b) => ('confirm' in b ? listedAnswer(THREE) : described()), add });
+  await field(page).fill(text);
+  await previewButton(page).click();
+  await card(page).getByRole('button', { name: 'Start once' }).click();
+  await expect(card(page).getByRole('region', { name: /Started once/ })).toBeVisible();
+  return seen;
+}
+
+test.describe('D1 the add sends the reading tools and lands with the notice (UI4.2)', () => {
+  test('allowed_tools is the selectable reading tools; the address encodes the name', async ({ page }) => {
+    await recordAnnouncements(page);
+    const seen = await toListed(page, (b) => created(b.name));
+    await card(page).getByRole('button', { name: 'Change' }).click();
+    await card(page).getByRole('textbox', { name: 'Name' }).fill('crm/a b');
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Start once' }).click();
+    await card(page).getByRole('button', { name: 'Add crm/a b with 1 tool' }).click();
+    await expect(page).toHaveURL('/ui/servers/crm%2Fa%20b/status');
+    expect(seen.adds).toEqual([{ name: 'crm/a b', url: HTTPS, allowed_tools: ['search'] }]);
+    const notice = page.locator('.done-notice');
+    await expect(notice.locator('.done-title')).toHaveText('✓ crm/a b added with 1 tool.');
+    await expect(notice.locator('.done-title')).toBeFocused();
+    await expect.poll(async () => (await announced(page)).filter((t) => t.includes('added with 1 tool')).length).toBe(1);
+  });
+
+  for (const [label, over, words] of [
+    ['one stored value', { secrets_stored: ['Authorization'] }, '✓ crm added with 1 tool. 1 value is kept in the secret store.'],
+    ['a note holding markup', { notes: ['<b>reload</b> pending'] }, '✓ crm added with 1 tool. <b>reload</b> pending'],
+  ]) {
+    test(`the notice with ${label}`, async ({ page }) => {
+      await toListed(page, (b) => created(b.name, over));
+      await card(page).getByRole('button', { name: 'Add crm with 1 tool' }).click();
+      await expect(page.locator('.done-notice .done-title')).toHaveText(words);
+      await expect(page.locator('.done-notice b')).toHaveCount(0);
+    });
+  }
+});
+
+test.describe('D2 D3 a refused or unconfirmed add', () => {
+  test('D2 a duplicate name is told at the Name, which opens for editing', async ({ page }) => {
+    await toListed(page, () => ({ code: 409, body: { error: "Backend 'crm' already exists" } }));
+    await card(page).getByRole('button', { name: 'Add crm with 1 tool' }).click();
+    await expect(card(page)).toContainText("Backend 'crm' already exists");
+    await expect(card(page).getByRole('textbox', { name: 'Name' })).toBeFocused();
+  });
+
+  for (const [label, answer] of [['a 500', { code: 500, body: { error: 'write failed' } }], ['a dropped connection', { drop: true }]]) {
+    test(`D3 ${label}: not confirmed, with Retry and every value kept`, async ({ page }) => {
+      const seen = await toListed(page, () => answer);
+      await card(page).getByRole('button', { name: 'Add crm with 1 tool' }).click();
+      const panel = card(page).getByRole('region', { name: 'Not confirmed' });
+      await expect(panel).toContainText('The gateway did not confirm the add.');
+      await expect(field(page)).toHaveValue(HTTPS);
+      await panel.getByRole('button', { name: 'Retry' }).click();
+      await expect.poll(() => seen.adds.length).toBe(2);
+    });
+  }
+});
+
+test.describe('E1 typed values are sent and never left on the page', () => {
+  test('before the add the value input is a password; after the 201 no element holds it', async ({ page }) => {
+    await addPage(page, { preview: () => ({ code: 422, body: { error: 'Preview refused. You can still add this server.' } }), add: (b) => created(b.name) });
+    await field(page).fill(HTTPS);
+    await card(page).getByRole('button', { name: 'Add a value' }).click();
+    await rows(page, 'Headers').getByRole('textbox', { name: 'Name' }).fill('Authorization');
+    await rows(page, 'Headers').getByLabel('Value').fill('Bearer e1-only-here');
+    await expect(rows(page, 'Headers').getByLabel('Value')).toHaveAttribute('type', 'password');
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Add without a preview' }).click();
+    await expect(page).toHaveURL('/ui/servers/crm/status');
+    const held = await page.evaluate(() => [...document.querySelectorAll('input')].some((i) => i.value.includes('e1-only-here'))
+      || document.documentElement.outerHTML.includes('e1-only-here'));
+    expect(held).toBe(false);
+  });
+});
+
+test.describe('V4 a refused preview still lets the server be added', () => {
+  test('the sentence and "Add without a preview"; the add carries no allowed_tools', async ({ page }) => {
+    const words = 'Command servers cannot be previewed yet. You can still add this server.';
+    const seen = await addPage(page, { preview: () => ({ code: 422, body: { error: words } }), add: (b) => created(b.name) });
+    await field(page).fill('uvx mcp-server-fetch');
+    await previewButton(page).click();
+    await expect(card(page)).toContainText(words);
+    await card(page).getByRole('button', { name: 'Add without a preview' }).click();
+    await expect.poll(() => seen.adds.length).toBe(1);
+    expect(seen.adds[0]).toEqual({ name: 'fetch', command: 'uvx mcp-server-fetch' });
+    await expect(page.locator('.done-notice .done-title')).toHaveText('✓ fetch added.');
+  });
+});
+
+test.describe('V3b a failed preview of a server with held-back values can still be added', () => {
+  const heldBack = () => described({ withheld: { env: [], headers: ['Authorization'], oauth: false, secrets: 0, identity_propagation: false, account: false } });
+
+  test('a 502 after a describe that held a header back: the line, Retry and "Add without a preview"', async ({ page }) => {
+    const seen = await addPage(page, { preview: (b) => ('confirm' in b ? { code: 502, body: { error: 'the server refused to start' } } : heldBack()), add: (b) => created(b.name) });
+    const { words } = await addWords(page);
+    await toDescribed(page);
+    await card(page).getByRole('button', { name: 'Start once' }).click();
+    const failed = card(page).getByRole('region', { name: 'The preview did not finish' });
+    await expect(failed).toContainText('the server refused to start');
+    await expect(failed).toContainText(words.ranWithout);
+    await expect(failed.getByRole('button', { name: 'Retry' })).toBeVisible();
+    await failed.getByRole('button', { name: 'Add without a preview' }).click();
+    await expect.poll(() => seen.adds.length).toBe(1);
+    expect(seen.adds[0]).toEqual({ name: 'crm', url: HTTPS, headers: { Authorization: 'Bearer k-123' } });
+  });
+
+  test('control: the same 502 after a describe that held nothing back offers Retry only', async ({ page }) => {
+    await addPage(page, { preview: (b) => ('confirm' in b ? { code: 502, body: { error: 'the server refused to start' } } : described()) });
+    await field(page).fill(HTTPS);
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Start once' }).click();
+    const failed = card(page).getByRole('region', { name: 'The preview did not finish' });
+    await expect(failed.getByRole('button', { name: 'Retry' })).toBeVisible();
+    await expect(failed.getByRole('button', { name: 'Add without a preview' })).toHaveCount(0);
+  });
+
+  test('a later preview of other input reads its own withheld lists, not the earlier one', async ({ page }) => {
+    let n = 0;
+    await addPage(page, { preview: (b) => { if ('confirm' in b) return { code: 502, body: { error: 'no start' } }; n += 1; return n === 1 ? heldBack() : described(); } });
+    await toDescribed(page);
+    await rows(page, 'Headers').getByRole('textbox', { name: 'Name' }).fill('');
+    await rows(page, 'Headers').getByLabel('Value').fill('');
+    await previewButton(page).click();
+    await card(page).getByRole('button', { name: 'Start once' }).click();
+    const failed = card(page).getByRole('region', { name: 'The preview did not finish' });
+    await expect(failed.getByRole('button', { name: 'Retry' })).toBeVisible();
+    await expect(failed.getByRole('button', { name: 'Add without a preview' })).toHaveCount(0);
+  });
+
+  for (const [code, words] of [[409, 'a preview is already running'], [503, 'no confirmation can be issued now'], [422, 'the gateway does not reach that address']]) {
+    test(`V3e a ${code} after a held-back describe shows neither the line nor the button`, async ({ page }) => {
+      await addPage(page, { preview: (b) => ('confirm' in b ? { code, body: { error: words } } : heldBack()) });
+      const { words: w } = await addWords(page);
+      await toDescribed(page);
+      await card(page).getByRole('button', { name: 'Start once' }).click();
+      const failed = card(page).getByRole('region', { name: 'The preview did not finish' });
+      await expect(failed).toContainText(words);
+      await expect(failed).not.toContainText(w.ranWithout);
+      await expect(failed.getByRole('button', { name: 'Add without a preview' })).toHaveCount(0);
+    });
+  }
 });
