@@ -152,6 +152,24 @@ fn a_failed_listing_is_incomplete_and_empty() {
     assert!(listing.rows.is_empty());
 }
 
+/// R-full-gone, macOS: the sweep's reading names in `gone` a seed a complete
+/// scan does not list, walked or stat-only, and nothing from a failed scan.
+#[test]
+fn a_complete_scan_names_its_absent_seeds_gone() {
+    let mut probe = Script {
+        pids: Some(vec![10]),
+        infos: vec![(10, found(1, 100))],
+    };
+    let listing = scan_for(&mut probe, &[who(10, 100), who(11, 110)], &[who(12, 120)]);
+    assert_eq!(listing.gone, vec![who(11, 110), who(12, 120)]);
+    let mut failed = Script {
+        pids: None,
+        infos: Vec::new(),
+    };
+    let listing = scan_for(&mut failed, &[who(11, 110)], &[]);
+    assert!(listing.gone.is_empty(), "a failed scan named a seed gone");
+}
+
 #[test]
 fn a_member_state_is_gone_only_on_a_proven_exit_or_reuse() {
     let mut probe = Script {
@@ -217,7 +235,7 @@ fn a_record_is_decoded_only_for_the_pid_asked() {
 fn libproc_lists_this_process_and_reads_its_identity() {
     let me = std::process::id();
     let mut table = MacTable::new();
-    let listing = table.read();
+    let listing = table.read(&[], &[], std::time::Duration::MAX);
     assert!(listing.complete, "a listing on a healthy host is complete");
     let mine = listing
         .rows

@@ -31,6 +31,13 @@ fn cfg() -> SweepConfig {
     }
 }
 
+/// Whether the fake's complete readings settle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settling {
+    Always,
+    Never,
+}
+
 struct Proc {
     id: Identity,
     ppid: u32,
@@ -88,6 +95,19 @@ struct Fake {
     /// A by-pid target that is running when its identity is checked exits and its
     /// pid is reused before the signal lands: (pid, start of the reusing process).
     reuse_while_running: Option<(u32, u64)>,
+    /// Whether a complete reading settles (a tree that never settles: Never).
+    settling: Settling,
+    /// Readings so far.
+    reads: u32,
+    /// At this reading a new running child of pid 1 appears (pid 900).
+    appear_at_read: Option<u32>,
+    /// Every pause the sweep asked for, in order.
+    idles: Vec<Duration>,
+    /// This many readings come back cut: no rows, incomplete, and the clock
+    /// moved to their `until` (a host stall past the slice).
+    cut_reads: u32,
+    /// What a cut reading returns: what it found before the stall.
+    cut_rows: Vec<(Identity, u32)>,
 }
 
 impl Fake {
@@ -126,6 +146,12 @@ impl Fake {
             unreadable: None,
             fail: None,
             reuse_while_running: None,
+            settling: Settling::Always,
+            reads: 0,
+            appear_at_read: None,
+            idles: Vec::new(),
+            cut_reads: 0,
+            cut_rows: Vec::new(),
         }
     }
 
@@ -231,16 +257,43 @@ impl Fake {
 }
 
 impl ProcessTable for Fake {
-    fn read(&mut self) -> Listing {
+    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], until: Duration) -> Listing {
         self.operate();
+        self.reads += 1;
+        if self.cut_reads > 0 {
+            self.cut_reads -= 1;
+            self.clock = self.clock.max(until);
+            return Listing {
+                rows: self.cut_rows.clone(),
+                complete: false,
+                unreadable: Vec::new(),
+                gone: Vec::new(),
+                settled: false,
+            };
+        }
+        if self.appear_at_read == Some(self.reads) {
+            self.procs.push(Proc {
+                id: id(900),
+                ppid: 1,
+                pgid: 900,
+                state: ProcState::Running,
+                churns: false,
+                ignores_stop: false,
+                stop_lag: 0,
+                stop_in: None,
+                fork_at: None,
+            });
+        }
         if self.blind {
             return Listing {
                 rows: Vec::new(),
                 complete: false,
                 unreadable: Vec::new(),
+                gone: Vec::new(),
+                settled: true,
             };
         }
-        Listing {
+        let mut listing = Listing {
             rows: self
                 .procs
                 .iter()
@@ -249,7 +302,12 @@ impl ProcessTable for Fake {
                 .collect(),
             complete: true,
             unreadable: self.foreign.into_iter().collect(),
-        }
+            gone: Vec::new(),
+            settled: self.settling == Settling::Always,
+        };
+        let seeds: Vec<Identity> = walk.iter().chain(stat_only).copied().collect();
+        listing.gone = super::full_scan_gone(&seeds, &listing);
+        listing
     }
 
     fn state(&mut self, who: Identity) -> ProcState {
@@ -349,6 +407,11 @@ impl ProcessTable for Fake {
 
     fn now(&mut self) -> Duration {
         self.clock
+    }
+
+    fn idle(&mut self, pause: Duration) {
+        self.idles.push(pause);
+        self.clock += pause;
     }
 
     fn release(&mut self, id: Identity) {

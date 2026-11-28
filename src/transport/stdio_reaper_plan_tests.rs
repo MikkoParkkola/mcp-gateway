@@ -321,3 +321,41 @@ impl super::StopDeadline {
         }
     }
 }
+
+/// A handover's budget is fixed before its stop snapshot runs (a cut snapshot
+/// reads up to four times, each a slice plus the read in flight: 38.8 ms seen
+/// under host stalls), so the snapshot's time comes off before the
+/// plan: 3 s past the kill reserve with a 1 s snapshot leaves waits of 2 s,
+/// and with no snapshot time the waits stay 3 s. Red if the snapshot's time
+/// is not subtracted (waits of 3 s both times).
+#[test]
+fn a_handover_plans_only_what_its_snapshot_left() {
+    let budget = KILL_RESERVE + Duration::from_secs(3);
+    let after = super::plan::ending_after_snapshot(budget, Duration::from_secs(1), true, None);
+    assert_eq!(
+        after.waits(),
+        Duration::from_secs(2),
+        "the snapshot's second was planned"
+    );
+    let untouched = super::plan::ending_after_snapshot(budget, Duration::ZERO, true, None);
+    assert_eq!(untouched.waits(), Duration::from_secs(3));
+}
+
+/// Code review r3 (T2): a stop fixes its budget once, gives the snapshot that
+/// budget as its limit, and plans only what the timed snapshot left. A clock
+/// that reads 30 ms later after the snapshot, under 3 s past the kill
+/// reserve, leaves waits of exactly 2.97 s. Red if the snapshot's time is not
+/// taken off (3 s).
+#[test]
+fn a_stop_plans_its_budget_less_its_timed_snapshot() {
+    let budget = KILL_RESERVE + Duration::from_secs(3);
+    let t0 = std::time::Instant::now();
+    // limit-under-test (injected-clock): the row supplies both clock readings.
+    let mut readings = [t0, t0 + Duration::from_millis(30)].into_iter();
+    let clock = || readings.next().expect("two clock readings");
+    let mut given = None;
+    let snapshot = |limit: Duration| given = Some(limit);
+    let ending = super::plan::ending_around_snapshot_by(clock, budget, snapshot, || true, None);
+    assert_eq!(given, Some(budget), "the snapshot's limit");
+    assert_eq!(ending.waits(), Duration::from_millis(2970), "the plan");
+}
