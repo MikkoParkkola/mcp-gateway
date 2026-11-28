@@ -831,3 +831,80 @@ test.describe('V3g nothing lands on another session', () => {
     expect(await page.locator('body').innerText()).not.toContain('literal_in_value');
   });
 });
+
+test.describe('A1 axe in the later states: listed, failed, refused', () => {
+  for (const width of WIDTHS) {
+    for (const colorScheme of ['dark', 'light']) {
+      test(`${width} px, ${colorScheme}`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await page.emulateMedia({ colorScheme });
+        let run = 0;
+        await addPage(page, {
+          preview: (b) => {
+            if (!('confirm' in b)) return described();
+            run += 1;
+            return run === 1 ? listedAnswer(THREE) : { code: 502, body: { error: 'the server could not be started' } };
+          },
+          add: () => cleartext(),
+        });
+        await field(page).fill(PLAIN);
+        await previewButton(page).click();
+        await card(page).getByRole('button', { name: 'Start once' }).click();
+        await expect(card(page).getByRole('region', { name: /Started once/ })).toBeVisible();
+        expect(await blockingViolations(page, '.add-server'), 'listed state').toEqual([]);
+        await card(page).getByRole('button', { name: /^Add crm with/ }).click();
+        await expect(card(page).getByRole('region', { name: 'Not added' })).toBeVisible();
+        expect(await blockingViolations(page, '.add-server'), 'refused state').toEqual([]);
+        await field(page).fill(HTTPS);
+        await previewButton(page).click();
+        await card(page).getByRole('button', { name: 'Start once' }).click();
+        await expect(card(page).getByRole('region', { name: 'The preview did not finish' })).toBeVisible();
+        expect(await blockingViolations(page, '.add-server'), 'failed state').toEqual([]);
+      });
+    }
+  }
+});
+
+/** Press Tab, as a keyboard user does, until `target` has focus; fails after `max` presses. */
+async function tabTo(page, target, max = 60) {
+  for (let i = 0; i < max; i += 1) {
+    if (await target.evaluate((n) => n === document.activeElement)) return;
+    await page.keyboard.press('Tab');
+  }
+  await expect(target).toBeFocused();
+}
+
+test.describe('A2 the whole flow with Tab, Enter and Space only', () => {
+  test('describe, run, add, land', async ({ page }) => {
+    const seen = await addPage(page, { preview: (b) => ('confirm' in b ? listedAnswer(THREE) : described()), add: (b) => created(b.name) });
+    await tabTo(page, field(page));
+    await page.keyboard.type(HTTPS);
+    await tabTo(page, previewButton(page));
+    await page.keyboard.press('Enter');
+    await tabTo(page, card(page).getByRole('button', { name: 'Start once' }));
+    await page.keyboard.press('Space');
+    const add = card(page).getByRole('button', { name: 'Add crm with 1 tool' });
+    await expect(add).toBeVisible();
+    await tabTo(page, add);
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL('/ui/servers/crm/status');
+    expect(seen.adds).toHaveLength(1);
+  });
+
+  test('the refusal, then the Override through its dialog', async ({ page }) => {
+    const seen = await addPage(page, { preview: () => NO_PREVIEW, add: (b, n) => (n === 1 ? cleartext() : created(b.name)) });
+    const w = await addWords(page, 'crm.lan:8080');
+    await tabTo(page, field(page));
+    await page.keyboard.type(PLAIN);
+    await tabTo(page, previewButton(page));
+    await page.keyboard.press('Enter');
+    await tabTo(page, card(page).getByRole('button', { name: 'Add without a preview' }));
+    await page.keyboard.press('Enter');
+    await tabTo(page, card(page).getByRole('button', { name: 'Send unencrypted anyway…' }));
+    await page.keyboard.press('Space');
+    await tabTo(page, dialog(page).getByRole('button', { name: `${w.words.overrideVerb} crm` }));
+    await page.keyboard.press('Enter');
+    await expect(page).toHaveURL('/ui/servers/crm/status');
+    expect(seen.adds.map((b) => 'allow_cleartext_credentials' in b)).toEqual([false, true]);
+  });
+});
