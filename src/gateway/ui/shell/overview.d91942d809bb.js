@@ -11,7 +11,7 @@
 // read: the first-run checklist, Needs you and Last actions. The 24 h calls chart
 // draws from the calls series and the markers with the shared chart module. The
 // flow map is its own slice; every panel takes its place through place().
-import { register, go, el as h } from '/ui/assets/shell.23eb92bf6df3.js';
+import { register, go, el as h, serverBadge } from '/ui/assets/shell.23eb92bf6df3.js';
 import { chart, spark } from '/ui/assets/chart.8cb6bfe27b11.js';
 
 const NOT_YET = 'Not available yet';
@@ -27,7 +27,11 @@ const PHONE = '(max-width: 639px)';
 /** The overview's counter fields (overview.rs COUNTER_FIELDS); none present and none degraded means no store. */
 const COUNTER_FIELDS = ['kpi.calls_24h', 'kpi.blocks_24h', 'kpi.errors_24h', 'servers.calls_24h', 'edges', 'markers', 'checklist.tool_tried', 'latency'];
 
-const n = (v) => v.toLocaleString('en');
+// One formatter and one encoder for the page: building them per call cost the flow map's update budget.
+const NUMBER = new Intl.NumberFormat('en');
+const n = (v) => NUMBER.format(v);
+const UTF8 = new TextEncoder();
+const bytes = (s) => UTF8.encode(s).length;
 const isCount = (v) => Number.isInteger(v) && v >= 0;
 const degraded = (data, field) => Array.isArray(data.degraded) && data.degraded.includes(field);
 /** Whether the overview carries the counter field `f` (one of COUNTER_FIELDS). */
@@ -62,20 +66,24 @@ function compared(kpi, name) {
   return `${d > 0 ? '↗' : '↘'} ${n(Math.abs(d))} ${d > 0 ? 'more' : 'fewer'} than the 24 h before`;
 }
 
+/**
+ * Route link `a` through go(): the shell routes plain paths itself, but a link with a query (a
+ * filter) would reload the page and lose a key held only in memory. Returns `a`.
+ */
+function viaGo(a) {
+  a.addEventListener('click', (ev) => {
+    if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+    go(a.getAttribute('href'));
+    document.getElementById('content').focus({ preventScroll: true });
+  });
+  return a;
+}
 /** A tile: its label and number (a link when it has a destination), then its trend and context line. */
 function tileNode(id, label, value, context, href) {
   const head = [h('span', { class: 'ov-label' }, label), h('span', { class: 'ov-num num' })];
   const top = href ? h('a', { class: 'ov-go', href }, ...head) : h('div', { class: 'ov-go' }, ...head);
-  // The shell routes plain paths itself; a link with a query (the Firewall tile's filter) would
-  // otherwise reload the page and lose a key held only in memory, so it goes through go().
-  if (href?.includes('?')) {
-    top.addEventListener('click', (ev) => {
-      if (ev.defaultPrevented || ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
-      ev.preventDefault();
-      go(href);
-      document.getElementById('content').focus({ preventScroll: true });
-    });
-  }
+  if (href?.includes('?')) viaGo(top);
   const tile = h('div', { class: 'ov-tile', 'data-tile': id }, top, h('div', { class: 'ov-trend' }, h('span', { class: 'ov-ctx' })));
   setNum(tile, value);
   setCtx(tile, context);
@@ -114,7 +122,7 @@ function card(id, title, ...extra) {
 
 /** A server's page, or the Servers list when its name may be cut, or is "." or ".." (a browser folds those). */
 function serverPath(name) {
-  if (name === '.' || name === '..' || new TextEncoder().encode(name).length >= MAYBE_CUT_BYTES) return '/ui/servers/status';
+  if (name === '.' || name === '..' || bytes(name) >= MAYBE_CUT_BYTES) return '/ui/servers/status';
   return `/ui/servers/${encodeURIComponent(name)}/status`;
 }
 
@@ -143,7 +151,7 @@ function signInPath(name, clipped) {
 }
 /** A key's page, or the Access list when its name may be cut or is "." or "..", as serverPath() does. */
 function keyPath(name) {
-  if (name === '.' || name === '..' || new TextEncoder().encode(name).length >= MAYBE_CUT_BYTES) return '/ui/access/status';
+  if (name === '.' || name === '..' || bytes(name) >= MAYBE_CUT_BYTES) return '/ui/access/status';
   return `/ui/access/${encodeURIComponent(name)}/status`;
 }
 /** `table[key]` only when the table itself holds it, so a value such as "constructor" reads as unknown. */
@@ -430,6 +438,346 @@ function fillChart(section, data, read) {
   if (isCount(earlier) && earlier > 0) section.append(h('p', { class: 'chart-note chart-more' }, `and ${n(earlier)} earlier`));
 }
 
+// ---------------------------------------------------------------- flow map
+
+/** Rows drawn per column: the motion budget's fixed count, so an update's cost never grows with the fleet. */
+const AGENT_ROWS = 6;
+const SERVER_ROWS = 11;
+/** The second line of a caller by the kind before its colon; a kind not listed shows none. */
+const CALLER_KIND = { key: 'API key', oidc: 'OIDC sign-in', session: 'MCP session', token: 'Token' };
+/** Callers with no colon in their label: their name in words. */
+const CALLER_WORDS = { bearer: 'Static bearer token', local: 'Local process', anonymous: 'Anonymous caller' };
+const FIRST_RUN = 'The live map appears here after the first call.';
+
+/**
+ * The account a caller label names, as the audit record holds it, or null: `key:`, `oidc:`, `session:`
+ * or `token:` and a non-empty text. A label the counters cut (125 to 128 bytes ending in `~` and eight
+ * hex digits, counters/mod.rs normalize) no longer holds the account, so it names none.
+ */
+export function accountOf(label) {
+  const m = /^(?:key|oidc|session|token):(.+)$/s.exec(typeof label === 'string' ? label : '');
+  if (!m) return null;
+  // A label under 42 characters is under 125 bytes (three bytes a character at most), so only a
+  // longer one is encoded to look for the cut.
+  const size = label.length < 42 ? 0 : bytes(label);
+  if (size >= 125 && size <= 128 && /~[0-9a-f]{8}$/.test(label)) return null;
+  return m[1];
+}
+
+/** A caller row's name and second line from its label. */
+function callerWords(label) {
+  const words = own(CALLER_WORDS, label);
+  if (words) return { name: words, sub: '' };
+  const at = label.indexOf(':');
+  return at < 0 ? { name: label, sub: '' } : { name: label.slice(at + 1), sub: own(CALLER_KIND, label.slice(0, at)) ?? '' };
+}
+
+/**
+ * The map's rows from the overview read, pure: at most 6 caller rows and 11 server rows, the hub's two
+ * totals, the note on flows not drawn, and `empty`, the words that stand in for the map (or null).
+ */
+export function flowModel(data) {
+  const hub = { servers: isCount(data?.kpi?.servers_total) ? data.kpi.servers_total : null, tools: isCount(data?.kpi?.tools_total) ? data.kpi.tools_total : null };
+  const edges = data?.edges;
+  if (!edges || typeof edges !== 'object') return { agents: [], servers: [], hub, note: '', empty: absent(data ?? {}, 'edges') };
+  const rows = Array.isArray(edges.rows) ? edges.rows.filter((r) => r && typeof r.caller === 'string' && isCount(r.calls)) : [];
+  const more = edges.more ?? {};
+  const overflow = isCount(more.overflow_calls) ? more.overflow_calls : 0;
+  if (!rows.length) {
+    return { agents: [], servers: [], hub, note: '', empty: overflow ? `${n(overflow)} calls were not attributed to a flow.` : FIRST_RUN };
+  }
+
+  // Callers: their flows summed, busiest first, then by name; past six, five and one fold row.
+  const sums = new Map();
+  for (const r of rows) {
+    const s = sums.get(r.caller) ?? { calls: 0, blocks: 0 };
+    s.calls += r.calls;
+    s.blocks += isCount(r.blocks) ? r.blocks : 0;
+    sums.set(r.caller, s);
+  }
+  const ranked = [...sums].map(([label, s]) => ({ key: `c:${label}`, label, ...callerWords(label), ...s, account: accountOf(label) }))
+    .sort((a, b) => b.calls - a.calls || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  let agents = ranked;
+  if (ranked.length > AGENT_ROWS) {
+    const rest = ranked.slice(AGENT_ROWS - 1);
+    agents = [...ranked.slice(0, AGENT_ROWS - 1), { key: 'fold:agents', fold: true, name: `+${n(rest.length)} more agents`, sub: '', account: null,
+      calls: rest.reduce((a, r) => a + r.calls, 0), blocks: rest.reduce((a, r) => a + r.blocks, 0) }];
+  }
+
+  // Servers: not running first, each group in the order served; past eleven, ten and one fold row.
+  const served = Array.isArray(data.servers?.rows) ? data.servers.rows.filter((r) => r && typeof r.name === 'string') : [];
+  const smore = data.servers?.more ?? {};
+  const folded = isCount(smore.count) ? smore.count : 0;
+  const ordered = [...served.filter((r) => r.state !== 'running'), ...served.filter((r) => r.state === 'running')];
+  const seen = new Map();
+  const asRow = (r) => {
+    // A name the API clipped can be served twice; its ordinal keeps the two rows apart.
+    const nth = seen.get(r.name) ?? 0;
+    seen.set(r.name, nth + 1);
+    return { key: `s:${nth}:${r.name}`, name: r.name, state: r.state, up: r.up === true, calls: isCount(r.calls_24h) ? r.calls_24h : null, dashed: r.state !== 'running' };
+  };
+  let serverRows = ordered.map(asRow);
+  if (served.length + folded > SERVER_ROWS) {
+    const rest = serverRows.slice(SERVER_ROWS - 1);
+    const up = rest.filter((r) => r.up).length + (isCount(smore.up) ? smore.up : 0);
+    const down = rest.length - rest.filter((r) => r.up).length + (isCount(smore.down) ? smore.down : 0);
+    serverRows = [...serverRows.slice(0, SERVER_ROWS - 1), { key: 'fold:servers', fold: true, name: `+${n(rest.length + folded)} more`,
+      sub: `${n(up)} answering, ${n(down)} not answering`, calls: null, up: false, dashed: false }];
+  }
+
+  const count = isCount(more.count) ? more.count : 0;
+  let note = '';
+  if (count > 0) {
+    note = `${n(count)} smaller flows with ${n(isCount(more.calls) ? more.calls : 0)} calls are not drawn`;
+    note += overflow ? `, and ${n(overflow)} more calls were not attributed to a flow.` : '.';
+  } else if (overflow) note = `${n(overflow)} more calls were not attributed to a flow.`;
+  return { agents, servers: serverRows, hub, note, empty: null };
+}
+
+/** The rows drawn in each map, by key; kept per card, so an update reuses its nodes. */
+const drawn = new WeakMap();
+const SVG_NS = document.createRange().createContextualFragment('<svg/>').firstChild.namespaceURI;
+/** One line of the map, for a row on `side`. */
+function svgPath(side) {
+  const p = document.createElementNS(SVG_NS, 'path');
+  p.dataset.side = side;
+  return p;
+}
+
+/**
+ * A caller's gold dot: a link to its calls when it has an account, text when not. Each caller row keeps
+ * one dot for its whole life and shows it only while the caller has blocked calls, so a dot that comes
+ * or goes changes a class, not the row's layout. A dot that comes pulses once while fewer than three do.
+ * Wide, it sits on its line's midpoint (spec) and is painted above the hub, which keeps to the middle
+ * of its column, so nothing covers the dot and the dot covers none of the hub's words.
+ */
+function fillDot(nodes, row, y, drawLines) {
+  const on = row.blocks > 0;
+  if (!nodes.dot) {
+    const linked = row.account && !row.fold;
+    nodes.dot = linked ? viaGo(h('a', { class: 'ov-dot ov-dot-off', href: callsOfCaller(row.account) })) : h('span', { class: 'ov-dot ov-dot-off' });
+    nodes.li.append(nodes.dot);
+  }
+  if (nodes.dotOn !== on) {
+    nodes.dotOn = on;
+    nodes.dot.classList.toggle('ov-dot-off', !on);
+    const map = on ? nodes.box : null;
+    if (map && map.querySelectorAll('.ov-pulse').length < 3) {
+      nodes.dot.classList.add('ov-pulse');
+      nodes.dot.addEventListener('animationend', () => nodes.dot?.classList.remove('ov-pulse'), { once: true });
+    }
+  }
+  if (!on) return;
+  const want = nodes.dot.localName;
+  const dw = nodes.dw ?? (nodes.dw = {});
+  const put = (name, v, write) => { if (dw[name] !== v) { write(v); dw[name] = v; } };
+  if (want === 'a') put('href', callsOfCaller(row.account), (v) => nodes.dot.setAttribute('href', v));
+  put('words', `${n(row.blocks)} blocked`, (v) => { nodes.dot.textContent = v; });
+  if (drawLines) put('at', `${(y + 50) / 2}%`, () => {
+    nodes.dot.style.setProperty('--at-x', `${((EDGE.agents + 50) / 2 / CALLER_COLUMN) * 100}%`);
+    nodes.dot.style.setProperty('--at-y', `${(y + 50) / 2}%`);
+  });
+}
+/** A line's width: 1 to 8 px by its calls against the column's busiest; no number gives the neutral 1. */
+const width = (calls, max) => (calls === null || !max ? 1 : Math.round((1 + (7 * calls) / max) * 100) / 100);
+/** The x where each column's lines meet the hub, in the 0-100 box the svg spans. */
+const EDGE = { agents: 37.5, servers: 62.5 };
+/**
+ * The callers' list is the grid's first column, 37.5% of the map (overview.css). Wide, it contains its
+ * layout, which makes it the box a dot is placed in, so a dot's x in the map is turned into the list's.
+ */
+const CALLER_COLUMN = 37.5;
+
+/** A caller's link to its calls in Activity, by account, built so any character stays one value. */
+const callsOfCaller = (account) => `/ui/activity/status?${new URLSearchParams({ key: account })}`;
+
+/** One row's nodes: the item, its link or box, name, second line and calls. */
+function rowNodes(side) {
+  const name = h('span', { class: 'ov-row-name' });
+  const sub = h('span', { class: 'ov-row-sub' });
+  const calls = h('span', { class: 'ov-row-calls num' });
+  const li = h('li', { class: 'ov-row' });
+  return { li, name, sub, calls, go: null, dot: null, path: svgPath(side) };
+}
+
+/** Fill one row's nodes from its model row; the link is made again only when its target changes. */
+function fillRow(nodes, row, side, i, count, max, drawLines) {
+  // The link follows from the name (or account) alone, so it is worked out again only when that changes.
+  const target = `${row.fold ? 'fold' : ''}|${side === 'servers' ? row.name : row.account ?? ''}`;
+  if (nodes.target !== target) {
+    nodes.target = target;
+    nodes.href = side === 'servers' ? (row.fold ? '/ui/servers/status' : serverPath(row.name)) : (row.account ? callsOfCaller(row.account) : null);
+  }
+  const { href } = nodes;
+  if (!nodes.go || nodes.go.getAttribute('href') !== href) {
+    const go = href ? h('a', { class: 'ov-row-go', href }) : h('div', { class: 'ov-row-go' });
+    if (href?.includes('?')) viaGo(go);
+    go.append(nodes.name, nodes.sub, nodes.calls);
+    nodes.go?.remove();
+    nodes.li.prepend(go);
+    nodes.go = go;
+  }
+  nodes.li.classList.toggle('ov-fold', Boolean(row.fold));
+  // Only what changed is written: an unchanged text or attribute set again still costs style work.
+  const was = nodes.was ?? {};
+  const set = (k, v, write) => { if (was[k] !== v) { write(v); was[k] = v; } };
+  set('up', String(Boolean(row.up)), (v) => { nodes.li.dataset.up = v; });
+  set('name', row.name, (v) => { nodes.name.textContent = v; nodes.name.title = v; });
+  if (side === 'servers' && !row.fold) set('state', row.state, (v) => nodes.sub.replaceChildren(serverBadge(v, { plain: true })));
+  else set('sub', row.sub, (v) => { was.state = undefined; nodes.sub.textContent = v; });
+  set('calls', row.calls === null ? '' : n(row.calls), (v) => { nodes.calls.textContent = v; });
+  const y = ((i + 0.5) / count) * 100;
+  const x0 = side === 'agents' ? 0 : 100;
+  const mid = (EDGE[side] + 50) / 2;
+  if (drawLines) set('d', `M ${x0} ${y} L ${EDGE[side]} ${y} C ${mid} ${y}, ${mid} 50, 50 50`, (v) => nodes.path.setAttribute('d', v));
+  if (drawLines) set('w', String(width(row.calls, max)), (v) => nodes.path.setAttribute('stroke-width', v));
+  if (drawLines) set('dashed', Boolean(row.dashed), (v) => nodes.path.classList.toggle('ov-dashed', v));
+  nodes.was = was;
+  if (side === 'agents') fillDot(nodes, row, y, drawLines);
+}
+
+/**
+ * Draw `model` into the flow-map card `root`: the first call builds, later calls keep every row whose
+ * key is still there (its item, link, line and dot), add the rows that came and remove the ones that
+ * went. At most 17 rows exist, so an update touches a bounded number of nodes. No layout is read.
+ */
+export function updateMap(root, model) {
+  let state = drawn.get(root);
+  if (!state) {
+    const agents = h('ol', { class: 'ov-agents', role: 'list', 'aria-label': 'Callers, busiest first' });
+    const servers = h('ol', { class: 'ov-servers', role: 'list', 'aria-label': 'Servers, those that need a look first' });
+    const hub = h('div', { class: 'ov-hub' });
+    const lines = document.createElementNS(SVG_NS, 'svg');
+    for (const [k, v] of Object.entries({ class: 'ov-lines', viewBox: '0 0 100 100', preserveAspectRatio: 'none', 'aria-hidden': 'true' })) lines.setAttribute(k, v);
+    const box = h('div', { class: 'ov-map' }, lines, agents, hub, servers);
+    const note = h('p', { class: 'ov-map-note' });
+    const empty = h('p', { class: 'ov-map-empty' });
+    const stale = h('p', { class: 'ov-map-stale', hidden: true });
+    root.append(box, note, stale, empty);
+    state = { box, lines, hub, note, stale, empty, lists: { agents, servers }, rows: { agents: new Map(), servers: new Map() } };
+    drawn.set(root, state);
+  }
+  // Kept so a phone that widens draws the lines it skipped from the last model.
+  state.model = model;
+  // Each element is written only when its own value changed: a same-value write still costs a relayout.
+  const text = (el, v) => { if (el.textContent !== v) el.textContent = v; };
+  const hide = (el, v) => { if (el.hidden !== v) el.hidden = v; };
+  text(state.empty, model.empty ?? '');
+  hide(state.empty, !model.empty);
+  hide(state.box, Boolean(model.empty));
+  text(state.note, model.note);
+  hide(state.note, !model.note);
+  const words = [model.hub.servers === null ? '' : `${n(model.hub.servers)} servers`, model.hub.tools === null ? '' : `${n(model.hub.tools)} tools`];
+  text(state.hub, words.filter(Boolean).join(', '));
+  for (const side of ['agents', 'servers']) {
+    const rows = model[side];
+    const held = state.rows[side];
+    const keep = new Set(rows.map((r) => r.key));
+    for (const [key, nodes] of held) {
+      if (keep.has(key)) continue;
+      nodes.li.remove();
+      nodes.path.remove();
+      held.delete(key);
+    }
+    // Every row with a number counts, the callers' fold row too, so no line is wider than 8 px.
+    const max = Math.max(0, ...rows.filter((r) => r.calls !== null).map((r) => r.calls));
+    rows.forEach((row, i) => {
+      let nodes = held.get(row.key);
+      if (!nodes) {
+        nodes = rowNodes(side);
+        // A new row is not in the page while it is filled, so its dot is told where the map is.
+        nodes.box = state.box;
+        held.set(row.key, nodes);
+      }
+      fillRow(nodes, row, side, i, rows.length, max, !state.phone);
+      // A kept node moves to its new place in the ranking; one already in place is left alone.
+      if (state.lists[side].children[i] !== nodes.li) moveTo(state.lists[side], nodes.li, state.lists[side].children[i] ?? null);
+      if (!nodes.path.isConnected) state.lines.append(nodes.path);
+    });
+  }
+}
+
+/** Put `node` before `before`; a move drops focus inside the node, so focus is given back without scrolling. */
+function moveTo(parent, node, before) {
+  const had = node.contains(document.activeElement) ? document.activeElement : null;
+  parent.insertBefore(node, before);
+  if (had && document.activeElement !== had) had.focus({ preventScroll: true });
+}
+
+/** On a phone the servers' list comes first in the page, so what is seen is what is read and tabbed. */
+function orderLists(root, phone) {
+  const state = drawn.get(root);
+  if (!state) return;
+  // On a phone the lines and the hub are hidden, so updates skip writing them; widening draws them again.
+  const wasPhone = state.phone;
+  state.phone = phone;
+  if (wasPhone && !phone && state.model) updateMap(root, state.model);
+  const { agents, servers } = state.lists;
+  const [first, second] = phone ? [servers, agents] : [agents, servers];
+  // Moved only when out of order: a node already in place is never touched (its focus and probes stay).
+  if (second.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) moveTo(state.box, first, second);
+  // Wide, the hub stands between the two lists; on a phone it is hidden, so its place does not matter.
+  if (!phone && agents.nextElementSibling !== state.hub) agents.after(state.hub);
+}
+
+/** How long after a stream event the map reads again: a fixed deadline that later events never push back. */
+const REREAD_MS = 1000;
+
+/**
+ * Keep the map live: the stream's status and reload events read the overview again after REREAD_MS,
+ * one read at a time; an event during a read asks for one more after it. Every step first checks that
+ * the card is still on the page, and lets go of everything when it is not. A failed read leaves the
+ * map as it was and says since when it has not changed.
+ */
+function keepLive(root, ctx) {
+  let timer = null;
+  let reading = false;
+  let again = false;
+  let lastGood = Date.now() / 1000;
+  const gone = () => {
+    if (root.isConnected) return false;
+    removeEventListener('gateway-status', onEvent);
+    removeEventListener('gateway-reload', onEvent);
+    clearTimeout(timer);
+    return true;
+  };
+  async function reread() {
+    timer = null;
+    if (gone()) return;
+    reading = true;
+    let fresh = null;
+    try {
+      fresh = (await ctx.api('/ui/api/overview')) ?? {};
+    } catch {
+      fresh = null;
+    }
+    reading = false;
+    if (gone()) return;
+    const line = drawn.get(root)?.stale;
+    if (fresh) {
+      updateMap(root, flowModel(fresh));
+      lastGood = Date.now() / 1000;
+      if (line) line.hidden = true;
+    } else if (line) {
+      line.textContent = `Not updated since ${clock(lastGood)}`;
+      // Said once when the map goes stale, through the shell's one announcer (no live region of its own).
+      if (line.hidden) ctx.announce?.(line.textContent);
+      line.hidden = false;
+    }
+    if (again) {
+      again = false;
+      onEvent();
+    }
+  }
+  function onEvent() {
+    if (gone()) return;
+    if (reading) again = true;
+    else if (!timer) timer = setTimeout(reread, REREAD_MS);
+  }
+  addEventListener('gateway-status', onEvent);
+  addEventListener('gateway-reload', onEvent);
+}
+
 const METRICS = ['calls', 'blocks', 'cache_hits'];
 /** The breakpoint listener of the Overview drawn last. */
 let watching = null;
@@ -466,7 +814,13 @@ async function statusTab(body, ctx) {
   const root = h('div', { class: 'ov' }, section);
   // The chart's panel holds its place until the calls read settles.
   const callsChart = h('section', { class: 'tk ov-panel', 'data-panel': 'calls-chart' }, h('p', { class: 'chart-note chart-wait' }, '…'));
-  for (const p of [checklistPanel(data), needsYouPanel(data), callsChart, lastActionsPanel(data)]) if (p) place(root, p);
+  // The flow map draws from the same read, so it is complete before the page counts as painted.
+  const flowMap = card('flow-map', 'Live traffic ', h('span', { class: 'ov-panel-when' }, 'last 24 h'));
+  flowMap.classList.add('ov-flow');
+  updateMap(flowMap, flowModel(data));
+  orderLists(flowMap, phone.matches);
+  keepLive(flowMap, ctx);
+  for (const p of [checklistPanel(data), flowMap, needsYouPanel(data), callsChart, lastActionsPanel(data)]) if (p) place(root, p);
   root.setAttribute('data-overview-painted', '');
   body.append(root);
   arrange(strip, more, t, phone.matches);
@@ -480,6 +834,7 @@ async function statusTab(body, ctx) {
       return;
     }
     arrange(strip, more, t, e.matches);
+    orderLists(flowMap, e.matches);
   };
   watching = { mql: phone, fn };
   phone.addEventListener('change', watching.fn);

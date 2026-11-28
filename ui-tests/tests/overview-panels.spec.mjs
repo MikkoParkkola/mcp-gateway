@@ -5,7 +5,7 @@
 // first-run checklist, all drawn from the one overview read. Each row answers
 // that read with a literal body and writes out every string it expects.
 import { test, expect, blockingViolations } from './base.mjs';
-import { overview, serve, open } from './overview.mjs';
+import { overview, serve, open, tabStops } from './overview.mjs';
 
 /** The overview body with the panels' fields; the checklist is done unless a row says otherwise. */
 function body(over = {}) {
@@ -315,8 +315,8 @@ test('L2 one panel order, whichever panel arrives first', async ({ page }) => {
       const url = performance.getEntriesByType('resource').map((e) => e.name).find((n) => /\/ui\/assets\/overview\.[0-9a-f]+\.js$/.test(n));
       const { place } = await import(url);
       const root = document.querySelector('#content .ov');
-      // The real chart steps aside for its stand-in, so the order holds one of each.
-      root.querySelector(':scope > [data-panel="calls-chart"]')?.remove();
+      // The real map and chart step aside for their stand-ins, so the order holds one of each.
+      root.querySelectorAll(':scope > [data-panel="flow-map"], :scope > [data-panel="calls-chart"]').forEach((s) => s.remove());
       const made = ['flow-map', 'calls-chart'].map((id) => Object.assign(document.createElement('section'), { className: 'tk' }));
       made.forEach((s, i) => { s.dataset.panel = ['flow-map', 'calls-chart'][i]; s.style.minHeight = '40px'; });
       const mine = [...root.querySelectorAll('[data-panel="needs-you"], [data-panel="last-actions"]')];
@@ -348,10 +348,6 @@ test('A2 Tab from the last tile link reaches every panel link in page order', as
   // The checklist's two open steps, the one Needs you row, the chart's numbers toggle, then All in Activity.
   expect(want).toEqual(['/ui/tools/actions', '/ui/gateway/settings', `/ui/servers/${'n'.repeat(200)}/status`, 'The numbers', '/ui/activity/status']);
   await page.locator('#content [data-tile="tools"] a').focus();
-  const got = [];
-  for (let i = 0; i < want.length; i += 1) {
-    await page.keyboard.press('Tab');
-    got.push(await page.evaluate(() => document.activeElement?.getAttribute('href') ?? document.activeElement?.textContent ?? null));
-  }
+  const got = await tabStops(page, want.length);
   expect(got).toEqual(want);
 });
