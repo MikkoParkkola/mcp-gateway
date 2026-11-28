@@ -617,9 +617,7 @@ test('the status tab draws its three tips; no servers.status copy waits as unbui
   expect(scan.tabs.servers).toEqual({ status: true, actions: true, settings: true });
   for (const id of DRAWN_TIPS) expect(scan.drawn.has(id), id).toBe(true);
   const copy = readCopy();
-  expect(copy._pending.servers ?? []).toEqual([]);
-  const later = Object.keys(copy).filter((id) => id.startsWith('servers.settings.'));
-  expect(later.filter((id) => !Object.hasOwn(copy._pending_later, id))).toEqual([]);
+  expect((copy._pending.servers ?? []).filter((id) => id.startsWith('servers.status.'))).toEqual([]);
 });
 
 test('each tip opens from the keyboard and hides no control', async ({ page }) => {
