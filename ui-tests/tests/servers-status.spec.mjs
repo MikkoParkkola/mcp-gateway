@@ -612,12 +612,14 @@ test('every category in the built-in registry has a label in the screen', async 
 
 const DRAWN_TIPS = ['servers.status.answering-24-grouped-by-the', 'servers.status.tools', 'servers.status.p95-last-1-000-calls'];
 
-test('the status tab draws its three tips; no servers.status copy waits as unbuilt', () => {
+test('the status tab draws its three tips; every servers.settings tip waits as pending-later', () => {
   const scan = scanScreens(readScreens());
-  expect(scan.tabs.servers).toEqual({ status: true, actions: true, settings: false });
+  expect(scan.tabs.servers).toEqual({ status: true, actions: true, settings: true });
   for (const id of DRAWN_TIPS) expect(scan.drawn.has(id), id).toBe(true);
   const copy = readCopy();
-  expect((copy._pending.servers ?? []).filter((id) => id.startsWith('servers.status.'))).toEqual([]);
+  expect(copy._pending.servers ?? []).toEqual([]);
+  const later = Object.keys(copy).filter((id) => id.startsWith('servers.settings.'));
+  expect(later.filter((id) => !Object.hasOwn(copy._pending_later, id))).toEqual([]);
 });
 
 test('each tip opens from the keyboard and hides no control', async ({ page }) => {
