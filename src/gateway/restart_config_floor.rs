@@ -471,6 +471,10 @@ pub(crate) mod seams {
     /// Called by the lock-acquisition task with its attempt; may block or panic.
     pub(crate) type LockHook = Arc<dyn Fn(u64) -> LockVerdict + Send + Sync>;
 
+    /// Called by the lock task with its attempt after its hand-off, before the
+    /// task marks itself finished; may block, which holds `settled` false.
+    pub(crate) type AfterHandOff = Arc<dyn Fn(u64) + Send + Sync>;
+
     /// Replaces the metadata call for the abandoned path: the row injects a
     /// real non-`NotFound` error (`PermissionDenied`) without arranging the disk.
     pub(crate) type MetaHook = Arc<dyn Fn(&Path) -> std::io::Result<bool> + Send + Sync>;
@@ -510,6 +514,7 @@ pub(crate) mod seams {
     pub(crate) struct FloorSeams {
         pub(crate) check_hook: Option<CheckHook>,
         pub(crate) lock_hook: Option<LockHook>,
+        pub(crate) after_hand_off: Option<AfterHandOff>,
         pub(crate) meta_hook: Option<MetaHook>,
         /// The candidate-path override a row sets; `None` uses the input paths.
         pub(crate) candidate_override: Option<Vec<PathBuf>>,
@@ -592,6 +597,10 @@ pub(crate) mod seams {
 
         pub(crate) fn set_lock_hook(&mut self, hook: Option<LockHook>) {
             self.seams.lock_hook = hook;
+        }
+
+        pub(crate) fn set_after_hand_off(&mut self, hook: Option<AfterHandOff>) {
+            self.seams.after_hand_off = hook;
         }
 
         pub(crate) fn set_meta_hook(&mut self, hook: Option<MetaHook>) {

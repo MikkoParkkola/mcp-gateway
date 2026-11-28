@@ -87,6 +87,12 @@ pub(super) fn spawn_lock(
             #[cfg(test)]
             &seams,
         );
+        // Still inside the task, `_done` alive: a row can hold `settled` false
+        // here, after the guard was handed or dropped.
+        #[cfg(test)]
+        if let Some(hook) = seams.after_hand_off.as_ref() {
+            hook(attempt);
+        }
     });
     (task, rx)
 }

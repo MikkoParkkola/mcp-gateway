@@ -139,6 +139,18 @@ async fn k3_superseded_attempt_hands_nothing() {
         let _ = own.lock().unwrap().recv_timeout(BOUND);
         LockVerdict::Proceed
     })));
+    // Attempt 2's lock task parks after its hand-off until the row releases
+    // it: no timeout, so the window stays open for the row's own check. The
+    // row owns the only sender, so a failing row drops it and the task ends.
+    let (handed_tx, handed) = channel::<u64>();
+    let (hold2, held2) = channel::<()>();
+    let (handed_tx, held2) = (Mutex::new(handed_tx), Mutex::new(held2));
+    floor.set_after_hand_off(Some(Arc::new(move |attempt| {
+        if attempt == 2 {
+            let _ = handed_tx.lock().unwrap().send(attempt);
+            let _ = held2.lock().unwrap().recv();
+        }
+    })));
     let held = Held {
         reached,
         release: rel1,
@@ -187,9 +199,16 @@ async fn k3_superseded_attempt_hands_nothing() {
     assert_eq!(got, Some(sha256_hex(BASE.as_bytes())), "{ROW} literal hash");
     floor.resume();
     assert_probes(ROW, &b, Probe::Free, "free after resume");
-    // Settled is asynchronous: each lock task marks itself finished when its
-    // closure returns, after it handed or dropped its guard, so it can lag
-    // the logs this row waited on.
+    assert_eq!(
+        handed.recv_timeout(BOUND),
+        Ok(2),
+        "{ROW} attempt 2's lock task parked after its hand-off"
+    );
+    assert!(
+        !floor.settled(),
+        "{ROW} a lock task still running is late work"
+    );
+    hold2.send(()).expect("release attempt 2's lock task");
     support::wait_until("K3 settled after resume", || floor.settled());
 }
 
