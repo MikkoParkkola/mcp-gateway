@@ -215,31 +215,37 @@ async fn p4_3_an_abandoned_meta_request_writes_its_record_once() {
 async fn p4_3_a_cancelled_meta_call_keeps_todays_record_and_counts() {
     use std::sync::atomic::Ordering;
     let fx = fixture(Setup {
+        // A keyed caller: an anonymous call has no owner to cancel it by.
+        auth: Some(key_for_alpha(None)),
         extras: &[Extra::GateCall],
         ..Setup::default()
     })
     .await;
     let store = attach(&fx);
     let call = meta_invoke("alpha", "t", &json!({}));
-    let request = post_to(&fx, "/mcp", &call, &Caller::Anonymous);
+    let request = post_to(&fx, "/mcp", &call, &Caller::Key);
     tokio::pin!(request);
-    loop {
-        tokio::select! {
-            _ = &mut request => panic!("premise: the backend holds the call"),
-            () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
-                if fx.calls.load(Ordering::SeqCst) > 0 {
-                    break;
+    let held = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            tokio::select! {
+                _ = &mut request => panic!("premise: the backend holds the call"),
+                () = tokio::time::sleep(std::time::Duration::from_millis(5)) => {
+                    if fx.calls.load(Ordering::SeqCst) > 0 {
+                        break;
+                    }
                 }
             }
         }
-    }
+    });
+    held.await.expect("premise: the backend receives the call");
     let cancel = json!({"jsonrpc": "2.0", "method": "notifications/cancelled",
                         "params": {"requestId": 5}})
     .to_string();
-    let ((_, answer), _) = tokio::join!(
-        &mut request,
-        post_to(&fx, "/mcp", &cancel, &Caller::Anonymous)
-    );
+    let ((_, answer), _) = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        tokio::join!(&mut request, post_to(&fx, "/mcp", &cancel, &Caller::Key))
+    })
+    .await
+    .expect("the cancel ends the held call");
     assert_eq!(answer["error"]["code"], json!(-32800), "{answer}");
     assert_eq!(
         totals(&store),
@@ -268,16 +274,19 @@ async fn p4_3_a_request_dropped_mid_append_still_lands_one_record() {
     {
         let request = post_to(&fx, "/mcp", &call, &Caller::Anonymous);
         tokio::pin!(request);
-        loop {
-            tokio::select! {
-                _ = &mut request => panic!("the request answered before its record's job ran"),
-                () = tokio::time::sleep(Duration::from_millis(5)) => {
-                    if jobs.drain(Duration::ZERO).await > 0 {
-                        break;
+        let handed = tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                tokio::select! {
+                    _ = &mut request => panic!("the request answered before its record's job ran"),
+                    () = tokio::time::sleep(Duration::from_millis(5)) => {
+                        if jobs.drain(Duration::ZERO).await > 0 {
+                            break;
+                        }
                     }
                 }
             }
-        }
+        });
+        handed.await.expect("the record's job starts");
     }
     jobs.seams.open_gate();
     assert_eq!(
