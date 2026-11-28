@@ -156,12 +156,16 @@ fn table_read(probe: &mut dyn Probe) -> Listing {
             rows: Vec::new(),
             complete: false,
             unreadable: Vec::new(),
+            gone: Vec::new(),
+            settled: true,
         };
     };
     let mut listing = Listing {
         rows: Vec::new(),
         complete: true,
         unreadable: Vec::new(),
+        gone: Vec::new(),
+        settled: true,
     };
     for pid in pids {
         match probe.info(pid) {
@@ -323,10 +327,24 @@ impl MacTable {
     }
 }
 
+/// One reading for the sweep: the whole table, with the seeds a complete scan
+/// does not list named in `gone` (the full-scan tables' shared rule).
+fn scan_for(probe: &mut dyn Probe, walk: &[Identity], stat_only: &[Identity]) -> Listing {
+    let mut listing = table_read(probe);
+    let seeds: Vec<Identity> = walk.iter().chain(stat_only).copied().collect();
+    listing.gone = super::full_scan_gone(&seeds, &listing);
+    listing
+}
+
 #[cfg(target_os = "macos")]
 impl ProcessTable for MacTable {
-    fn read(&mut self) -> Listing {
-        table_read(&mut Libproc)
+    fn read(
+        &mut self,
+        walk: &[Identity],
+        stat_only: &[Identity],
+        _until: std::time::Duration,
+    ) -> Listing {
+        scan_for(&mut Libproc, walk, stat_only)
     }
 
     fn state(&mut self, id: Identity) -> ProcState {
@@ -365,8 +383,8 @@ impl ProcessTable for MacTable {
         self.origin.elapsed()
     }
 
-    fn idle(&mut self) {
-        std::thread::sleep(std::time::Duration::from_millis(1));
+    fn idle(&mut self, pause: std::time::Duration) {
+        std::thread::sleep(pause);
     }
 
     fn rescue(&mut self, member: Identity) -> Rescue {
