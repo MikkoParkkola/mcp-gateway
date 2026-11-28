@@ -38,3 +38,9 @@
 .sp-card .acts { display: flex; flex-wrap: wrap; gap: var(--space-2, .5rem); }
 .sp-warn { color: var(--color-status-warning-fg); }
 .sp-error { color: var(--color-status-danger-fg); }
+.sp-secrets, .sp-who { list-style: none; margin: 0 0 var(--space-2, .5rem); padding: 0; display: grid; gap: var(--space-2, .5rem); }
+.sp-secrets code { overflow-wrap: anywhere; }
+/* The Replace form stacks: label, field, then Save and Cancel, so nothing runs past a narrow screen. */
+.sp-replace { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-2, .5rem); margin-top: var(--space-2, .5rem); }
+.sp-replace input { box-sizing: border-box; width: 100%; max-width: 24rem; }
+.sp-done { color: var(--color-status-success-fg); }

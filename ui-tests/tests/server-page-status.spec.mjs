@@ -5,14 +5,13 @@
 // and how the page follows the live status (T1, T2 of the frozen test plan).
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { countListeners, shellReady } from './shell.mjs';
-import { entry, fullView, fakeServerGateway, statusEvent, shellCall, gate } from './server-page.mjs';
+import { entry, fullView, fakeServerGateway, statusEvent, shellCall, gate, goTo } from './server-page.mjs';
 
 test.use({ timezoneId: 'UTC' });
 
 const content = (page) => page.locator('#content');
 const word = (page, state) => shellCall(page, (m, s) => m.stateWord(s), state);
 const banner = (page, server) => shellCall(page, (m, s) => m.serverBanner(s)?.querySelector('h2')?.textContent ?? null, server);
-const goTo = (page, path) => shellCall(page, (m, p) => m.go(p), path);
 // One macrotask after an answer lands, so a late callback has had its turn before a row looks.
 const settle = (page) => page.evaluate(() => new Promise((ok) => setTimeout(ok, 50)));
 async function open(page, path) {
@@ -116,7 +115,7 @@ test.describe('T2 the page follows the live status', () => {
     await fakeServerGateway(page, { status: fullView(entry('a b', 'running')) });
     await open(page, '/ui/servers/a%20b/status');
     await expect(page.locator('a[href="/ui/servers/a%20b/actions"]').first()).toBeVisible();
-    await expect(page.locator('a[href="/ui/servers/a%20b/settings"]')).toHaveCount(0);
+    await expect(page.locator('a[href="/ui/servers/a%20b/settings"]').first()).toBeVisible();
   });
   test('T2a a status event redraws from its own body, with no new read', async ({ page }) => {
     const seen = await fakeServerGateway(page, { status: fullView(entry('svc', 'paused', { running: false })) });
