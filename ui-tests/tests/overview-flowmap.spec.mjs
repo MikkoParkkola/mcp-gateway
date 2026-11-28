@@ -571,3 +571,24 @@ for (const width of [390, 1440]) test(`G5 with a mouse the dot is still a 24 px 
   expect(box.height).toBeGreaterThanOrEqual(24);
   expect(box.width).toBeGreaterThanOrEqual(24);
 });
+
+test('Z2 on a 390 px touch phone the longest caller name is cut, kept whole in its title, and overlaps nothing', async ({ browser }) => {
+  const context = await browser.newContext({ hasTouch: true });
+  const page = await context.newPage();
+  // The longest caller in these fixtures: a 128-byte key label, with blocked calls so its 44 px dot shows.
+  const longest = 'key:' + 'b'.repeat(124);
+  await serve(page, { body: flowBody({ edges: [edge(longest, 's', 20, 3), edge('key:short', 's', 10, 0)], servers: [srv('s')] }) });
+  await open(page, 390);
+  const row = agentRows(page).first();
+  await expect(row.locator('.ov-row-name')).toHaveAttribute('title', longest.slice(4));
+  const fit = await row.evaluate((li) => {
+    const [name, calls, dot] = ['.ov-row-name', '.ov-row-calls', '.ov-dot'].map((s) => li.querySelector(s));
+    const r = (e) => e.getBoundingClientRect();
+    const apart = (a, b) => r(a).right <= r(b).left || r(b).right <= r(a).left || r(a).bottom <= r(b).top || r(b).bottom <= r(a).top;
+    return { cut: name.scrollWidth > name.clientWidth, ellipsis: getComputedStyle(name).textOverflow, clearNumber: apart(name, calls), clearDot: apart(name, dot), inRow: r(dot).right <= r(li).right, nameWidth: Math.round(r(name).width), dotWidth: Math.round(r(dot).width) };
+  });
+  // The numbers the review asked for, in the log: the name's room and the dot's target.
+  console.log(`Z2 390 touch: name ${fit.nameWidth} px, dot ${fit.dotWidth} px`);
+  expect(fit).toMatchObject({ cut: true, ellipsis: 'ellipsis', clearNumber: true, clearDot: true, inRow: true });
+  await context.close();
+});
