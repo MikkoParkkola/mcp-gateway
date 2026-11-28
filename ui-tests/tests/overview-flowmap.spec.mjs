@@ -237,12 +237,14 @@ for (const width of [1440, 390]) test(`D2 the dot is 44 px under a coarse pointe
   await serve(page, { body: flowBody({ edges: [edge('key:b2', 's', 20, 3)], servers: [srv('s')] }) });
   await open(page, width);
   const box = await map(page).locator('a.ov-dot').boundingBox();
+  console.log(`D2 ${width} coarse: dot box ${Math.round(box.width)} x ${Math.round(box.height)} at x ${Math.round(box.x)}`);
   expect(box.width).toBeGreaterThanOrEqual(44);
   expect(box.height).toBeGreaterThanOrEqual(44);
   // The target is 44 px (its padding inside it, so the painted dot stays small) and clears its row's number.
   // Wide the dot is a dot, so its target is 44 px; narrow it is words, as wide as they are.
   if (width >= 640) expect(box.width, 'a 44 px target').toBeLessThanOrEqual(46);
-  const calls = await map(page).locator('.ov-row-calls').first().boundingBox();
+  // The dot's own row (on a phone the servers' list comes first in the page).
+  const calls = await agentRows(page).first().locator('.ov-row-calls').boundingBox();
   expect(box.x, 'the target starts after its row\'s number').toBeGreaterThanOrEqual(calls.x + calls.width);
   await context.close();
 });
