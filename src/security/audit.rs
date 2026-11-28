@@ -119,6 +119,10 @@ impl AuditOutcome {
 
     /// [`Self::is_blocked`] for a record's `outcome` field value.
     #[must_use]
+    #[cfg_attr(
+        not(feature = "webui"),
+        allow(dead_code, reason = "its reader is the web UI's Activity feed")
+    )]
     pub(crate) fn is_blocked_label(label: &str) -> bool {
         label == Self::Denied(0).label()
     }

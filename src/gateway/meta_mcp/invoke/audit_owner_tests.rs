@@ -28,8 +28,10 @@ fn held_job(jobs: &Arc<AuditJobs>) -> (Arc<Notify>, Arc<AtomicBool>) {
 async fn d2_5_shutdown_waits_for_a_handed_off_record_within_its_bound() {
     let jobs = Arc::new(AuditJobs::default());
     let (gate, landed) = held_job(&jobs);
+    // Let go only once the drain has started with the job open.
+    let draining = Arc::clone(&jobs);
     let release = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        draining.seams.draining.notified().await;
         gate.notify_one();
     });
     let open = jobs.drain(Duration::from_secs(30)).await;

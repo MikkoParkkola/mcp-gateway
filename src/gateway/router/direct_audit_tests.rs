@@ -526,6 +526,7 @@ enum Caller {
     /// `bearer`, as is the API key that fixture also holds.
     Bearer,
     /// [`Caller::Key`] on the established session it names.
+    #[cfg_attr(not(feature = "firewall"), allow(dead_code))]
     KeyOn(String),
 }
 
