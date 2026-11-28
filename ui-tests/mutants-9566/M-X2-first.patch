@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..f520b03301 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -380,6 +380,7 @@ export function addCard(body, ctx) {
+   const add = async (withTools) => {
+     const payload = request();
+     if (!payload) return;
++    payload.allow_cleartext_credentials = true;
+     if (withTools && st.tools) payload.allowed_tools = st.tools;
+     const count = withTools ? (st.tools?.length ?? 0) : null;
+     for (const b of stage.querySelectorAll('button')) b.disabled = true;

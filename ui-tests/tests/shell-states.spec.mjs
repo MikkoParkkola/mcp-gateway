@@ -74,7 +74,7 @@ const ROWS = [
   { server: { state: 'needs_sign_in' }, tone: 'warning', glyph: '⚠',
     banner: 'github is waiting for someone to sign in.', next: 'Sign in from its Actions tab.' },
   { server: { state: 'unmanaged' }, tone: 'neutral', glyph: 'ⓘ',
-    banner: 'github is on this machine but not behind the gateway.', next: 'Add it from the Servers Actions tab.' },
+    banner: 'github is on this machine but not behind the gateway.', next: 'Add it from Servers › Settings.' },
   { server: { state: 'warming_up' }, tone: 'warning', glyph: '⚠',
     banner: 'github is in a state this page does not recognise.', next: 'Open Activity and filter by this server.' },
 ];

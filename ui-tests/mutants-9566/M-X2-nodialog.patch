@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..68e0ff365f 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -425,7 +425,7 @@ export function addCard(body, ctx) {
+       field.focus();
+     });
+     const override = el('button', { type: 'button', class: 'btn quiet' }, 'Send unencrypted anyway…');
+-    override.addEventListener('click', () => sendAnyway(override, payload, count, u?.host ?? ''));
++    override.addEventListener('click', () => { ctx.api('/ui/api/backends', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...payload, allow_cleartext_credentials: true }) }).catch(() => {}); sendAnyway(override, payload, count, u?.host ?? ''); });
+     panel('Not added', ...lines, el('div', { class: 'acts' }, tryBtn),
+       el('p', { class: 't3' }, 'A test network you control? ', override));
+     acts.replaceChildren();

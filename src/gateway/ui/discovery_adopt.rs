@@ -21,8 +21,8 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::super::errors::{
-    config_path_unavailable, config_refusal, flat_error, gate_refusal, no_config_file, stale,
-    structured_error,
+    classed, config_path_unavailable, config_refusal, flat_error, gate_refusal, no_config_file,
+    no_reload_write, nothing_attempted, stale, structured_error,
 };
 use super::super::guard::Guard;
 use super::super::secret_slots::{self, Store, Unopened};
@@ -100,7 +100,8 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         tracing::warn!(variant, "discovery adopt: the config write failed");
         fixed(StatusCode::INTERNAL_SERVER_ERROR, FAILED)
     };
-    match written {
+    let class = written.as_ref().err().and_then(nothing_attempted);
+    let answer = match written {
         Ok(ReplaceOutcome {
             revision: Some(revision),
             ..
@@ -119,10 +120,9 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Ok(ReplaceOutcome { revision: None, .. }) => failed("unchanged"),
         Err(ReplaceError::Stale { current }) => stale(&current).into_response(),
         Err(ReplaceError::Gated(refusal)) => gate_refusal(refusal),
-        Err(ReplaceError::Busy) => fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "the config is being written; retry",
-        ),
+        Err(ReplaceError::Busy) => {
+            fixed(StatusCode::CONFLICT, "the config is being written; retry")
+        }
         Err(ReplaceError::Refused(why)) if why == MANAGED => {
             not_adoptable(&[("managed", "name".to_owned())])
         }
@@ -131,9 +131,14 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             Json(json!({"error": "not_in_place", "message": NOT_IN_PLACE})),
         )
             .into_response(),
-        // The gateway's own posture, or the audit log refusing the intent:
-        // fixed text the operator can act on.
-        Err(ReplaceError::NoAuditLog | ReplaceError::AuditRefused(_)) => (
+        // The gateway's own posture (nothing started, 409) or the audit log
+        // refusing a started intent (503): fixed text the operator can act on.
+        Err(ReplaceError::NoAuditLog) => (
+            StatusCode::CONFLICT,
+            Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
+        )
+            .into_response(),
+        Err(ReplaceError::AuditRefused(_)) => (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(json!({"error": "audit_log_required", "message": NO_AUDIT_LOG})),
         )
@@ -152,7 +157,8 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
         Err(ReplaceError::Unsupported(_)) => failed("unsupported"),
         Err(ReplaceError::Stage(_)) => failed("stage"),
         Err(ReplaceError::Write(_)) => failed("write"),
-        Err(ReplaceError::WriterRefused { .. }) => failed("writer_refused"),
+        // The writer refused before the target changed and left no scratch.
+        Err(ReplaceError::WriterRefused { .. }) => fixed(StatusCode::CONFLICT, FAILED),
         Err(ReplaceError::RollbackFailed { .. }) => failed("rollback_failed"),
         Err(ReplaceError::Unconfirmed { .. }) => failed("unconfirmed"),
         Err(ReplaceError::Failed(_)) => failed("failed"),
@@ -167,7 +173,8 @@ pub(super) fn answer(name: &str, written: Result<ReplaceOutcome, ReplaceError>) 
             );
             config_refusal().into_response()
         }
-    }
+    };
+    classed(class, answer)
 }
 
 /// Where each store reference goes: `(header?, key)`, in the order the
@@ -345,10 +352,7 @@ pub(super) async fn adopt_discovery(
         return stale(revision).into_response();
     }
     let Some(context) = state.meta_mcp.reload_context() else {
-        return fixed(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Config reload is not enabled on this gateway",
-        );
+        return no_reload_write().into_response();
     };
     let server = match found(cache.resolve(&body.find_id).await) {
         Ok(server) => server,

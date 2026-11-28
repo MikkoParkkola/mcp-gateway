@@ -302,3 +302,24 @@ export const announced = async (page) => (await writes(page)).filter(Boolean);
 export async function signedInAdmin(page) {
   await page.route('**/ui/api/status', (r) => r.fulfill({ json: { auth: { enabled: true, signed_in: true, admin: true } } }));
 }
+
+export const KEY = 'mcpg_fixture_key_0123456789';
+
+/** Status answers signed in only for requests carrying KEY as a bearer. */
+export async function gate(page, { reject = false } = {}) {
+  const seen = [];
+  await page.route('**/ui/api/status', (route) => {
+    const auth = route.request().headers().authorization ?? '';
+    seen.push(auth);
+    const signedIn = !reject && auth === `Bearer ${KEY}`;
+    return route.fulfill({ json: { version: '4.0.0', auth: { enabled: true, signed_in: signedIn, admin: signedIn } } });
+  });
+  return seen;
+}
+
+/** Sign in from the sign-in view with KEY, as a user does, and wait until it closes. */
+export async function signInWithKey(page) {
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+}

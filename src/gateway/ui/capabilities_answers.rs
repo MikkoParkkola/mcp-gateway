@@ -34,6 +34,8 @@ pub(super) fn field_errors(errors: &[FieldError]) -> Value {
 /// A refusal as the editor's routes answer it: `{error, message, patch?,
 /// errors?, current_sha256?}`. Nothing was written.
 pub(super) fn refused(name: &str, refusal: Refused) -> axum::response::Response {
+    // Another write holds the directory lock: it ends by itself, so retry.
+    let busy = matches!(refusal, Refused::LockBusy);
     let (status, code, message, extra) = match refusal {
         Refused::Stale {
             patch,
@@ -80,7 +82,7 @@ pub(super) fn refused(name: &str, refusal: Refused) -> axum::response::Response 
             json!({ "patch": patch }),
         ),
         Refused::LockBusy => (
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::CONFLICT,
             "lock_busy",
             "Another write to this capability directory is in progress; retry".to_owned(),
             json!({}),
@@ -108,5 +110,10 @@ pub(super) fn refused(name: &str, refusal: Refused) -> axum::response::Response 
     if let (Value::Object(body), Value::Object(extra)) = (&mut body, extra) {
         body.extend(extra);
     }
-    (status, Json(body)).into_response()
+    let answer = (status, Json(body)).into_response();
+    if busy {
+        super::super::errors::refusal(super::super::errors::Retry::Now, answer)
+    } else {
+        answer
+    }
 }

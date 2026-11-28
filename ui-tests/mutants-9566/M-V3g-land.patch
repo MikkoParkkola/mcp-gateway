@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/shell.3dea6c02b527.js b/src/gateway/ui/shell/shell.3dea6c02b527.js
+index c1ee8f79f7..5c8c8fa671 100644
+--- a/src/gateway/ui/shell/shell.3dea6c02b527.js
++++ b/src/gateway/ui/shell/shell.3dea6c02b527.js
+@@ -566,7 +566,7 @@ export const sessionHolds = (epoch) => epoch === authEpoch && !document.body.cla
+  * Returns whether it landed.
+  */
+ export function landWithNotice(target, epoch) {
+-  if (!target?.path || !sessionHolds(epoch)) return false;
++  if (!target?.path) return false;
+   const heading = el('p', { class: 'done-title', tabindex: '-1' }, `✓ ${target.notice ?? ''}`);
+   const dismiss = el('button', { type: 'button', class: 'btn quiet' }, 'Dismiss');
+   const node = el('section', { class: 'done-notice', 'aria-label': 'Done' }, heading,

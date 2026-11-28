@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/shell.3dea6c02b527.js b/src/gateway/ui/shell/shell.3dea6c02b527.js
+index c1ee8f79f7..df8601c465 100644
+--- a/src/gateway/ui/shell/shell.3dea6c02b527.js
++++ b/src/gateway/ui/shell/shell.3dea6c02b527.js
+@@ -556,7 +556,7 @@ export const sessionNow = () => authEpoch;
+  * Whether the session `epoch` names is still the one on screen: nobody else signed in
+  * since, and the sign-in view is not showing (a 401 opens it without a new epoch).
+  */
+-export const sessionHolds = (epoch) => epoch === authEpoch && !document.body.classList.contains('signed-out');
++export const sessionHolds = (epoch) => epoch === authEpoch;
+ 
+ /**
+  * Done, and here is where it landed: go to `target.path`, draw a dismissible notice

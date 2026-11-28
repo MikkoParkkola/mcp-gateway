@@ -7,13 +7,15 @@
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
 import { shellReady, recordAnnouncements, announced } from './shell.mjs';
 import { served } from './copy-check.mjs';
-import { entry, fullView, fakeServerGateway, gate, key, keysBody, goTo, HARD, HARD_ENC } from './server-page.mjs';
+import { entry, fullView, fakeServerGateway, gate, shellCall } from './server-page.mjs';
 
 test.use({ timezoneId: 'UTC' });
 
 const NAME = 'my server';
 const ENC = 'my%20server';
 const dialog = (page) => page.locator('dialog.confirm');
+const key = (name, backends, more = {}) => ({ name, backends, allowed_tools: null, denied_tools: null, admin: false, live: true, ...more });
+const keysBody = (...keys) => ({ code: 200, body: { keys } });
 async function actions(page, server, opts = {}) {
   const seen = await fakeServerGateway(page, { status: fullView(server, entry('other', 'running')), ...opts });
   await page.goto(`/ui/servers/${encodeURIComponent(server.name)}/actions`);
@@ -278,6 +280,9 @@ test.describe('T10 at 390 px the open Remove dialog does not overflow', () => {
   }
 });
 
+const HARD = 'a b/c?d%e#f é';
+const HARD_ENC = 'a%20b%2Fc%3Fd%25e%23f%20%C3%A9';
+
 test.describe('T9c every request path that carries the name is encoded (PR A sites)', () => {
   test('T9c the list link and the Activity link', async ({ page }) => {
     await fakeServerGateway(page, { status: fullView(entry(HARD, 'running')) });
@@ -316,6 +321,7 @@ test.describe('T9c every request path that carries the name is encoded (PR A sit
 });
 
 const PAGE_FILE = /^server-page\.[0-9a-f]{12}\.js$/;
+const goTo = (page, path) => shellCall(page, (m, p) => m.go(p), path);
 // One macrotask after an answer lands, so a late callback has had its turn before a row looks.
 const settle = (page) => page.evaluate(() => new Promise((ok) => setTimeout(ok, 50)));
 

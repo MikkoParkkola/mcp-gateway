@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..48339963ef 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -189,7 +189,7 @@ export function addCard(body, ctx) {
+     } finally {
+       clearTimeout(timer);
+     }
+-    return sessionHolds(epoch) ? { ...out, epoch } : null;
++    return { ...out, epoch };
+   };
+ 
+   /** While a request is in flight nothing it was built from can change (rule 3). */

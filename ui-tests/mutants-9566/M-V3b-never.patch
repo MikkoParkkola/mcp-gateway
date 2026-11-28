@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..b4a901f7a6 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -341,7 +341,7 @@ export function addCard(body, ctx) {
+     st.confirm = null; // a token is used once
+     if (out.ok) return listed(payload, out.ok);
+     const s = out.err instanceof ApiError ? out.err.status : 0;
+-    failed(out.err, withheld && (s === 502 || s === 504));
++    failed(out.err, false);
+   };
+ 
+   /** Step 5's 200: the tools, and the selection the add will send. */

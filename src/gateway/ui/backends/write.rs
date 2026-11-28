@@ -9,7 +9,8 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 
 use super::super::errors::{
-    WriteRoute, config_path_unavailable, flat_error, incomplete, no_config_file, refused_write,
+    WriteRoute, config_path_unavailable, flat_error, incomplete, no_config_file, no_reload_write,
+    refused_write,
 };
 use super::super::secret_slots;
 use crate::config::Config;
@@ -75,13 +76,7 @@ where
     // Fails closed: a write with no reload to check it would leave the file
     // ahead of the running gateway, unaudited.
     let Some(context) = state.meta_mcp.reload_context() else {
-        return Err(Box::new(
-            flat_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "Config reload is not enabled on this gateway",
-            )
-            .into_response(),
-        ));
+        return Err(Box::new(no_reload_write().into_response()));
     };
     // Checked before any lock, so a missing file leaves nothing behind; a
     // file deleted after this check is caught again from the writer's answer.

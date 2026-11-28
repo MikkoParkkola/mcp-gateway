@@ -16,14 +16,6 @@ export const entry = (name, state, more = {}) => ({
 /** The full status view an unscoped admin gets. */
 export const fullView = (...servers) => ({ server_count: servers.length, servers });
 
-/** A keys-read entry and its answer, as keys.rs serves them. */
-export const key = (name, backends, more = {}) => ({ name, backends, allowed_tools: null, denied_tools: null, admin: false, live: true, ...more });
-export const keysBody = (...keys) => ({ code: 200, body: { keys } });
-
-/** A name with every character a path must encode: space, slash, ?, %, # and a non-ASCII letter. */
-export const HARD = 'a b/c?d%e#f é';
-export const HARD_ENC = 'a%20b%2Fc%3Fd%25e%23f%20%C3%A9';
-
 /** A promise opened by hand, to hold one reply. */
 export function gate() {
   let open;
@@ -82,6 +74,3 @@ export async function shellCall(page, fn, arg) {
     await shell.dispose();
   }
 }
-
-/** Move the page to `path` the way the app does, through the shell's go(). */
-export const goTo = (page, path) => shellCall(page, (m, p) => m.go(p), path);

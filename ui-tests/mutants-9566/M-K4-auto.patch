@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..7e972b03b5 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -348,7 +348,7 @@ export function addCard(body, ctx) {
+   const listed = (payload, answer) => {
+     const tools = Array.isArray(answer?.tools) ? answer.tools : [];
+     const pkg = answer?.preview?.package?.name;
+-    if (!st.manual && typeof pkg === 'string' && pkg) { st.name = pkg; drawName(); } // not an operator's change
++    if (!st.manual && typeof pkg === 'string' && pkg) { st.name = pkg; drawName(); toInput(); }
+     st.phase = 'listed';
+     st.tools = tools.filter((t) => t.class === 'read' && t.selectable === true).map((t) => t.name);
+     const secs = (Number(answer?.preview?.elapsed_ms) || 0) / 1000;

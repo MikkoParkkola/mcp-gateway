@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..f33dd088b4 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -218,7 +218,7 @@ export function addCard(body, ctx) {
+       return null;
+     }
+     const out = { name: st.name, [kind()]: st.text.trim() };
+-    if (Object.keys(values).length) out[kind() === 'url' ? 'headers' : 'env'] = values;
++    if (Object.keys(values).length) out.env = values;
+     return out;
+   };
+ 

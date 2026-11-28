@@ -5,22 +5,9 @@
 // destination kept through sign-in, and a refused key. Rows S1-S5 of the
 // shell test plan. The fixture status answers per test through page.route.
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
-import { withFixturePages } from './shell.mjs';
+import { withFixturePages, KEY, gate, signInWithKey } from './shell.mjs';
 
-const KEY = 'mcpg_fixture_key_0123456789';
 const UNCONFIRMED = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
-
-/** Status answers signed in only for requests carrying KEY as a bearer. */
-async function gate(page, { reject = false } = {}) {
-  const seen = [];
-  await page.route('**/ui/api/status', (route) => {
-    const auth = route.request().headers().authorization ?? '';
-    seen.push(auth);
-    const signedIn = !reject && auth === `Bearer ${KEY}`;
-    return route.fulfill({ json: { version: '4.0.0', auth: { enabled: true, signed_in: signedIn, admin: signedIn } } });
-  });
-  return seen;
-}
 
 test('S1 auth on and nobody signed in shows the sign-in view at the same address', async ({ page }) => {
   await gate(page);
@@ -335,9 +322,7 @@ async function signedIn(page) {
   await gate(page);
   await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 303, headers: { location: '/ui' } }));
   await page.goto('/ui/overview/status');
-  await page.locator('#signin-key').fill(KEY);
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#signin')).toBeHidden();
+  await signInWithKey(page);
 }
 
 test.describe('sign-out on a phone', () => {

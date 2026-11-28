@@ -1,20 +1,19 @@
-name: Reload now mutants (one-off)
+name: Add-a-server mutants (one-off)
 
-# One-off probe on a throwaway branch, never merged: applies each Reload-now
-# mutant patch in ui-tests/mutants-9593/ to a clean tree, runs only the rows
-# that must kill it, judges from Playwright's own result, and reverts (run.sh).
-# It also takes the frame-26 screenshots for the review-carried comparison.
-# Fires only on pushes to its own branch.
+# One-off probe on a throwaway branch, never merged: applies each add-server
+# mutant patch in ui-tests/mutants-9566/ to a clean tree, runs only the row
+# that must kill it, judges it at its killing line, and reverts (run.sh).
+# Harness reused from the server Settings probe. Fires only on its own branch.
 on:
   push:
-    branches: ["throwaway/mut-9570a-ui"]
+    branches: ["throwaway/mut-9566-ui"]
 
 permissions:
   contents: read
 
 jobs:
   mutants:
-    name: Reload now mutants
+    name: Add-a-server mutants
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     defaults:
@@ -37,14 +36,13 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           CI: 'true'
-        run: bash mutants-9593/run.sh
+        run: bash mutants-9566/run.sh
       - name: Keep the verdicts, logs and screenshots
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: mut-9593
+          name: mut-9566
           path: |
             ui-tests/mutant-out/
-            ui-tests/frame-out/
           if-no-files-found: warn
           retention-days: 14

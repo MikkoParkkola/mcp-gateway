@@ -1,0 +1,21 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..aa1e4c161c 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -199,7 +199,6 @@ export function addCard(body, ctx) {
+ 
+   const toInput = () => {
+     st.phase = 'input';
+-    st.withheld = null;
+     st.confirm = null;
+     st.tools = null;
+     stage.replaceChildren();
+@@ -306,7 +305,7 @@ export function addCard(body, ctx) {
+     st.phase = 'described';
+     st.confirm = answer?.confirm ?? null;
+     const held = [...(p.withheld?.env ?? []), ...(p.withheld?.headers ?? [])].filter((n) => typeof n === 'string');
+-    st.withheld = held.length > 0;
++    st.withheld = st.withheld || held.length > 0;
+     const facts = el('dl', { class: 'sp-facts' },
+       ...fact('Runs from', `${location.host}, the gateway's own host`),
+       ...fact('Transport', String(p.transport ?? '')),

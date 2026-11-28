@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..971e0131e2 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -201,7 +201,6 @@ export function addCard(body, ctx) {
+     st.phase = 'input';
+     st.withheld = null;
+     st.confirm = null;
+-    st.tools = null;
+     stage.replaceChildren();
+     acts.replaceChildren(previewBtn);
+   };

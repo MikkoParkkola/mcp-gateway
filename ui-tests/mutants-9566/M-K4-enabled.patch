@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..5d5af21a95 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -194,7 +194,7 @@ export function addCard(body, ctx) {
+ 
+   /** While a request is in flight nothing it was built from can change (rule 3). */
+   const setBusy = (busy) => {
+-    for (const n of [field, addRow, previewBtn, ...rows.flatMap((r) => [r.name, r.value]), ...nameLine.querySelectorAll('input, button')]) n.disabled = busy;
++    for (const n of [field, addRow, previewBtn, ...rows.flatMap((r) => [r.name, r.value]), ...nameLine.querySelectorAll('input, button')]) n.disabled = false;
+   };
+ 
+   const toInput = () => {

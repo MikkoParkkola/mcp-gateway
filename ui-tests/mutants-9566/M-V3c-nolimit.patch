@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..14e4eedfca 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -180,7 +180,7 @@ export function addCard(body, ctx) {
+   const post = async (path, payload, ms) => {
+     const epoch = sessionNow();
+     const stop = new AbortController();
+-    const timer = setTimeout(() => stop.abort(), ms);
++    const timer = setTimeout(() => {}, ms);
+     let out;
+     try {
+       out = { ok: await ctx.api(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload), signal: stop.signal }) };

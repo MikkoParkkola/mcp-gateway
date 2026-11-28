@@ -1,0 +1,12 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..54b7a067bc 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -44,7 +44,6 @@ export function rowValues(rows, kind) {
+     if (!n && !value) continue;
+     if (!n) return { fault: { index: i, words: 'Give this value a name.' } };
+     const k = kind === 'url' ? n.toLowerCase() : n;
+-    if (seen.has(k)) return { fault: { index: i, words: 'This name is used twice.' } };
+     seen.add(k);
+     out[n] = value;
+   }

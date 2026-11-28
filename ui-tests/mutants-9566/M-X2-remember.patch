@@ -1,0 +1,20 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..e7b488c477 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -381,6 +381,7 @@ export function addCard(body, ctx) {
+     const payload = request();
+     if (!payload) return;
+     if (withTools && st.tools) payload.allowed_tools = st.tools;
++    if (st.cleartext) payload.allow_cleartext_credentials = true;
+     const count = withTools ? (st.tools?.length ?? 0) : null;
+     for (const b of stage.querySelectorAll('button')) b.disabled = true;
+     setBusy(true);
+@@ -452,6 +453,7 @@ export function addCard(body, ctx) {
+         return { path: `/ui/servers/${encodeURIComponent(name)}/status`, notice: noticeOf(name, count, v) };
+       },
+     });
++    if (res?.outcome === 'kept') st.cleartext = true;
+     if (!sessionHolds(epoch)) return;
+     const refusals = res?.outcome === 'failed' ? fieldRefusals(res.error) : null;
+     if (refusals) putRefusals(refusals);

@@ -311,7 +311,7 @@ export const SERVER_STATES = {
     glyph: 'ⓘ',
     tone: 'neutral',
     banner: (s) => `${s.name} is on this machine but not behind the gateway.`,
-    next: () => 'Add it from the Servers Actions tab.',
+    next: () => 'Add it from Servers › Settings.',
   },
   // Switched off by its owner: nothing is wrong, so the quiet glyph and tone.
   off: { glyph: 'ⓘ', tone: 'neutral', banner: (s) => OFF_BANNER(s.name), next: () => OFF_NEXT },
@@ -548,6 +548,39 @@ function pump() {
 
 /** Whether the page and identity a message was asked for are still the ones shown. */
 const guardHolds = (guard) => guard.epoch === authEpoch && (guard.seq === null || guard.seq === renderSeq);
+
+/** The session a screen's request starts in; hand it to `sessionHolds` when the answer arrives. */
+export const sessionNow = () => authEpoch;
+
+/**
+ * Whether the session `epoch` names is still the one on screen: nobody else signed in
+ * since, and the sign-in view is not showing (a 401 opens it without a new epoch).
+ */
+export const sessionHolds = (epoch) => epoch === authEpoch && !document.body.classList.contains('signed-out');
+
+/**
+ * Done, and here is where it landed: go to `target.path`, draw a dismissible notice
+ * there, focus it and say it. `epoch` is the session the action started in
+ * (`sessionNow()`); for any other session nothing lands. One mechanism for the
+ * confirm dialog (called after it has closed) and for a screen's own done step.
+ * Returns whether it landed.
+ */
+export function landWithNotice(target, epoch) {
+  if (!target?.path || !sessionHolds(epoch)) return false;
+  const heading = el('p', { class: 'done-title', tabindex: '-1' }, `✓ ${target.notice ?? ''}`);
+  const dismiss = el('button', { type: 'button', class: 'btn quiet' }, 'Dismiss');
+  const node = el('section', { class: 'done-notice', 'aria-label': 'Done' }, heading,
+    ...(target.action ? [el('a', { href: target.action.path }, target.action.label)] : []), dismiss);
+  dismiss.addEventListener('click', () => { node.remove(); doneNotice = null; });
+  go(target.path);
+  // Bound to the render go() ended on, after any default-tab redirect: any later
+  // navigation, even to the same address, is a new render and drops it.
+  doneNotice = { node, seq: renderSeq, epoch: authEpoch };
+  document.getElementById('content').prepend(node);
+  heading.focus({ preventScroll: true });
+  if (target.notice) announce(target.notice, { subject: 'page' });
+  return true;
+}
 
 /** `text` ending as a sentence, so a batch reads as separate sentences. */
 const sentence = (text) => (/[.!?…]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`);
@@ -883,7 +916,7 @@ export function confirmAction(spec) {
   let routed = false;
   let stopClocks = () => {};
   let heldToken = null;
-  let saidAfterClose = '';
+  let landing = null;
   let settle;
   const result = new Promise((resolve) => { settle = resolve; });
   let outcome = { outcome: 'kept' };
@@ -927,7 +960,7 @@ export function confirmAction(spec) {
     document.body.style.minHeight = '';
     if (confirmEl === dialogEl) { confirmEl = null; onSignIn = null; }
     // Said once the announcer is back in the page, so the entry is not emptied with the move.
-    if (saidAfterClose) announce(saidAfterClose, { subject: 'page' });
+    if (landing) landWithNotice(landing.target, landing.epoch);
     if (!routed) {
       window.scrollTo({ top: before, behavior: 'instant' });
       const back = opener?.isConnected ? opener : document.getElementById('content');
@@ -1028,20 +1061,9 @@ export function confirmAction(spec) {
       finish(outcome);
       return;
     }
-    const heading = el('p', { class: 'done-title', tabindex: '-1' }, `✓ ${target.notice ?? ''}`);
-    const dismiss = el('button', { type: 'button', class: 'btn quiet' }, 'Dismiss');
-    const node = el('section', { class: 'done-notice', 'aria-label': 'Done' }, heading,
-      ...(target.action ? [el('a', { href: target.action.path }, target.action.label)] : []), dismiss);
-    dismiss.addEventListener('click', () => { node.remove(); doneNotice = null; });
+    landing = { target, epoch: authEpoch };
     routed = true;
     finish(outcome);
-    go(target.path);
-    // Bound to the render go() ended on, after any default-tab redirect: any later
-    // navigation, even to the same address, is a new render and drops it.
-    doneNotice = { node, seq: renderSeq, epoch: authEpoch };
-    document.getElementById('content').prepend(node);
-    heading.focus({ preventScroll: true });
-    saidAfterClose = target.notice ?? '';
   };
 
   act.addEventListener('click', start);
@@ -1919,7 +1941,7 @@ async function showEnvironment(auth) {
   // The tooltip module and its stylesheet load only when a fallback name needs them.
   let m;
   try {
-    m = await import('/ui/assets/tooltip.fb009a93019b.js');
+    m = await import('/ui/assets/tooltip.7d5614b14a79.js');
   } catch {
     return;
   }

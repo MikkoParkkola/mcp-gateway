@@ -1,0 +1,13 @@
+diff --git a/src/gateway/ui/shell/server-add.2796e5d82a48.js b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+index 004cbc277c..8045fc50d9 100644
+--- a/src/gateway/ui/shell/server-add.2796e5d82a48.js
++++ b/src/gateway/ui/shell/server-add.2796e5d82a48.js
+@@ -445,7 +445,7 @@ export function addCard(body, ctx) {
+         return ctx.api('/ui/api/backends', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(snapshot), signal: stop.signal })
+           .finally(() => clearTimeout(timer));
+       },
+-      failed: (err) => (err instanceof ApiError && err.serverMessage && !fieldRefusals(err)
++      failed: (err) => (err instanceof ApiError && err.serverMessage
+         ? { reason: err.serverMessage, next: 'Check the address and the values, then try again.' } : null),
+       done: (v) => {
+         for (const r of rows) r.value.value = ''; // no typed value stays on the page

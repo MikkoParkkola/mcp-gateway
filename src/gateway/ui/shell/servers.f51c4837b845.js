@@ -9,9 +9,10 @@
 // events that arrive during a read ask for one more read after it. The
 // listener goes away at the first event after the screen has left the page
 // (the shell gives a screen no leave hook). Gateway strings go in as text.
-import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.509e3442f83e.js';
+import { register, el, serverBadge, SERVER_STATES, GLOSSARY } from '/ui/assets/shell.3dea6c02b527.js';
 import { serverPath, addressable } from '/ui/assets/server-paths.15a075bb0cb1.js';
-import { leave, statusTab as serverStatus, actionsTab as serverActions, settingsTab as serverSettings } from '/ui/assets/server-page.ef547f8f43d2.js';
+import { leave, statusTab as serverStatus, actionsTab as serverActions } from '/ui/assets/server-page.a71a1077ec7f.js';
+import { addCard } from '/ui/assets/server-add.2796e5d82a48.js';
 
 /** Registry category to group label; a server with no labelled category goes under Other. */
 export const GROUP_LABELS = {
@@ -94,7 +95,7 @@ function memberBadge(state) {
 // fails, the headings stand without their (i). Each caller names its id literally.
 let tipModule = null;
 function withTip(node, make) {
-  (tipModule ??= import('/ui/assets/tooltip.fb009a93019b.js'))
+  (tipModule ??= import('/ui/assets/tooltip.7d5614b14a79.js'))
     .then((mod) => node.append(' ', make(mod.tip)), () => {});
   return node;
 }
@@ -281,7 +282,7 @@ function statusTab(body, ctx) {
     ctx.show(null);
     const parts = [];
     if (!servers.length) {
-      const add = el('a', { class: 'btn', href: '/ui/classic' }, 'Add a server');
+      const add = el('a', { class: 'btn', href: '/ui/servers/settings' }, 'Add a server');
       parts.push(ctx.state('empty', { title: 'No servers behind the gateway yet', body: 'Add one and it shows here with its state.', action: add }));
     }
     // Turned-off servers sit apart: never counted as answering, never a thing to look at.
@@ -341,9 +342,8 @@ function statusTab(body, ctx) {
 
 /**
  * Each tab first drops a listener a server page left. With an object it draws
- * that server's tab; without one, Status is the list and Actions and Settings are not built.
+ * that server's tab; without one, Status is the list and Actions is not built.
  */
-const notBuilt = (body, ctx) => body.append(ctx.state('not-built'));
 const tab = (onServer, onList) => (body, ctx) => {
   leave();
   return ctx.object === null ? onList(body, ctx) : onServer(body, ctx);
@@ -353,8 +353,8 @@ register('servers', {
   title: 'Servers',
   tabs: {
     status: tab(serverStatus, statusTab),
-    actions: tab(serverActions, notBuilt),
-    settings: tab(serverSettings, notBuilt),
+    actions: tab(serverActions, (body, ctx) => body.append(ctx.state('not-built'))),
+    settings: tab((body, ctx) => body.append(ctx.state('not-built')), addCard),
   },
   entries: [],
 });
