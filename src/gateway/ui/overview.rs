@@ -544,27 +544,19 @@ fn refused_row(refusal: &Refusal, detail: &Map<String, Value>) -> Value {
 /// percent first. None when cost governance is off: there is no limit to near.
 #[cfg(feature = "cost-governance")]
 fn limit_rows(state: &AppState, generation: &crate::config_reload::Generation) -> Vec<Value> {
-    use crate::cost_accounting::config::AlertAction;
     let Some(enforcer) = &state.meta_mcp.budget_enforcer else {
         return Vec::new();
     };
     // The response's own generation: the threshold and the limits it is
     // compared with come from one configuration.
     let governance = enforcer.governance(Some(generation));
-    let threshold = governance
-        .alerts
-        .iter()
-        .filter(|rule| rule.action == AlertAction::Notify)
-        .map(|rule| f64::from(rule.at_percent))
-        .reduce(f64::min)
-        .unwrap_or(80.0);
+    let threshold = super::costs_standing::warn_at_percent(&governance.alerts);
     let snapshot = enforcer.snapshot_under(governance);
     let mut found: Vec<(f64, Value)> = Vec::new();
     let mut check = |scope: &str, name: Option<&str>, spent: f64, limit: f64| {
-        if limit <= 0.0 {
+        let Some(percent) = super::costs_standing::percent_of_limit(spent, limit) else {
             return;
-        }
-        let percent = spent / limit * 100.0;
+        };
         if percent >= threshold {
             found.push((
                 percent,

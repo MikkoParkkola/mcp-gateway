@@ -98,9 +98,28 @@ pub(crate) fn ordered(rules: &[AlertRule]) -> bool {
         .all(|pair| severity(pair[0]) <= severity(pair[1]))
 }
 
+/// The percent of a limit at which the screens warn: the lowest Notify
+/// rule's, and 80 when no rule notifies. One source for the overview's limit
+/// rows, the Costs list and the per-key series, so no two of them disagree.
+pub(crate) fn warn_at_percent(rules: &[AlertRule]) -> f64 {
+    rules
+        .iter()
+        .filter(|rule| rule.action == AlertAction::Notify)
+        .map(|rule| f64::from(rule.at_percent))
+        .reduce(f64::min)
+        .unwrap_or(80.0)
+}
+
+/// `spent` as a percent of `limit`; none for a limit of zero or less, which no
+/// screen warns about.
+pub(crate) fn percent_of_limit(spent: f64, limit: f64) -> Option<f64> {
+    (limit > 0.0).then(|| spent / limit * 100.0)
+}
+
 /// The members a `GET /ui/api/costs` answer gains: on every key row its
 /// standing, its rate, today's judged spend and its own limit; on the body
-/// the next reset and, only when it applies, that the rules are unordered.
+/// the next reset, the percent the screens warn at and, only when it
+/// applies, that the rules are unordered.
 /// With no enforcer every one is null; on a clock before 1970 the figures
 /// that need a time are null and nothing reads as blocking.
 pub(crate) fn add_members(
@@ -164,6 +183,8 @@ pub(crate) fn add_members(
         .zip(now)
         .map(|((enforcer, _), now)| enforcer.resets_at(now));
     fields.insert("resets_at".to_owned(), json!(resets_at));
+    let warn_at = read.map(|(_, governance)| warn_at_percent(&governance.alerts));
+    fields.insert("warn_at_percent".to_owned(), json!(warn_at));
     if read.is_some_and(|(_, governance)| !ordered(&governance.alerts)) {
         fields.insert("alert_rules".to_owned(), json!("unordered"));
     }
