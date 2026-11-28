@@ -1,3 +1,3 @@
 # file	fn	callee	count	class	note (classes: see delivery_framing.rs)
-src/gateway/meta_mcp/invoke/audit.rs	prepare_record	Error::ResponseFirewallRefused	1	not-delivered	the scan's refusal as the record's audit input; no frame is built here
+src/gateway/meta_mcp/invoke/audit_record.rs	prepare_record	Error::ResponseFirewallRefused	1	not-delivered	the scan's refusal as the record's audit input; no frame is built here
 src/gateway/router/backend_handlers/direct_audit.rs	answered_outcome	Error::ResponseFirewallRefused	1	not-delivered	the scan's refusal as the direct record's audit input; no frame is built here

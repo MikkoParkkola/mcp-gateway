@@ -120,7 +120,7 @@ fn a_call_decision_has_exactly_its_known_builders() {
         // DispatchNotes::decided's callers: the meta call and the direct call.
         (
             site(
-                "src/gateway/meta_mcp/invoke/audit.rs",
+                "src/gateway/meta_mcp/invoke/audit_record.rs",
                 "prepare_record",
                 "notes.decided",
             ),

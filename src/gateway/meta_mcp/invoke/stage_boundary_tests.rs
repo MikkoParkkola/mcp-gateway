@@ -382,12 +382,16 @@ fn the_send_path_boxes_one_dispatch_and_drops_the_admission_right_after_it() {
     // relay_staging.rs's is the HTTP relay collector, boxed only with relay
     // detection active, so a call that collects nothing does not carry the
     // collector's state in its own boxed future (INTAKE.2(a)).
+    // audit_record.rs's is the inline record write, taken only by a call
+    // with no open audit owner (stdio, nested steps); an HTTP /mcp call
+    // hands its record to the owner before it.
     let mut box_sites = sites("Box::pin(");
     box_sites.sort_unstable();
     assert_eq!(
         box_sites,
         [
             ("account_mint.rs", 1),
+            ("audit_record.rs", 1),
             ("caller_verdict.rs", 1),
             ("legacy_bridge.rs", 1),
             ("policy.rs", 1),
