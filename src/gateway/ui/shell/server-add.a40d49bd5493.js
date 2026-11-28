@@ -5,7 +5,7 @@
 // URL": one field, a name worked out from it, value rows sent as env for a
 // command and as headers for a URL, a start-once preview (described, running,
 // listed, failed), then the add. Every served string goes in as text.
-import { el, segmented, ApiError, causeOf, sessionNow, sessionHolds } from '/ui/assets/shell.3dea6c02b527.js';
+import { el, segmented, ApiError, causeOf, sessionNow, sessionHolds, landWithNotice } from '/ui/assets/shell.3dea6c02b527.js';
 
 /** Per-request limits (the route's own run limit is 30 s, its teardown follows; the confirm dialog stops at 30 s). */
 const DESCRIBE_MS = 15_000;
@@ -121,8 +121,7 @@ export function addCard(body, ctx) {
       const input = el('input', { type: 'text', id: `${uid}-name`, autocomplete: 'off', spellcheck: 'false', value: st.name });
       input.addEventListener('input', () => { st.name = input.value.trim(); changed(); });
       nameLine.replaceChildren(el('label', { for: `${uid}-name` }, 'Name'), input);
-      input.focus();
-      changed();
+      input.focus(); // opening is not a change; typing is (rule 3)
     });
     nameLine.replaceChildren('Name ', el('strong', {}, st.name), ' · Automatic · ', change);
     nameLine.hidden = !st.name;
@@ -171,7 +170,7 @@ export function addCard(body, ctx) {
     } finally {
       clearTimeout(timer);
     }
-    return sessionHolds(epoch) ? out : null;
+    return sessionHolds(epoch) ? { ...out, epoch } : null;
   };
 
   /** While a request is in flight nothing it was built from can change (rule 3). */
@@ -348,9 +347,59 @@ export function addCard(body, ctx) {
   };
 
   // --- add ---
-  const addWithout = () => el('button', { type: 'button', class: 'btn' }, 'Add without a preview');
-  const addButton = () => el('button', { type: 'button', class: 'btn primary' },
-    `Add ${st.name} with ${plural(st.tools?.length ?? 0, 'tool', 'tools')}`);
+
+  /** The landing notice of a 201: the count, then stored values, then the gateway's notes, each as text. */
+  const noticeOf = (name, count, answer) => {
+    const parts = [count === null ? `${name} added.` : `${name} added with ${plural(count, 'tool', 'tools')}.`];
+    const stored = Array.isArray(answer?.secrets_stored) ? answer.secrets_stored.length : 0;
+    if (stored) parts.push(stored === 1 ? '1 value is kept in the secret store.' : `${stored} values are kept in the secret store.`);
+    for (const n of Array.isArray(answer?.notes) ? answer.notes : []) if (typeof n === 'string' && n) parts.push(n);
+    return parts.join(' ');
+  };
+
+  /** Step 6: the add, with the tools a preview listed, or none after "Add without a preview". */
+  const add = async (withTools) => {
+    const payload = request();
+    if (!payload) return;
+    if (withTools && st.tools) payload.allowed_tools = st.tools;
+    const count = withTools ? (st.tools?.length ?? 0) : null;
+    for (const b of stage.querySelectorAll('button')) b.disabled = true;
+    setBusy(true);
+    const out = await post('/ui/api/backends', payload, ADD_MS);
+    if (!out) return; // another session's answer: nothing lands, nothing changes
+    setBusy(false);
+    for (const b of stage.querySelectorAll('button')) b.disabled = false;
+    if (out.ok) {
+      for (const r of rows) r.value.value = ''; // no typed value stays on the page
+      landWithNotice({ path: `/ui/servers/${encodeURIComponent(payload.name)}/status`, notice: noticeOf(payload.name, count, out.ok) }, out.epoch);
+      return;
+    }
+    const { err } = out;
+    const refusals = fieldRefusals(err);
+    if (refusals) return putRefusals(refusals);
+    const s = err instanceof ApiError ? err.status : 0;
+    if (s === 409) {
+      say(nameErr, failWords(err));
+      if (!st.manual) nameLine.querySelector('button')?.click();
+      return;
+    }
+    if (s >= 400 && s < 500) { say(fieldErr, failWords(err)); return; }
+    const retry = el('button', { type: 'button', class: 'btn primary' }, 'Retry');
+    retry.addEventListener('click', () => add(withTools));
+    st.phase = 'failed';
+    panel('Not confirmed', el('p', {}, 'The gateway did not confirm the add.'), el('div', { class: 'acts' }, retry));
+  };
+
+  const addWithout = () => {
+    const b = el('button', { type: 'button', class: 'btn' }, 'Add without a preview');
+    b.addEventListener('click', () => add(false));
+    return b;
+  };
+  const addButton = () => {
+    const b = el('button', { type: 'button', class: 'btn primary' }, `Add ${st.name} with ${plural(st.tools?.length ?? 0, 'tool', 'tools')}`);
+    b.addEventListener('click', () => add(true));
+    return b;
+  };
 
   previewBtn.addEventListener('click', () => describe());
 }
