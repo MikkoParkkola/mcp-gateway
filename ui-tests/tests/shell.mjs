@@ -316,3 +316,10 @@ export async function gate(page, { reject = false } = {}) {
   });
   return seen;
 }
+
+/** Sign in from the sign-in view with KEY, as a user does, and wait until it closes. */
+export async function signInWithKey(page) {
+  await page.locator('#signin-key').fill(KEY);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#signin')).toBeHidden();
+}

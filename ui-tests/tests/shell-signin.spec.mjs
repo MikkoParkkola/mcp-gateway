@@ -5,7 +5,7 @@
 // destination kept through sign-in, and a refused key. Rows S1-S5 of the
 // shell test plan. The fixture status answers per test through page.route.
 import { test, expect, WIDTHS, blockingViolations } from './base.mjs';
-import { withFixturePages, KEY, gate } from './shell.mjs';
+import { withFixturePages, KEY, gate, signInWithKey } from './shell.mjs';
 
 const UNCONFIRMED = "Signed out here, but the gateway did not confirm the session ended, so this browser may still be signed in. Reload and sign out again, or clear this site's cookies.";
 
@@ -322,9 +322,7 @@ async function signedIn(page) {
   await gate(page);
   await page.route('**/dashboard/logout', (route) => route.fulfill({ status: 303, headers: { location: '/ui' } }));
   await page.goto('/ui/overview/status');
-  await page.locator('#signin-key').fill(KEY);
-  await page.keyboard.press('Enter');
-  await expect(page.locator('#signin')).toBeHidden();
+  await signInWithKey(page);
 }
 
 test.describe('sign-out on a phone', () => {

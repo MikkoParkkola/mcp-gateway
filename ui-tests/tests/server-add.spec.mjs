@@ -7,7 +7,7 @@
 // named after the frozen test plan (V, N, K, E, D, X, U, A); every gateway answer
 // is a literal written here, in the shapes preview.rs and add_checks.rs serve.
 import { test, expect, blockingViolations, WIDTHS } from './base.mjs';
-import { shellReady, recordAnnouncements, announced, gate as keyStatus, KEY } from './shell.mjs';
+import { shellReady, recordAnnouncements, announced, gate as keyStatus, signInWithKey } from './shell.mjs';
 import { entry, fullView, fakeServerGateway, gate, shellCall } from './server-page.mjs';
 import { readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -781,6 +781,18 @@ test.describe('V3g nothing lands on another session', () => {
     await expect(page.locator('.done-notice')).toHaveCount(0);
     await expect(page.locator('#signin-key')).toBeFocused();
     expect((await announced(page)).filter((t) => t.includes('added'))).toEqual([]);
+  });
+
+  test('another identity signs in before the 201: it sees no notice and no navigation', async ({ page }) => {
+    const hold = await heldAdd(page);
+    await takeover(page);
+    await expect(page.locator('#signin')).toBeVisible();
+    await keyStatus(page); // registered last, so it answers the sign-in's status read
+    await signInWithKey(page);
+    hold.open();
+    await page.waitForTimeout(400);
+    await expect(page.locator('.done-notice')).toHaveCount(0);
+    await expect(page).toHaveURL('/ui/servers/settings');
   });
 
   test('control: with no sign-out the same held 201 lands', async ({ page }) => {
