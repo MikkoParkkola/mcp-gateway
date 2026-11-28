@@ -17,9 +17,12 @@ const POST_RESERVE: Duration = Duration::from_millis(250);
 /// closes (2.9 s, longer than the 2.27 s a third-split gave before the SIGTERM
 /// floor) and the wait after SIGTERM (1.5 s, the reaper's nested need: a nested
 /// gateway only learns to hurry at the SIGTERM, and its hurried path takes 0.37 s
-/// measured, about 1.35 s worst case). With less, a parent that reaches its
-/// backend stage after the listener has used its grace group-kills a busy nested
-/// gateway first, and the leaf, which has its own process group, is orphaned.
+/// measured, about 1.35 s worst case); the 1.5 s is that path plus a margin, so
+/// the nested gateway kills its own leaf first. The nested gateway's own
+/// descendant sweep (a freeze of up to 700 ms) is not in the 1.35 s: when its
+/// cleanup outlasts this SIGTERM wait, the parent's sweep, which runs before the
+/// parent's group kill while the nested gateway still lives, freezes the nested
+/// gateway first and kills its leaves, so they are not orphaned.
 const BACKEND_RESERVE: Duration = Duration::from_millis(10_400);
 /// The backend stage's share at the floor, for boundary rows in other modules.
 #[cfg(all(test, target_os = "linux"))]

@@ -78,6 +78,33 @@ pub(super) struct Listing {
     /// Pids that exist but could not be read (not ours, or an error): a member
     /// among them is not pruned for being absent from `rows`.
     pub(super) unreadable: Vec<u32>,
+    /// Seeds with their own evidence of death: gone, or a different start
+    /// time at their pid. The only identities a reading may prune.
+    pub(super) gone: Vec<Identity>,
+    /// A walked reading: every walked task's own state was Stopped before and
+    /// after its children read; every listed child was still that process's
+    /// child and Stopped when listed; the task set did not grow. A Zombie
+    /// settles nothing, except a walked process found fully exited (leader-only
+    /// task dir, Zombie at both reads, no children) already in an earlier
+    /// reading of the same freeze (design delta D5''''). A full scan is always
+    /// settled.
+    pub(super) settled: bool,
+}
+
+/// The full-scan tables' one pruning rule: the seeds a COMPLETE scan does not
+/// list, and could read, are gone; an incomplete scan names none.
+pub(super) fn full_scan_gone(seeds: &[Identity], listing: &Listing) -> Vec<Identity> {
+    if !listing.complete {
+        return Vec::new();
+    }
+    seeds
+        .iter()
+        .filter(|seed| {
+            !listing.rows.iter().any(|(who, _)| who == *seed)
+                && !listing.unreadable.contains(&seed.pid)
+        })
+        .copied()
+        .collect()
 }
 
 /// What a rescue did for a member whose pid no longer names it.
@@ -115,7 +142,11 @@ fn rescue_stray(table: &mut dyn ProcessTable, member: Identity, report: &mut Swe
 
 /// The process table the sweep reads and signals through.
 pub(super) trait ProcessTable {
-    fn read(&mut self) -> Listing;
+    /// One reading. `walk` names the processes it starts from and walks down
+    /// (the root and the members); `stat_only` names the dropped ones, read for
+    /// their own death and never walked. `until` is when it must stop, on this
+    /// table's own clock ([`Self::now`]).
+    fn read(&mut self, walk: &[Identity], stat_only: &[Identity], until: Duration) -> Listing;
     fn state(&mut self, id: Identity) -> ProcState;
     /// Signal `id` only if it is still that process. `held` says the sweep holds
     /// a budget slot for a handle (a pidfd) on this process; a table without
@@ -126,9 +157,9 @@ pub(super) trait ProcessTable {
     /// Give back any handle held for `id` (a signal to it failed, so the sweep
     /// does not keep its budget slot).
     fn release(&mut self, _id: Identity) {}
-    /// Yield between two polls of a state, so waiting for a freeze to land does
-    /// not spin a core.
-    fn idle(&mut self) {}
+    /// Wait `pause` between two polls of a state or two readings, so waiting
+    /// for the tree to change does not spin a core.
+    fn idle(&mut self, _pause: Duration) {}
     /// A by-pid signal to `member` found its pid taken by another process: if
     /// that one is stopped (the sweep's SIGSTOP landed on it), resume it. Only a
     /// process created after the member qualifies (see [`is_stray_stop`]).
@@ -168,6 +199,20 @@ pub(super) struct SweepReport {
     /// Table readings that were incomplete (a failed listing or entry).
     pub(super) incomplete_reads: u32,
     pub(super) passes: u32,
+}
+
+impl SweepReport {
+    /// Whether the stop must warn that it could not confirm every descendant
+    /// gone: a member left over, a short reading, or a signal it could not
+    /// confirm, land or undo.
+    pub(super) fn needs_warn(&self) -> bool {
+        !self.residual.is_empty()
+            || self.incomplete_reads > 0
+            || self.unconfirmed > 0
+            || self.stuck_stopped > 0
+            || self.rescued > 0
+            || self.stop_mismatch > 0
+    }
 }
 
 /// The process-wide budget of held handles (pidfds) that every sweep draws on.
@@ -251,22 +296,57 @@ impl Sweep {
     }
 
     /// Record the descendants now, before the first signal of the stop.
-    pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
-        let listing = table.read();
-        self.collect(&listing);
+    /// A reading CUT by its slice (the host
+    /// stalled past it) is no picture of the tree, so the snapshot reads
+    /// again with a fresh slice, collecting each time, up to `SNAPSHOT_SLICES`
+    /// readings. A reading incomplete for another reason (an unreadable
+    /// entry) is not retried: it would read the same next time. After the
+    /// last slice the snapshot keeps what it found; `incomplete_reads` counts
+    /// every short reading and the sweep's report warns. A retry also needs a
+    /// whole slice of `limit` (the time the stop has left) still unspent, so
+    /// a late stop with a small budget reads once. That first reading always
+    /// has its whole slice: a stop with less than a slice left overspends,
+    /// by at most that slice (and the one read in flight when it ends).
+    pub(super) fn snapshot_within(&mut self, table: &mut dyn ProcessTable, limit: Duration) {
+        let began = table.now();
+        for _ in 0..SNAPSHOT_SLICES {
+            let until = table.now() + SNAPSHOT_SLICE;
+            let listing = self.read(table, until);
+            let cut = !listing.complete && table.now() >= until;
+            self.collect(&listing);
+            let spent = table.now().saturating_sub(began);
+            if !cut || spent.saturating_add(SNAPSHOT_SLICE) > limit {
+                break;
+            }
+        }
     }
 
-    /// Add every live descendant of the root and of every member, drop the dead,
-    /// and hold the cap (lowest pids kept).
+    /// Test only: a snapshot with no stop deadline to fit.
+    #[cfg(test)]
+    pub(super) fn snapshot(&mut self, table: &mut dyn ProcessTable) {
+        self.snapshot_within(table, Duration::MAX);
+    }
+
+    /// One reading: walked from the root and every member, the dropped read
+    /// for their death only.
+    fn read(&self, table: &mut dyn ProcessTable, until: Duration) -> Listing {
+        let walk: Vec<Identity> = std::iter::once(self.root)
+            .chain(self.members.keys().copied())
+            .collect();
+        let stat_only: Vec<Identity> = self.dropped.iter().copied().collect();
+        table.read(&walk, &stat_only, until)
+    }
+
+    /// Add every live descendant of the root and of every member, drop exactly
+    /// the identities the reading names gone (a member or dropped one leaves
+    /// only on its own evidence, never for being absent), and hold the cap
+    /// (lowest pids kept).
     fn collect(&mut self, listing: &Listing) -> usize {
         let rows = &listing.rows;
-        if listing.complete {
-            let live: BTreeSet<Identity> = rows.iter().map(|(who, _)| *who).collect();
-            let keep = |who: &Identity| live.contains(who) || listing.unreadable.contains(&who.pid);
-            self.members.retain(|who, _| keep(who));
-            self.dropped.retain(|who| keep(who));
-        } else {
-            // A member missing from a listing that failed may well be alive.
+        let gone: BTreeSet<Identity> = listing.gone.iter().copied().collect();
+        self.members.retain(|who, _| !gone.contains(who));
+        self.dropped.retain(|who| !gone.contains(who));
+        if !listing.complete {
             self.incomplete_reads += 1;
         }
         let mut parents: BTreeSet<u32> = self.members.keys().map(|who| who.pid).collect();
@@ -308,10 +388,23 @@ impl Sweep {
         budget: &PidfdBudget,
     ) -> SweepReport {
         let mut report = SweepReport::default();
-        let freeze_end = table.now() + self.cfg.freeze_slice;
-        let listing = table.read();
-        self.collect(&listing);
-        let root_live = !listing.complete || listing.rows.iter().any(|(who, _)| *who == self.root);
+        let freeze_start = table.now();
+        let freeze_end = freeze_start + self.cfg.freeze_slice;
+        // Pids, counts and durations only: a sweep log never carries a path or
+        // a command line.
+        tracing::debug!(
+            root = self.root.pid,
+            members = self.members.len(),
+            slice_ms = self.cfg.freeze_slice.as_millis(),
+            "descendant sweep: freeze start"
+        );
+        let mut settled = false;
+        let mut pause = Duration::ZERO;
+        // Freeze first: the root and every member the snapshot recorded are
+        // stopped before any reading, so a reading cannot spend the slice
+        // before anything is frozen. Anything but Gone (Unknown included)
+        // counts as live.
+        let root_live = table.state(self.root) != ProcState::Gone;
         let mut frozen: Vec<Frozen> = Vec::new();
         let mut permits: Vec<Permit<'_>> = Vec::new();
         // Freeze: the root first, then the members, re-walking from the frozen
@@ -323,6 +416,7 @@ impl Sweep {
         pending.extend(self.members.keys().copied());
         loop {
             report.passes += 1;
+            let frozen_before = frozen.len();
             for who in std::mem::take(&mut pending) {
                 if table.now() >= freeze_end || frozen.iter().any(|f| f.id == who) {
                     continue;
@@ -353,19 +447,40 @@ impl Sweep {
                         ProcState::Running | ProcState::Unknown
                     )
                 {
-                    table.idle();
+                    table.idle(PAUSE_FLOOR);
                 }
             }
             if table.now() >= freeze_end {
                 break;
             }
-            let listing = table.read();
+            // D5'''': no pause before the first reading; then 1 ms, doubling per
+            // unsettled reading to PAUSE_CAP, back to 1 ms after a pass that froze
+            // something new. Never past the slice: a re-read with no pause spins
+            // a core and starves the very processes it waits on.
+            if !pause.is_zero() {
+                if frozen.len() > frozen_before {
+                    pause = PAUSE_FLOOR;
+                }
+                let left = freeze_end.saturating_sub(table.now());
+                table.idle(pause.min(left));
+                if table.now() >= freeze_end {
+                    break;
+                }
+            }
+            let listing = self.read(table, freeze_end);
+            settled = listing.settled;
             let added = self.collect(&listing);
-            // Stable only on a COMPLETE listing that adds nothing: after a failed
-            // reading, keep walking until the slice ends.
-            if listing.complete && added == 0 {
+            // Stable only on a COMPLETE and SETTLED reading that adds nothing: a
+            // running parent's children file may leave a child out, and after a
+            // failed or cut-short reading the walk goes on until the slice ends.
+            if listing.complete && listing.settled && added == 0 {
                 break;
             }
+            pause = if pause.is_zero() {
+                PAUSE_FLOOR
+            } else {
+                (pause * 2).min(PAUSE_CAP)
+            };
             pending = self
                 .members
                 .keys()
@@ -373,6 +488,13 @@ impl Sweep {
                 .filter(|who| !frozen.iter().any(|f| f.id == *who))
                 .collect();
         }
+        tracing::debug!(
+            root = self.root.pid,
+            passes = report.passes,
+            settled,
+            freeze_ms = table.now().saturating_sub(freeze_start).as_millis(),
+            "descendant sweep: freeze end"
+        );
         self.terminate(table, budget, &frozen, &mut permits, root_live, &mut report);
         report.residual.extend(self.dropped.iter().copied());
         report.incomplete_reads = self.incomplete_reads;
@@ -472,6 +594,22 @@ pub(super) type PlatformTable = MacTable;
 /// real children and pidfds), so a table at its cap is frozen before the kills
 /// begin and no unfrozen member can still fork while they go out.
 const FREEZE_SLICE: Duration = Duration::from_millis(700);
+/// How long the snapshot before a stop may read: the first-snapshot p99
+/// target. A reading cut short only seeds; it prunes nothing.
+const SNAPSHOT_SLICE: Duration = Duration::from_millis(5);
+/// How many readings one snapshot may take when they are cut. Each reading
+/// has one slice plus the read in flight when the slice passes, so a host
+/// stall stretches it: 80 runs on Spark (t9477snap7c) saw three cuts in a
+/// row twice, the fourth reading completing, 38.8 ms for the whole snapshot.
+/// The time is charged to the stop's plan (`plan::ending_around_snapshot`).
+const SNAPSHOT_SLICES: u32 = 4;
+/// The wait between two polls of a frozen process's state, and the first
+/// pause between two unsettled readings (design delta D5'''').
+const PAUSE_FLOOR: Duration = Duration::from_millis(1);
+/// The longest pause between two unsettled readings: about the longest wait
+/// for one state change plus scheduling seen under the 2-core, 16-thread load
+/// repro (16.4 ms). Provisional: the acceptance run measures it.
+const PAUSE_CAP: Duration = Duration::from_millis(16);
 /// The room the terminal kills are guaranteed after the freeze, checked at
 /// compile time against the reaper's kill reserve: five times the Linux kill
 /// phase measured at the cap (141 ms), as the margin for macOS, whose cost per
@@ -522,3 +660,7 @@ pub(super) fn process_budget() -> &'static PidfdBudget {
 #[cfg(test)]
 #[path = "stdio_sweep_tests.rs"]
 mod tests;
+#[cfg(tp5)]
+#[cfg(test)]
+#[path = "stdio_sweep_walk_tests.rs"]
+mod walk_tests;

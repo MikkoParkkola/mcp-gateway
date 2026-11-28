@@ -83,8 +83,10 @@ mod participant;
 mod plan;
 #[cfg(test)]
 use plan::DEFAULT_STOP_BUDGET;
+// Production plans through `ending_around_snapshot`; the rows still call it.
+#[cfg(test)]
 pub(super) use plan::graceful_ending;
-use plan::stop_budget;
+use plan::{ending_around_snapshot, stop_budget};
 
 /// The fixed origin [`StopDeadline`] counts from.
 static STOP_EPOCH: std::sync::LazyLock<Instant> = std::sync::LazyLock::new(Instant::now);
@@ -422,10 +424,11 @@ pub(super) async fn wait_reaped(
 impl super::StdioTransport {
     /// Record the tree's descendants before the first signal of a stop, which
     /// is the stdin close: a backend that exits on EOF would otherwise
-    /// reparent its descendants before anything recorded them.
-    fn snapshot_descendants(&self) {
+    /// reparent its descendants before anything recorded them. A snapshot
+    /// spends at most `limit`, the time the stop has left.
+    fn snapshot_descendants(&self, limit: Duration) {
         if let Some(tree) = self.child.lock().tree.as_mut() {
-            tree.sweep_snapshot();
+            tree.sweep_snapshot(limit);
         }
     }
 
@@ -449,10 +452,11 @@ impl super::StdioTransport {
     fn hand_over_gracefully_now(&self, budget: Duration) {
         self.connected
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        self.snapshot_descendants();
-        let ending = graceful_ending(
+        // `budget` was fixed before the snapshot: plan only what it leaves.
+        let ending = ending_around_snapshot(
             budget,
-            self.close_stdin_now(),
+            |limit| self.snapshot_descendants(limit),
+            || self.close_stdin_now(),
             self.stop_deadline.get().map(AsRef::as_ref),
         );
         {
@@ -574,21 +578,26 @@ impl super::StdioTransport {
         self.connected
             .store(false, std::sync::atomic::Ordering::Relaxed);
 
-        self.snapshot_descendants();
-        let stdin_closed = self.close_stdin_now();
+        let snapshot = |limit| self.snapshot_descendants(limit);
+        let close_stdin = || self.close_stdin_now();
+        let ending = match kind {
+            StopKind::Graceful => ending_around_snapshot(
+                stop_budget(),
+                snapshot,
+                close_stdin,
+                self.stop_deadline.get().map(AsRef::as_ref),
+            ),
+            StopKind::Dead => {
+                snapshot(stop_budget());
+                close_stdin();
+                Ending::Now
+            }
+        };
         // The per-start stdin token first, then the tree to the reaper,
         // waited for (bounded) with any reap a retire started earlier. No
         // await comes before the handover, so a cancelled close cannot leave
         // the tree unended.
         self.shutdown.lock().cancel();
-        let ending = match kind {
-            StopKind::Graceful => graceful_ending(
-                stop_budget(),
-                stdin_closed,
-                self.stop_deadline.get().map(AsRef::as_ref),
-            ),
-            StopKind::Dead => Ending::Now,
-        };
         self.end_tree_with(ending).await;
         super::tree::clear_writer(&self.writer).await;
     }

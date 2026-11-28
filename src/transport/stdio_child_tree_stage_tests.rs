@@ -95,3 +95,7 @@ async fn a_cut_plans_on_time_sigterm_keeps_its_third_before_the_kill() {
     })
     .await;
 }
+
+#[cfg(target_os = "linux")]
+#[path = "stdio_child_tree_snapshot_measure_tests.rs"]
+mod measure;

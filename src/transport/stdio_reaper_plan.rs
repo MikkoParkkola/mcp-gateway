@@ -53,6 +53,52 @@ pub(in super::super) fn graceful_ending(
     }
 }
 
+/// The graceful ending for a handover whose `budget` was fixed before its
+/// stop snapshot ran: the time the snapshot took comes off first, so the
+/// waits fit what is left and the stop still ends inside the stage's budget.
+pub(super) fn ending_after_snapshot(
+    budget: Duration,
+    snapshot_took: Duration,
+    stdin_closed: bool,
+    deadline: Option<&StopDeadline>,
+) -> Ending {
+    graceful_ending(budget.saturating_sub(snapshot_took), stdin_closed, deadline)
+}
+
+/// Every graceful stop's one route (code review r3, T2): `budget` is fixed
+/// once, before `snapshot` runs with it as its limit; the snapshot is timed
+/// and its time comes off before the plan. A budget read again after the
+/// snapshot would not count it when the stop has no caller deadline
+/// ([`DEFAULT_STOP_BUDGET`] both times).
+pub(super) fn ending_around_snapshot(
+    budget: Duration,
+    snapshot: impl FnOnce(Duration),
+    close_stdin: impl FnOnce() -> bool,
+    deadline: Option<&StopDeadline>,
+) -> Ending {
+    ending_around_snapshot_by(
+        std::time::Instant::now,
+        budget,
+        snapshot,
+        close_stdin,
+        deadline,
+    )
+}
+
+/// [`ending_around_snapshot`] on the clock `now` (rows supply the readings).
+pub(super) fn ending_around_snapshot_by(
+    mut now: impl FnMut() -> std::time::Instant,
+    budget: Duration,
+    snapshot: impl FnOnce(Duration),
+    close_stdin: impl FnOnce() -> bool,
+    deadline: Option<&StopDeadline>,
+) -> Ending {
+    let began = now();
+    snapshot(budget);
+    let took = now().saturating_duration_since(began);
+    ending_after_snapshot(budget, took, close_stdin(), deadline)
+}
+
 /// The budget left for a stop started now: the caller's deadline, else
 /// [`DEFAULT_STOP_BUDGET`].
 pub(super) fn stop_budget() -> Duration {
