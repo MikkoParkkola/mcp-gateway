@@ -32,8 +32,8 @@ async fn a_three_level_nested_gateway_chain_leaves_no_leaf_after_a_hurry() {
     let root = temp.path();
     let leaves = ["leaf_a", "leaf_b"];
     let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
-    let middle = write_chain_parent(root, "middle", "inner", &inner, During::Nothing);
-    let outer = write_chain_parent(root, "outer", "middle", &middle, During::Nothing);
+    let middle = write_chain_parent(root, "middle", "inner", &inner, During::Nothing, None);
+    let outer = write_chain_parent(root, "outer", "middle", &middle, During::Nothing, None);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut reaped = gateway_bin::Reaped::new(
         tokio::process::Command::from(gateway_bin::command(
@@ -157,7 +157,7 @@ async fn two_level_hurried_stop(during: During) {
     let root = temp.path();
     let leaves = ["leaf_a", "leaf_b"];
     let inner = write_inner_config(root, &leaves, Duration::from_secs(30));
-    let outer = write_chain_parent(root, "outer", "inner", &inner, during);
+    let outer = write_chain_parent(root, "outer", "inner", &inner, during, None);
     let log = std::fs::File::create(root.join("gateway.log")).expect("log");
     let mut reaped = gateway_bin::Reaped::new(
         tokio::process::Command::from(gateway_bin::command(

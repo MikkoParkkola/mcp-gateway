@@ -15,6 +15,11 @@ with open("leaf-" + name + ".pid", "w") as f:
 grandchild = subprocess.Popen(["sleep", "600"])
 with open("leaf-" + name + ".grandchild.pid", "w") as f:
     f.write(str(grandchild.pid))
+# A "zombie" leaf also holds an unreaped child: it exits at once and the leaf
+# never waits for it, so the leaf's tree holds a zombie for the whole stop.
+if name.startswith("zombie"):
+    if os.fork() == 0:
+        os._exit(0)
 for line in sys.stdin:
     msg = json.loads(line)
     if "id" not in msg:

@@ -13,8 +13,8 @@ use parking_lot::Mutex;
 
 use super::outbox::{DeadLetter, EndedRow, OutboxRecord};
 use super::records::{
-    Placed, Subscription, Verified, create_private_dir, load_records, remove_record, verified_file,
-    write_record,
+    Placed, Subscription, Verified, create_private_dir, load_records, remove_record,
+    remove_record_durable, sync_dir, verified_file, write_record,
 };
 
 #[path = "store_ended.rs"]
@@ -334,6 +334,11 @@ impl Store {
         for dir in [&subs_dir, &verified_dir, &outbox_dir, &dead_dir, &ended_dir] {
             create_private_dir(dir)?;
         }
+        // Make every unlink an earlier run left unsynced durable before any
+        // caller reads the store, so a row it does not load is gone for good.
+        sync_dir(&subs_dir).map_err(|e| {
+            std::io::Error::new(e.kind(), format!("sync of {}: {e}", subs_dir.display()))
+        })?;
         let mut state = State::default();
         for (_, sub) in load_records::<Subscription>(&subs_dir) {
             // A row stamped held stays held until its own source judges it
@@ -713,6 +718,9 @@ impl Store {
     /// the dated work is skipped: no sweep, no trim, and no tail stamp, so
     /// the tail dates from the pair's latest expiry or its opt-in, which is
     /// earlier and so fails closed.
+    ///
+    /// `Ok(true)` only once the row's file is durably gone: a failed directory
+    /// sync is returned before the row leaves memory, so a retry finishes it.
     pub(crate) fn remove_where(
         &self,
         id: &str,
@@ -735,7 +743,7 @@ impl Store {
         // this subscription once the removal returns (design §6.4). The
         // notices of its earlier endings stay.
         self.cancel_pending(&mut state, id, Cancel::Events)?;
-        remove_record(&self.subs_dir, &format!("{id}.json"))?;
+        remove_record_durable(&self.subs_dir, &format!("{id}.json"))?;
         state.drop_row(id);
         self.stamp_removed(&mut state, &sub, now, tail)?;
         Ok(true)
