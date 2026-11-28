@@ -92,3 +92,39 @@ test('F2 a planted slow update misses the budget, two slow samples in fifty do n
   // An unmeasured number is a miss, never a pass.
   expect(miss([])).not.toBeNull();
 });
+
+test('DIAG the fold against the code before it, phone, in one run', async ({ page }) => {
+  // The code before the fold, and the fold with one change undone each (built by sed from its blob).
+  const variants = ['before', 'noMove', 'noFoldMax', 'noBox'];
+  const code = Object.fromEntries(variants.map((v) => [v, readFileSync(new URL(`./diag-${v}.js`, import.meta.url), 'utf8')]));
+  await page.route('**/ui/assets/overview.diag-*.js', (r) => r.fulfill({ body: code[/diag-(\w+)\.js$/.exec(r.request().url())[1]], contentType: 'text/javascript' }));
+  await serve(page, { body: big(0) });
+  await open(page);
+  await expect(page.locator('#content [data-panel="flow-map"] .ov-map')).toHaveCount(1);
+  await profileOn(page, 'phone');
+  const out = await page.evaluate(async ([a, b, names]) => {
+    const screens = JSON.parse(document.getElementById('screens').textContent);
+    const mods = { now: await import(screens.overview.js) };
+    for (const v of names) mods[v] = await import(`/ui/assets/overview.diag-${v}.js`);
+    const keys = Object.keys(mods);
+    // A fresh card for each module, so all start the same way (none knows it is on a phone).
+    const fresh = () => { const s = document.createElement('section'); s.className = 'tk ov-panel ov-flow'; document.querySelector('#content .ov').append(s); return s; };
+    const roots = Object.fromEntries(keys.map((k) => [k, fresh()]));
+    for (const k of keys) mods[k].updateMap(roots[k], mods[k].flowModel(a));
+    const times = Object.fromEntries(keys.map((k) => [k, []]));
+    // Six rounds of 50 each, the order reversed every other round, so drift falls on all alike.
+    for (let round = 0; round < 6; round += 1) {
+      for (const k of round % 2 ? [...keys].reverse() : keys) {
+        for (let i = 0; i < 50; i += 1) {
+          const t = performance.now();
+          mods[k].updateMap(roots[k], mods[k].flowModel(i % 2 ? b : a));
+          roots[k].getBoundingClientRect();
+          times[k].push(performance.now() - t);
+        }
+      }
+    }
+    const at = (xs, q) => [...xs].sort((x, y) => x - y)[Math.ceil(q * xs.length) - 1].toFixed(2);
+    return Object.fromEntries(Object.entries(times).map(([k, xs]) => [k, { p50: at(xs, 0.5), p95: at(xs, 0.95) }]));
+  }, [big(0), big(1), variants]);
+  console.log(`DIAG A/B phone ${JSON.stringify(out)}`);
+});
