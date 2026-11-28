@@ -29,6 +29,11 @@ struct Ended {
     tree: Vec<u32>,
     outer_log: String,
     inner_log: String,
+    /// A hurried stop's own instants, stamped as the logs are: when the gate
+    /// saw the inner's freeze start, and when the SIGTERM had been sent. With
+    /// the logs' stamps they place any delay before or after the signal.
+    gate_seen: Option<String>,
+    sigterm_sent: Option<String>,
 }
 
 /// A log as plain text: colour escapes dropped, so field matches are exact.
@@ -129,6 +134,7 @@ async fn zombie_chain(stop: Stop) -> Ended {
         logs(root).contains("stdio: EOF reached, shutting down")
     })
     .await;
+    let mut signal_at = (None, None);
     if stop == Stop::Hurried {
         // Targeted takeover (F8): the SIGTERM waits for the inner's own sweep to
         // begin, so the outer's hurry is aimed inside the inner's freeze (aimed,
@@ -142,7 +148,9 @@ async fn zombie_chain(stop: Stop) -> Ended {
             || std::fs::read_to_string(&inner_log).is_ok_and(|text| text.contains(FREEZE_START)),
         )
         .await;
+        let seen = now_stamp();
         sigterm(pid);
+        signal_at = (Some(seen), Some(now_stamp()));
     }
     let exit = tokio::time::timeout(STDIO_SIGTERM_EXIT_BOUND, outer.child_mut().wait()).await;
     exit.unwrap_or_else(|_| panic!("the outer did not exit\n{}", logs(root)))
@@ -153,6 +161,8 @@ async fn zombie_chain(stop: Stop) -> Ended {
         tree,
         outer_log: read("gateway.log"),
         inner_log: read("inner.log"),
+        gate_seen: signal_at.0,
+        sigterm_sent: signal_at.1,
     };
     outer.reap().await;
     std::mem::forget(guard);
@@ -174,6 +184,16 @@ fn stamp(line: &str) -> &str {
         "a sweep line has no UTC timestamp: {line}"
     );
     first
+}
+
+/// Now, stamped as both gateways stamp their log lines (RFC 3339 UTC with
+/// microseconds), so the row's own instants order against theirs as text.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "test code reads the host clock: the stamps must match the gateways' own log clock"
+)]
+fn now_stamp() -> String {
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
 }
 
 /// Planned stop (EOF only) of an outer whose inner holds a zombie: the inner's
@@ -232,10 +252,12 @@ async fn a_hurried_takeover_of_a_freezing_inner_leaves_no_leaf() {
     let takeover = inner_start.is_some_and(|start| start <= outer_start)
         && inner_end.is_none_or(|end| outer_start < end);
     println!(
-        "TAKEOVER={} inner_start={} outer_start={outer_start} inner_end={}",
+        "TAKEOVER={} inner_start={} outer_start={outer_start} inner_end={} gate_seen={} sigterm_sent={}",
         if takeover { "yes" } else { "no" },
         inner_start.unwrap_or("none"),
-        inner_end.unwrap_or("none")
+        inner_end.unwrap_or("none"),
+        ended.gate_seen.as_deref().unwrap_or("none"),
+        ended.sigterm_sent.as_deref().unwrap_or("none")
     );
     assert!(
         ended.alive.is_empty(),
