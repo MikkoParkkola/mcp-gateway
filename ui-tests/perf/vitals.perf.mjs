@@ -11,10 +11,14 @@
 // that, and so does anyone running it by hand. One worker keeps the phone
 // profile's CPU throttle off a core the rows would otherwise share. The suite
 // is not serial, so a failing row does not skip the others.
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '../tests/base.mjs';
 import { BUILT, shellReady } from '../tests/shell.mjs';
+import {
+  applyProfile, fast4gTransferMs, loadContextOptions, readRows, signedIn, signedOut, spread, writeRow,
+} from './profile.mjs';
 
 const RESULTS = fileURLToPath(new URL('../test-results/', import.meta.url));
 const PERF_DIR = `${RESULTS}perf/`;
@@ -49,99 +53,11 @@ function misses(row, blocking = BLOCKING) {
 const LOADS = Number(process.env.PERF_LOADS ?? 5);
 const SETTLE_MS = 1000;
 
-// Chrome for Testing 156.0.8078.4 (Playwright 1.64.1 browsers.json) is chromium
-// tag 156.0.8078.4, whose DEPS pins devtools-frontend
-// 2d671c506c4e5f8958b027e26047deb0acfbd7f9. Fast 4G is Fast4GConditions in
-// front_end/core/sdk/NetworkManager.ts at that commit:
-//   download 9 * 1000 * 1000 / 8 * .9   (9 Mbps, adjusted)
-//   upload   1.5 * 1000 * 1000 / 8 * .9 (1.5 Mbps, adjusted)
-//   latency  60 * 2.75                  (60 ms RTT, adjusted)
-// DevTools sends connectionType from the preset title "Fast 4G", which matches
-// the "4g" entry and becomes cellular4g.
-const FAST_4G = {
-  offline: false,
-  latency: 60 * 2.75,
-  downloadThroughput: 9 * 1000 * 1000 / 8 * 0.9,
-  uploadThroughput: 1.5 * 1000 * 1000 / 8 * 0.9,
-  connectionType: 'cellular4g',
-};
-
-// The same catalogue the Tools screen spec serves, so this row paints that
-// screen. Schemas stay in the payload because the page parses them on load.
-const SERVERS = ['alpha', 'bravo', 'charlie', 'delta'];
-const TOOLS = SERVERS.flatMap((server) => Array.from({ length: 10 }, (_, i) => ({
-  name: `${String.fromCharCode(106 - i)}_${server}_tool`,
-  server,
-  description: `Does thing ${i} on ${server}`,
-  schema: { type: 'object', properties: Object.fromEntries(Array.from({ length: 120 }, (_, k) => [`field_${k}`, { type: 'string', description: `Field number ${k}` }])) },
-  class: i % 2 ? 'write' : 'read',
-  class_source: i % 3 ? 'inferred' : 'declared',
-})));
-
-/** Fast 4G transfer time in ms: the preset's latency plus the body at its download rate. */
-function fast4gTransferMs(bytes) {
-  return FAST_4G.latency + (bytes / FAST_4G.downloadThroughput) * 1000;
-}
-
 // A body of this size, served by the fixture server as image/png. That type is
 // under compression.json's never-gzip prefixes, so the bytes on the wire are
 // this length. fetch() would inflate a gzipped body and the bar below would
 // describe a transfer that never happened.
 const PROBE_BYTES = 200_000;
-
-// Rank in the sorted list. p75 is index ceil(0.75 * n) - 1. p50 is index ceil(0.5 * n) - 1.
-function rank(sorted, fraction) {
-  return sorted[Math.ceil(fraction * sorted.length) - 1];
-}
-
-function spread(values) {
-  if (values.length === 0) return { loads: 0, p50: null, p75: null, max: null };
-  const sorted = [...values].sort((a, b) => a - b);
-  return { loads: sorted.length, p50: rank(sorted, 0.5), p75: rank(sorted, 0.75), max: sorted.at(-1) };
-}
-
-/**
- * Viewport for a cold context. Phone also sets the scale and the mobile flag
- * here: Playwright reapplies the context's device metrics on navigation, which
- * would otherwise put the scale back to 1 over a CDP override.
- */
-function loadContextOptions(profile) {
-  const baseURL = test.info().project.use.baseURL;
-  if (profile === 'phone') {
-    return {
-      baseURL,
-      viewport: { width: 412, height: 823 },
-      deviceScaleFactor: 1.75,
-      isMobile: true,
-    };
-  }
-  return { baseURL, viewport: { width: 1440, height: 900 } };
-}
-
-/**
- * Phone throttles CPU and the network and emulates a phone viewport. Desktop
- * only sets the viewport: a fresh page has no throttle, and clearing one that
- * was never set would look like the two profiles share a session.
- * The CDP session is returned because dropping it can drop the emulation
- * before the navigation finishes.
- */
-async function applyProfile(page, profile) {
-  if (profile === 'desktop') {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    return null;
-  }
-  const client = await page.context().newCDPSession(page);
-  await client.send('Emulation.setCPUThrottlingRate', { rate: 4 });
-  await client.send('Network.emulateNetworkConditions', FAST_4G);
-  // setViewportSize has no scale and no mobile flag. The phone profile needs both.
-  await client.send('Emulation.setDeviceMetricsOverride', {
-    width: 412,
-    height: 823,
-    deviceScaleFactor: 1.75,
-    mobile: true,
-  });
-  return client;
-}
 
 /**
  * Record LCP and CLS before any paint, then read them after `ready` and a settle.
@@ -195,43 +111,6 @@ async function measure(page, url, profile, ready) {
   return { lcp: vitals.lcp, cls: vitals.cls };
 }
 
-/**
- * page.route fulfill answers from this process (Fetch.fulfillRequest) and never
- * enters Chrome's network throttler, so Network.emulateNetworkConditions does
- * not slow these bodies. The fixture server answers GET /ui/api/<path> from
- * fixtures/api/<path>.json. status.json is the signed-in answer, and there is
- * no signed-out status and no tools catalogue, so the phone profile waits the
- * Fast 4G transfer time before fulfilling.
- */
-async function fulfillApi(route, profile, payload) {
-  const body = JSON.stringify(payload);
-  if (profile === 'phone') {
-    await new Promise((resolve) => setTimeout(resolve, fast4gTransferMs(Buffer.byteLength(body))));
-  }
-  await route.fulfill({ contentType: 'application/json', body });
-}
-
-/** Signed out, no key: the sign-in spec's status answer when the bearer is absent. */
-async function signedOut(page, { profile = 'desktop' } = {}) {
-  await page.route('**/ui/api/status', (route) => fulfillApi(route, profile, {
-    version: '4.0.0', auth: { enabled: true, signed_in: false, admin: false },
-  }));
-}
-
-/** Signed in the way the screen specs are: an admin status, plus that screen's own answers. */
-async function signedIn(page, id, { holdMs = 0, profile = 'desktop' } = {}) {
-  await page.route('**/ui/api/status', (route) => fulfillApi(route, profile, {
-    auth: { enabled: true, signed_in: true, admin: true },
-  }));
-  if (id === 'tools') {
-    await page.route('**/ui/api/tools**', async (route) => {
-      // Held in this process, so the phone's CPU throttle does not stretch the wait.
-      if (holdMs) await new Promise((resolve) => setTimeout(resolve, holdMs));
-      await fulfillApi(route, profile, { tools: TOOLS, total: TOOLS.length });
-    });
-  }
-}
-
 /** Sign-in is ready when its form is on screen. The content under it stays hidden. */
 async function readySignIn(page) {
   await expect(page.locator('#signin')).toBeVisible();
@@ -263,11 +142,6 @@ const ROWS = [
 // Default, not serial: one row failing must leave the others running. One
 // worker is `--workers=1` on the command line (see the top of this file).
 test.describe.configure({ mode: 'default', timeout: 180_000 });
-
-function writeRow(result) {
-  mkdirSync(PERF_DIR, { recursive: true });
-  writeFileSync(`${PERF_DIR}${result.page}-${result.profile}.json`, `${JSON.stringify(result)}\n`);
-}
 
 for (const row of ROWS) {
   for (const profile of ['phone', 'desktop']) {
@@ -328,7 +202,7 @@ for (const row of ROWS) {
       result.blocking = missed.blocking;
       result.reported = missed.reported;
       // On disk before the assertions, so a miss or a partial run still reaches the summary.
-      writeRow(result);
+      writeRow(PERF_DIR, result);
       console.log(JSON.stringify({ page: row.page, profile, loadsAttempted, loadsMeasured, errors, retried, lcp, cls, blocking: missed.blocking, reported: missed.reported }));
       // A load that failed twice fails the row: a budget judged on fewer loads than asked is not judged.
       if (errors.length) throw new Error(errors.join('\n'));
@@ -434,6 +308,52 @@ test('the gate: a blocking budget missed fails the row, a reported one does not'
   expect(misses(row(Number.NaN, 0.05)).blocking).toEqual(['lcp p75 was not measured']);
 });
 
+test('the moved profile helpers send, write and fold exactly what they did before the move', async () => {
+  // Fixed inputs; every expected value is a literal taken from the pre-move code.
+  const sent = [];
+  const viewports = [];
+  const fakePage = {
+    setViewportSize: async (size) => viewports.push(size),
+    context: () => ({ newCDPSession: async () => ({ send: async (method, params) => sent.push([method, params]) }) }),
+  };
+  expect(await applyProfile(fakePage, 'desktop')).toBe(null);
+  expect(viewports).toEqual([{ width: 1440, height: 900 }]);
+  expect(sent).toEqual([]);
+  expect(await applyProfile(fakePage, 'phone')).not.toBe(null);
+  expect(sent).toEqual([
+    ['Emulation.setCPUThrottlingRate', { rate: 4 }],
+    ['Network.emulateNetworkConditions', {
+      offline: false, latency: 165, downloadThroughput: 1012500, uploadThroughput: 168750, connectionType: 'cellular4g',
+    }],
+    ['Emulation.setDeviceMetricsOverride', { width: 412, height: 823, deviceScaleFactor: 1.75, mobile: true }],
+  ]);
+  const dir = `${mkdtempSync(`${tmpdir()}/perf-move-`)}/`;
+  const row = (page, profile, loadsMeasured) => ({
+    page, profile, loadsAttempted: 2, loadsMeasured, errors: loadsMeasured === 2 ? [] : ['no largest-contentful-paint entry'],
+    retried: [], lcp: { loads: loadsMeasured, p50: 900, p75: 950, max: 990, budget: 2500, blocks: true },
+    cls: { loads: loadsMeasured, p50: 0, p75: 0.01, max: 0.02, budget: 0.1, blocks: true }, blocking: [], reported: [],
+  });
+  writeRow(dir, row('tools', 'phone', 1));
+  writeRow(dir, row('gateway', 'desktop', 2));
+  expect(readFileSync(`${dir}tools-phone.json`, 'utf8')).toBe('{"page":"tools","profile":"phone","loadsAttempted":2,"loadsMeasured":1,"errors":["no largest-contentful-paint entry"],"retried":[],"lcp":{"loads":1,"p50":900,"p75":950,"max":990,"budget":2500,"blocks":true},"cls":{"loads":1,"p50":0,"p75":0.01,"max":0.02,"budget":0.1,"blocks":true},"blocking":[],"reported":[]}\n');
+  expect(foldSummary(readRows(dir))).toEqual({
+    gateway: { desktop: {
+      lcp: { loads: 2, p50: 900, p75: 950, max: 990, budget: 2500, blocks: true },
+      cls: { loads: 2, p50: 0, p75: 0.01, max: 0.02, budget: 0.1, blocks: true },
+      loadsAttempted: 2, loadsMeasured: 2, errors: [], blocking: [], reported: [], retried: [], incomplete: false,
+    } },
+    tools: { phone: {
+      lcp: { loads: 1, p50: 900, p75: 950, max: 990, budget: 2500, blocks: true },
+      cls: { loads: 1, p50: 0, p75: 0.01, max: 0.02, budget: 0.1, blocks: true },
+      loadsAttempted: 2, loadsMeasured: 1, errors: ['no largest-contentful-paint entry'], blocking: [], reported: [],
+      retried: [], incomplete: true,
+    } },
+  });
+  // The ranks the rows report: p50 index ceil(0.5n)-1, p75 index ceil(0.75n)-1.
+  expect(spread([5, 1, 4, 2, 3])).toEqual({ loads: 5, p50: 3, p75: 4, max: 5 });
+  expect(spread([])).toEqual({ loads: 0, p50: null, p75: null, max: null });
+});
+
 test('tools status held 3s reports lcp over 2500', async ({ page }) => {
   // The catalogue is the largest paint. Held past the budget, a reader that
   // stops on the shell's own first text still has to fail.
@@ -483,19 +403,10 @@ test('a block inserted above the sign-in reports cls over 0.1', async ({ browser
   }
 });
 
-test.afterAll(() => {
-  // Playwright empties test-results at the start of a run, so a file here was
-  // written by this run. A worker restart keeps the files; an in-memory list
-  // would not. Each file is one (page, profile) row.
+/** The run's rows, folded by page then profile into the summary the CI step prints. */
+function foldSummary(rows) {
   const summary = {};
-  let names = [];
-  try {
-    names = readdirSync(PERF_DIR).filter((name) => name.endsWith('.json'));
-  } catch (err) {
-    if (err.code !== 'ENOENT') throw err;
-  }
-  for (const name of names.sort()) {
-    const row = JSON.parse(readFileSync(`${PERF_DIR}${name}`, 'utf8'));
+  for (const row of rows) {
     summary[row.page] ??= {};
     const errors = row.errors ?? [];
     summary[row.page][row.profile] = {
@@ -511,6 +422,12 @@ test.afterAll(() => {
       incomplete: row.loadsMeasured !== row.loadsAttempted || errors.length > 0,
     };
   }
+  return summary;
+}
+
+test.afterAll(() => {
+  // Each row file is one (page, profile) row this run wrote (profile.mjs readRows).
+  const summary = foldSummary(readRows(PERF_DIR));
   const path = `${RESULTS}perf-summary.json`;
   mkdirSync(RESULTS, { recursive: true });
   const text = JSON.stringify(summary, null, 2);
