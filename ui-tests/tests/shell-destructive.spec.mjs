@@ -239,6 +239,24 @@ test.describe('unconfirmed', () => {
     await expect(page.locator('#content .done-notice')).toHaveCount(0);
     await expect(page).toHaveURL(/\/ui\/gateway\/actions$/);
   });
+
+  // A 5xx body that carries only a code (the revoke route's 500 state_uncertain) is never shown as
+  // words: the shell's own sentence stands. A body with a real sentence, in either form, still shows it.
+  for (const [name, json, said] of [
+    ['a code alone', { error: 'state_uncertain' }, null],
+    ['a code and a sentence', { error: 'state_uncertain', message: 'The token may already be gone.' }, 'The token may already be gone.'],
+    ['a sentence alone', { error: 'The token may already be gone.' }, 'The token may already be gone.'],
+  ]) {
+    test(`D3h a 500 with ${name} in its body: the unconfirmed state never shows a bare code`, async ({ page }) => {
+      await page.route(PROBE, (r) => r.fulfill({ status: 500, json }));
+      await open(page);
+      await page.click('#remove-probe');
+      await action(page).click();
+      await expect(message(page)).toContainText('The gateway did not confirm the outcome.');
+      await expect(message(page)).not.toContainText('state_uncertain');
+      if (said) await expect(message(page)).toContainText(said);
+    });
+  }
 });
 
 test.describe('done', () => {
