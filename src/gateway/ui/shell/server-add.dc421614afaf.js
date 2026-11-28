@@ -5,7 +5,7 @@
 // URL": one field, a name worked out from it, value rows sent as env for a
 // command and as headers for a URL, a start-once preview (described, running,
 // listed, failed), then the add. Every served string goes in as text.
-import { el, segmented, ApiError, causeOf, sessionNow, sessionHolds } from '/ui/assets/shell.8b83e3c661ed.js';
+import { el, segmented, ApiError, causeOf, sessionNow, sessionHolds } from '/ui/assets/shell.7fa74693b877.js';
 
 /** Per-request limits (the route's own run limit is 30 s, its teardown follows; the confirm dialog stops at 30 s). */
 const DESCRIBE_MS = 15_000;
