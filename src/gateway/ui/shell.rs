@@ -25,20 +25,20 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/activity-list.3e4eec96100d.js"),
     ),
     (
-        "activity.020ddcb928fd.js",
-        include_bytes!("shell/activity.020ddcb928fd.js"),
-    ),
-    (
         "activity.237d685089d2.css",
         include_bytes!("shell/activity.237d685089d2.css"),
+    ),
+    (
+        "activity.bfd432a91883.js",
+        include_bytes!("shell/activity.bfd432a91883.js"),
     ),
     (
         "chart.812bfa2e8150.css",
         include_bytes!("shell/chart.812bfa2e8150.css"),
     ),
     (
-        "chart.8cb6bfe27b11.js",
-        include_bytes!("shell/chart.8cb6bfe27b11.js"),
+        "chart.e032787e99a7.js",
+        include_bytes!("shell/chart.e032787e99a7.js"),
     ),
     (
         "BigShoulders-700.5faff1f81ec2.woff2",
@@ -61,20 +61,20 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/gateway.896c5131000b.css"),
     ),
     (
-        "gateway.99cc926a6d6c.js",
-        include_bytes!("shell/gateway.99cc926a6d6c.js"),
+        "gateway.d3a530c38bca.js",
+        include_bytes!("shell/gateway.d3a530c38bca.js"),
     ),
     (
-        "overview.0c1b540c6c0d.js",
-        include_bytes!("shell/overview.0c1b540c6c0d.js"),
+        "overview.2924a9dd5ee1.js",
+        include_bytes!("shell/overview.2924a9dd5ee1.js"),
     ),
     (
         "overview.29422e52622e.css",
         include_bytes!("shell/overview.29422e52622e.css"),
     ),
     (
-        "server-page.8abcae2314bd.js",
-        include_bytes!("shell/server-page.8abcae2314bd.js"),
+        "server-page.6abd34152a17.js",
+        include_bytes!("shell/server-page.6abd34152a17.js"),
     ),
     (
         "server-paths.15a075bb0cb1.js",
@@ -85,40 +85,40 @@ pub(super) const ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("shell/servers.547fc403e9c7.css"),
     ),
     (
-        "servers.a9f9de3fac60.js",
-        include_bytes!("shell/servers.a9f9de3fac60.js"),
-    ),
-    (
-        "shell.23eb92bf6df3.js",
-        include_bytes!("shell/shell.23eb92bf6df3.js"),
+        "servers.9408abbcd666.js",
+        include_bytes!("shell/servers.9408abbcd666.js"),
     ),
     (
         "shell.41809b035384.css",
         include_bytes!("shell/shell.41809b035384.css"),
     ),
     (
+        "shell.879d1aa460b2.js",
+        include_bytes!("shell/shell.879d1aa460b2.js"),
+    ),
+    (
         "shell.nojs.4e34f233c1ba.css",
         include_bytes!("shell/shell.nojs.4e34f233c1ba.css"),
     ),
     (
-        "tips.54c329b53cfa.json",
-        include_bytes!("shell/tips.54c329b53cfa.json"),
+        "tips.d40823230cb5.json",
+        include_bytes!("shell/tips.d40823230cb5.json"),
+    ),
+    (
+        "tools.0c3a8b9bff4e.js",
+        include_bytes!("shell/tools.0c3a8b9bff4e.js"),
     ),
     (
         "tools.49b4ad43fcf0.css",
         include_bytes!("shell/tools.49b4ad43fcf0.css"),
     ),
     (
-        "tools.f0db73ea1bd1.js",
-        include_bytes!("shell/tools.f0db73ea1bd1.js"),
-    ),
-    (
         "tooltip.5251c22696fd.css",
         include_bytes!("shell/tooltip.5251c22696fd.css"),
     ),
     (
-        "tooltip.7d5614b14a79.js",
-        include_bytes!("shell/tooltip.7d5614b14a79.js"),
+        "tooltip.80c669bc3294.js",
+        include_bytes!("shell/tooltip.80c669bc3294.js"),
     ),
 ];
 

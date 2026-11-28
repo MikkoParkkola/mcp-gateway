@@ -20,22 +20,17 @@
    "activity.actions.on-a-machine-that-has"
   ],
   "costs": [
-   "costs.settings.at-14-05-12-answered",
    "costs.settings.at-the-limit",
    "costs.settings.gateway-yaml-diff-first-limits",
-   "costs.settings.notify-you-at",
    "costs.status.keys-today-against-the-daily",
    "costs.status.limit-at-about-18-40",
-   "costs.status.spend-per-day",
-   "costs.status.webhook-events"
+   "costs.status.spend-per-day"
   ],
   "gateway": [
-   "gateway.status.11-47-edit-not-applied",
    "gateway.status.2-restarts-6-s-down",
    "gateway.status.4-0-0",
    "gateway.status.active-sessions-now",
    "gateway.status.added-p95-last-hour",
-   "gateway.status.configuration-history",
    "gateway.status.connected-clients",
    "gateway.status.gateway-errors-last-hour",
    "gateway.status.how-the-gateway-itself-is",
@@ -43,10 +38,7 @@
    "gateway.status.reloaded-at-10-31-after"
   ],
   "policies": [
-   "policies.settings.applies-to",
-   "policies.settings.exceptions",
    "policies.settings.firewall-rules",
-   "policies.settings.on-a-match",
    "policies.settings.sensitivity",
    "policies.status.approval-rules",
    "policies.status.firewall",
@@ -55,11 +47,9 @@
   ],
   "servers": [
    "servers.settings.0-21-0-published-by",
-   "servers.settings.automatic",
    "servers.settings.command-or-url",
    "servers.settings.from-npm-published-by-getsentry",
    "servers.settings.from-the-package-automatic",
-   "servers.settings.http-automatic",
    "servers.settings.in-claude-desktop-config-json",
    "servers.settings.line-and-all-14-of",
    "servers.settings.needs-a-restart",
@@ -67,13 +57,10 @@
    "servers.settings.nothing-has-run-yet",
    "servers.settings.pause-after",
    "servers.settings.pinned-to-the-version-found",
-   "servers.settings.rest-calls-over-https-automatic",
    "servers.settings.resume-after",
    "servers.settings.retry",
-   "servers.settings.shop-orders-from-the-spec",
    "servers.settings.the-one-secret-this-server",
    "servers.settings.the-server-s-own-name",
-   "servers.settings.transport",
    "servers.settings.when-it-fails",
    "servers.settings.who-can-use-it",
    "servers.settings.who-reaches-it-now",
@@ -82,18 +69,12 @@
    "servers.settings.writing-tools-start-unticked-as-2"
   ],
   "todo": [
-   "todo.status.ci-bot-is-at-21",
-   "todo.status.commit-4f2a91c-by-renovate-bot",
-   "todo.status.network-until-you-firewall-it",
-   "todo.status.ticked-writing-tools-start-unticked"
+   "todo.status.commit-4f2a91c-by-renovate-bot"
   ]
  },
  "_pending_later": {
-  "activity.status.caught-per-hour": "Activity › Status: the firewall chart",
   "activity.status.prompt-injection-medium-found-in": "Activity › Status: the call receipt",
   "activity.status.signature-valid": "Activity › Status: the call receipt",
-  "activity.status.the-chart-shows-the-same": "Activity › Status: the firewall chart",
-  "gateway.actions.configuration-versions": "Gateway › Actions: configuration versions",
   "gateway.settings.2-which-key-does-it": "Gateway › Settings: Connect a client",
   "gateway.settings.and-memory-just-brought-in": "Gateway › Settings: Connect a client",
   "gateway.settings.environment-name": "Gateway › Settings: the editable environment name",
@@ -105,12 +86,10 @@
   "overview.status.from-cache-last-hour": "Overview › Status: the KPI tiles' info tips",
   "overview.status.live-11-of-6-920": "Overview › Status: the flow map",
   "overview.status.live-traffic": "Overview › Status: the flow map",
-  "overview.status.optional-view": "Overview › Status: the flow map",
   "overview.status.slowest-5-last-hour": "Overview › Status: the KPI tiles' info tips",
   "overview.status.tools-agents-load": "Overview › Status: the KPI tiles' info tips",
   "overview.status.traffic": "Overview › Status: the flow map",
-  "overview.status.updates-stopped-at-14-31": "Overview › Status: the stale state",
-  "tools.actions.run-as": "Try a tool: Run as, preset from a key’s page"
+  "overview.status.updates-stopped-at-14-31": "Overview › Status: the stale state"
  },
  "_pending_rows": [
   "access.actions.keys",
@@ -130,30 +109,22 @@
   "activity.actions.on-a-machine-that-has",
   "activity.status.blocked",
   "activity.status.calls-made-with-your-key",
-  "activity.status.caught-per-hour",
   "activity.status.outcome",
   "activity.status.prompt-injection-medium-found-in",
   "activity.status.signature-valid",
-  "activity.status.the-chart-shows-the-same",
-  "costs.settings.at-14-05-12-answered",
   "costs.settings.at-the-limit",
   "costs.settings.gateway-yaml-diff-first-limits",
-  "costs.settings.notify-you-at",
   "costs.status.keys-today-against-the-daily",
   "costs.status.limit-at-about-18-40",
   "costs.status.spend-per-day",
-  "costs.status.webhook-events",
-  "gateway.actions.configuration-versions",
   "gateway.settings.2-which-key-does-it",
   "gateway.settings.and-memory-just-brought-in",
   "gateway.settings.environment-name",
   "gateway.settings.sentry-the-server-you-just",
-  "gateway.status.11-47-edit-not-applied",
   "gateway.status.2-restarts-6-s-down",
   "gateway.status.4-0-0",
   "gateway.status.active-sessions-now",
   "gateway.status.added-p95-last-hour",
-  "gateway.status.configuration-history",
   "gateway.status.connected-clients",
   "gateway.status.environment-from-hostname",
   "gateway.status.environment-not-set",
@@ -168,26 +139,20 @@
   "overview.status.from-cache-last-hour",
   "overview.status.live-11-of-6-920",
   "overview.status.live-traffic",
-  "overview.status.optional-view",
   "overview.status.slowest-5-last-hour",
   "overview.status.tools-agents-load",
   "overview.status.traffic",
   "overview.status.updates-stopped-at-14-31",
-  "policies.settings.applies-to",
-  "policies.settings.exceptions",
   "policies.settings.firewall-rules",
-  "policies.settings.on-a-match",
   "policies.settings.sensitivity",
   "policies.status.approval-rules",
   "policies.status.firewall",
   "policies.status.last-24-h",
   "policies.status.last-7-days",
   "servers.settings.0-21-0-published-by",
-  "servers.settings.automatic",
   "servers.settings.command-or-url",
   "servers.settings.from-npm-published-by-getsentry",
   "servers.settings.from-the-package-automatic",
-  "servers.settings.http-automatic",
   "servers.settings.in-claude-desktop-config-json",
   "servers.settings.line-and-all-14-of",
   "servers.settings.needs-a-restart",
@@ -195,13 +160,10 @@
   "servers.settings.nothing-has-run-yet",
   "servers.settings.pause-after",
   "servers.settings.pinned-to-the-version-found",
-  "servers.settings.rest-calls-over-https-automatic",
   "servers.settings.resume-after",
   "servers.settings.retry",
-  "servers.settings.shop-orders-from-the-spec",
   "servers.settings.the-one-secret-this-server",
   "servers.settings.the-server-s-own-name",
-  "servers.settings.transport",
   "servers.settings.when-it-fails",
   "servers.settings.who-can-use-it",
   "servers.settings.who-reaches-it-now",
@@ -211,11 +173,7 @@
   "servers.status.answering-24-grouped-by-the",
   "servers.status.p95-last-1-000-calls",
   "servers.status.tools",
-  "todo.status.ci-bot-is-at-21",
   "todo.status.commit-4f2a91c-by-renovate-bot",
-  "todo.status.network-until-you-firewall-it",
-  "todo.status.ticked-writing-tools-start-unticked",
-  "tools.actions.run-as",
   "tools.status.load-11-tools-and-reach"
  ],
  "access.actions.keys": {
@@ -286,10 +244,6 @@
   "title": "Calls made with your key",
   "text": "As a member you see your own key's calls. An admin or auditor sees every key."
  },
- "activity.status.caught-per-hour": {
-  "title": "Caught per hour",
-  "text": "Calls the firewall blocked or cleaned, per hour over 24 hours. The grey line is the 24 hours before."
- },
  "activity.status.outcome": {
   "title": "Outcome",
   "text": "Filter by what happened to each call: ok, failed, blocked by the firewall, or answered with something removed."
@@ -302,14 +256,6 @@
   "title": "✓ Signature valid",
   "text": "The record of this call is unchanged since the gateway signed it. Checked with this gateway's signing secret."
  },
- "activity.status.the-chart-shows-the-same": {
-  "title": "The chart shows the same range",
-  "text": "The chart and the list always cover the same time range. Change it here and both follow."
- },
- "costs.settings.at-14-05-12-answered": {
-  "title": "At",
-  "text": "The test event reached your receiver, which answered 200. Check the signature header with the webhook secret."
- },
  "costs.settings.at-the-limit": {
   "title": "At the limit",
   "text": "What happens when a key reaches its daily limit. Blocks priced calls: calls to priced tools are refused. Notifies you: they go on, and you are told. Block suits unattended agents; Notify suits people."
@@ -317,10 +263,6 @@
  "costs.settings.gateway-yaml-diff-first-limits": {
   "title": "Gateway.yaml diff first. Limits apply at",
   "text": "Saving shows the exact change to gateway.yaml first. New limits take effect on the next call."
- },
- "costs.settings.notify-you-at": {
-  "title": "Notify you at",
-  "text": "Where the gateway tells you about limits, paused servers, waiting decisions and a refused gateway.yaml. Needs you is always on."
  },
  "costs.status.keys-today-against-the-daily": {
   "title": "Keys, today against the daily limit",
@@ -333,14 +275,6 @@
  "costs.status.spend-per-day": {
   "title": "Spend per day",
   "text": "This key's estimated spend each day for 30 days, with its daily limit as a line."
- },
- "costs.status.webhook-events": {
-  "title": "Webhook events",
-  "text": "Every event the gateway can send to your webhook, the fields it carries and when it is sent."
- },
- "gateway.actions.configuration-versions": {
-  "title": "Configuration versions",
-  "text": "Versions of gateway.yaml that loaded. Restoring writes the stored file back exactly, comments included."
  },
  "gateway.settings.2-which-key-does-it": {
   "title": "2. Which key does it use?",
@@ -358,10 +292,6 @@
   "title": "Sentry, the server you just added: its",
   "text": "A new key reaches only the server you just added, and only tools that read. Give it more on the key's own page."
  },
- "gateway.status.11-47-edit-not-applied": {
-  "title": "11:47 edit not applied; running the 10:3",
-  "text": "The file on disk has an error, so the gateway kept the last version that loaded. Nothing changed for agents. Fix the line, or restore 10:31."
- },
  "gateway.status.2-restarts-6-s-down": {
   "title": "2 restarts, 6 s down in total",
   "text": "Down means the gateway answered no requests: from the old process stopping to the new one listening. Each block is 6 hours; a dark edge is a restart."
@@ -377,10 +307,6 @@
  "gateway.status.added-p95-last-hour": {
   "title": "Added",
   "text": "The time the gateway itself adds to a call (auth, firewall, routing), at the 95th percentile. The server's own time is not included."
- },
- "gateway.status.configuration-history": {
-  "title": "Configuration history",
-  "text": "Every time gateway.yaml was reloaded or refused, with who changed it and the diff. Kept 30 days. Secrets are masked."
  },
  "gateway.status.connected-clients": {
   "title": "Connected clients",
@@ -438,10 +364,6 @@
   "title": "Live traffic",
   "text": "Calls per hour from each agent through the gateway to each server, updated as they happen."
  },
- "overview.status.optional-view": {
-  "title": "Optional view",
-  "text": "A 3D view of the same map. The 2D map is the product; this is for exploring a large fleet."
- },
  "overview.status.slowest-5-last-hour": {
   "title": "Slowest",
   "text": "95 of every 100 calls through the gateway finished faster than this, compared with the hour before. Opens servers sorted by it."
@@ -458,21 +380,9 @@
   "title": "Updates stopped at",
   "text": "The page lost its live connection at 14:31. Numbers stay as they were, dimmed, and refresh when it reconnects."
  },
- "policies.settings.applies-to": {
-  "title": "Applies to",
-  "text": "Which servers or tools this rule covers. A rule with no target applies to every call."
- },
- "policies.settings.exceptions": {
-  "title": "Exceptions",
-  "text": "Places this rule does not apply, such as one tool or one key. Each exception says who added it and when."
- },
  "policies.settings.firewall-rules": {
   "title": "Firewall rules",
   "text": "What the firewall does when a check matches: block, clean the answer, or ask first."
- },
- "policies.settings.on-a-match": {
-  "title": "On a match",
-  "text": "What happens when this rule matches a call: block it, clean the answer, or ask a person first."
  },
  "policies.settings.sensitivity": {
   "title": "Sensitivity",
@@ -498,10 +408,6 @@
   "title": "0.21.0 · published by getsentry · verifi",
   "text": "Verified: the trust source set for this gateway vouches for this npm publisher, so the preview may use your secret."
  },
- "servers.settings.automatic": {
-  "title": "Automatic",
-  "text": "The gateway chose this from what the server told it. Use Override only if the server reports it wrong."
- },
  "servers.settings.command-or-url": {
   "title": "Command or URL",
   "text": "Paste what you would run or call: an npx or uvx command, a docker image, or the server's URL. The gateway works out the rest."
@@ -513,10 +419,6 @@
  "servers.settings.from-the-package-automatic": {
   "title": "From the package, Automatic",
   "text": "Taken from the package name. Use Override if you want a different name in lists and tool names."
- },
- "servers.settings.http-automatic": {
-  "title": "HTTP · Automatic",
-  "text": "How the gateway talks to this server. HTTP for a remote URL, a local process for a command. Chosen from what you entered."
  },
  "servers.settings.in-claude-desktop-config-json": {
   "title": "In claude_desktop_config.json · started",
@@ -546,10 +448,6 @@
   "title": "Pinned to the version found",
   "text": "The gateway runs exactly this version, not whatever is newest later, so what you previewed is what runs."
  },
- "servers.settings.rest-calls-over-https-automatic": {
-  "title": "REST calls over HTTPS · Automatic",
-  "text": "This server is an imported API: each tool is one HTTPS request, built from the API's own description."
- },
  "servers.settings.resume-after": {
   "title": "Resume after",
   "text": "A paused server goes back to normal after this many calls succeed in a row."
@@ -558,10 +456,6 @@
   "title": "Retry",
   "text": "How long the gateway waits after pausing a server before it tries it again by itself."
  },
- "servers.settings.shop-orders-from-the-spec": {
-  "title": "Shop-orders · from the spec title",
-  "text": "Taken from the API description's title. Use Override for a different name."
- },
  "servers.settings.the-one-secret-this-server": {
   "title": "The one secret this server declares",
   "text": "The only secret this server asks for. It is kept in the OS keychain, never in gateway.yaml."
@@ -569,10 +463,6 @@
  "servers.settings.the-server-s-own-name": {
   "title": "The server's own name, Automatic",
   "text": "The name the server gives itself. Use Override for a different name."
- },
- "servers.settings.transport": {
-  "title": "Transport",
-  "text": "How the gateway talks to this server: HTTP for a URL, a local process for a command."
  },
  "servers.settings.when-it-fails": {
   "title": "When it fails",
@@ -610,25 +500,9 @@
   "title": "Tools",
   "text": "Tools this server offers. Writing tools are counted here even when they are switched off."
  },
- "todo.status.ci-bot-is-at-21": {
-  "title": "Ci-bot is at",
-  "text": "Spend since midnight in the gateway's time zone. Allowing stripe adds its priced calls to this."
- },
  "todo.status.commit-4f2a91c-by-renovate-bot": {
   "title": "Commit",
   "text": "File time from the disk, author from git when the folder is a git repository."
- },
- "todo.status.network-until-you-firewall-it": {
-  "title": "Network until you firewall it; the",
-  "text": "Adopting puts the gateway in front of this server for agents that use it. Anyone who knows its address can still call it directly until your firewall blocks that."
- },
- "todo.status.ticked-writing-tools-start-unticked": {
-  "title": "Ticked. Writing tools start unticked, as",
-  "text": "Tools that change something start off, so adopting a server never hands out a write you did not choose."
- },
- "tools.actions.run-as": {
-  "title": "Run as",
-  "text": "The key the test call uses. The call is recorded in Activity like any other."
  },
  "tools.status.load-11-tools-and-reach": {
   "title": "Load",
